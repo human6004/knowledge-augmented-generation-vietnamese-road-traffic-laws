@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16.15-bookworm
+    environment:
+      POSTGRES_DB: luatgt
+      POSTGRES_USER: luatgt
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run scripts/init-env.ps1 first}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luatgt -d luatgt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-bookworm
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Run scripts/init-env.ps1 first}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Run scripts/init-env.ps1 first}
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  minio:
+    build:
+      context: ./docker/minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:?Run scripts/init-env.ps1 first}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?Run scripts/init-env.ps1 first}
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+    volumes: ["minio-data:/data"]
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/luatgt
+      DB_USER: luatgt
+      DB_PASSWORD: ${DB_PASSWORD:?Run scripts/init-env.ps1 first}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Run scripts/init-env.ps1 first}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Run scripts/init-env.ps1 first}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Run scripts/init-env.ps1 first}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run scripts/init-env.ps1 first}
+      MINIO_URL: http://minio:9000
+      MINIO_USER: ${MINIO_USER:?Run scripts/init-env.ps1 first}
+      MINIO_PASSWORD: ${MINIO_PASSWORD:?Run scripts/init-env.ps1 first}
+      KAG_BASE_URL: ${KAG_BASE_URL:-http://host.docker.internal:8000}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_started}
+  frontend:
+    build: ./frontend
+    ports: ["127.0.0.1:8081:80"]
+    depends_on: [backend]
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

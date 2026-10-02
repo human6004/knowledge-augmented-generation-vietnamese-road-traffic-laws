@@ -1,0 +1,31 @@
+{
+  "pdfSha256": "7a9505ac9110a316160b403bfe06c119c810724a2834794926df170524dac9bb",
+  "source": "600-cau-hoi-thi-ly-thuyet-lai-xe_hoclaixehcm.vn.pdf",
+  "criticalSource": "https://xaydungchinhsach.chinhphu.vn/60-cau-hoi-ve-xu-ly-tinh-huong-mat-an-toan-giao-thong-nghiem-trong-119250513145731021.htm",
+  "questions": 600,
+  "answers": 600,
+  "critical": 60,
+  "images": 318,
+  "archives": [
+    "question-images.zip"
+  ],
+  "manualChecks": {
+    "204": {
+      "page": 46,
+      "correctAnswer": 0
+    },
+    "301": {
+      "page": 69,
+      "correctAnswer": 0
+    },
+    "302": {
+      "page": 69,
+      "correctAnswer": 3
+    },
+    "352": {
+      "page": 86,
+      "correctAnswer": 0
+    }
+  },
+  "publication": "draft; explicit administrator approval required"
+}

@@ -1,0 +1,5 @@
+code,name,group,meaning,source
+P.DEMO,Biển kiểm thử,Cấm,Ý nghĩa mẫu,Nguồn kiểm thử
+P.NOIMAGE,Biển chưa có ảnh,Cấm,Cần bổ sung ảnh,Nguồn kiểm thử
+P.DEMO,Mã trùng,Cấm,Nội dung,Nguồn
+P.ERROR,Thiếu nguồn,Cấm,Nội dung,

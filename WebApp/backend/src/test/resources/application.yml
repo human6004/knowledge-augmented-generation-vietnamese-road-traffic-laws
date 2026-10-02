@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:luatgt;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  jpa:
+    open-in-view: false
+    hibernate.ddl-auto: validate
+  jackson.deserialization.fail-on-unknown-properties: true
+app:
+  jwt-secret: TEST-ONLY-secret-at-least-32-bytes-long
+  admin-email: admin@test.vn
+  admin-password: TEST-only-admin-password
+  kag-url: http://127.0.0.1:1
+  minio-url: http://127.0.0.1:9000
+  minio-user: testuser
+  minio-password: testpassword
+  bucket: test
