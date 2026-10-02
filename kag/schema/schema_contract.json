@@ -1,0 +1,1498 @@
+{
+  "schema_version": "0.1",
+  "dataset_version": "LOCKED R2",
+  "namespace": "VietRoadTraffic",
+  "pinned_kag_commit": "fdab15b3929d2ee40dfcdd388f90233096a6afc9",
+  "node_types": [
+    "LegalDocument",
+    "LegalUnit",
+    "TrafficSign"
+  ],
+  "node_properties": {
+    "LegalDocument": [
+      {
+        "logical_name": "id",
+        "schema_name": "id",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "doc_id, doc_id",
+        "source_requirement": "Có",
+        "notes": "name là nhãn kỹ thuật",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "name",
+        "schema_name": "name",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "doc_id, doc_id",
+        "source_requirement": "Có",
+        "notes": "name là nhãn kỹ thuật",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "so_hieu",
+        "schema_name": "soHieu",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ giá trị nguồn, không canonicalize cơ quan",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "title",
+        "schema_name": "title",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ giá trị nguồn, không canonicalize cơ quan",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "loai",
+        "schema_name": "loai",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ giá trị nguồn, không canonicalize cơ quan",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "co_quan",
+        "schema_name": "coQuan",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ giá trị nguồn, không canonicalize cơ quan",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "official_so_hieu",
+        "schema_name": "officialSoHieu",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Phân biệt số ngắn trùng",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "identity_note",
+        "schema_name": "identityNote",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Phân biệt số ngắn trùng",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "scope",
+        "schema_name": "scope",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Phạm vi corpus và nhóm nguồn",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "tier",
+        "schema_name": "tier",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Phạm vi corpus và nhóm nguồn",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "document_role",
+        "schema_name": "documentRole",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "string, string[]",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "legal_domains",
+        "schema_name": "legalDomains",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "string, string[]",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "current_status",
+        "schema_name": "currentStatus",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Snapshot/ghi chú, không rule thời gian",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "status_hint",
+        "schema_name": "statusHint",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Snapshot/ghi chú, không rule thời gian",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "phan_lien_quan",
+        "schema_name": "phanLienQuan",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Snapshot/ghi chú, không rule thời gian",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "ngay_ban_hanh",
+        "schema_name": "ngayBanHanh",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "ngay_ban_hanh",
+        "source_requirement": "Có",
+        "notes": "Chuỗi ngày ISO nguồn",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "effective_from",
+        "schema_name": "effectiveFrom",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "effective_from nếu có, nếu không ngay_hieu_luc",
+        "source_requirement": "Không; cho null",
+        "notes": "Hai trường khớp khi cùng có; không dùng ngày ký làm fallback",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "effective_to",
+        "schema_name": "effectiveTo",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "effective_to nếu có, nếu không ngay_het_hieu_luc",
+        "source_requirement": "Không",
+        "notes": "Giữ hết hiệu lực bộ phận trong note; không xóa units",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "hieu_luc_note",
+        "schema_name": "hieuLucNote",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Bảo toàn điều kiện/ngoại lệ",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "het_hieu_luc_note",
+        "schema_name": "hetHieuLucNote",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Bảo toàn điều kiện/ngoại lệ",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "ngay_hieu_luc_bo_phan",
+        "schema_name": "ngayHieuLucBoPhan",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "ngay_hieu_luc_bo_phan",
+        "source_requirement": "Không",
+        "notes": "string[]; chưa gắn được từng ngày với unit",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "consolidation_as_of",
+        "schema_name": "consolidationAsOf",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Không thay effective_from của VBHN",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "underlying_effective_from",
+        "schema_name": "underlyingEffectiveFrom",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Không thay effective_from của VBHN",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "source_url",
+        "schema_name": "sourceUrl",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Provenance; URL không tạo entity",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "source_kind",
+        "schema_name": "sourceKind",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Provenance; URL không tạo entity",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "source_quality",
+        "schema_name": "sourceQuality",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Không tự nâng record thiếu thành OFFICIAL",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "source_note",
+        "schema_name": "sourceNote",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "D",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Không tự nâng record thiếu thành OFFICIAL",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "markdown_path",
+        "schema_name": "markdownPath",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "D + processed/documents/",
+        "source_field": "doc_id + file hiện hữu",
+        "source_requirement": "Có",
+        "notes": "data/processed/documents/{doc_id}.md",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "D/U/S tương ứng",
+        "source_field": "Path + checksum file + số dòng",
+        "source_requirement": "Có, derived",
+        "notes": "Truy vết nguồn; không phải identity",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "README/corpus snapshot",
+        "source_field": "LOCKED R2",
+        "source_requirement": "Có, hằng manifest",
+        "notes": "Không giả vờ là trường JSONL",
+        "intrinsic": false,
+        "required": true
+      }
+    ],
+    "LegalUnit": [
+      {
+        "logical_name": "id",
+        "schema_name": "id",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "unit_id, unit_id",
+        "source_requirement": "Có",
+        "notes": "Identity exact",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "name",
+        "schema_name": "name",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "unit_id, unit_id",
+        "source_requirement": "Có",
+        "notes": "Identity exact",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "doc_id",
+        "schema_name": "docId",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "String, string, enum-string, string, integer",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "so_hieu",
+        "schema_name": "soHieu",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "String, string, enum-string, string, integer",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "unit_type",
+        "schema_name": "unitType",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "String, string, enum-string, string, integer",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "text",
+        "schema_name": "text",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "String, string, enum-string, string, integer",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "order",
+        "schema_name": "order",
+        "contract_type": "INTEGER",
+        "physical_type": "Integer",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "String, string, enum-string, string, integer",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "parent_id",
+        "schema_name": "parentId",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "parent_id",
+        "source_requirement": "Có key; null ở root",
+        "notes": "Thuộc tính kiểm chứng cây; không tạo node null",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "title",
+        "schema_name": "title",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "title",
+        "source_requirement": "Không; null",
+        "notes": "Không thay bằng text suy đoán",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "dieu_number",
+        "schema_name": "dieuNumber",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "String; giữ chữ/số nguồn",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "khoan_number",
+        "schema_name": "khoanNumber",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "String; giữ chữ/số nguồn",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "diem_letter",
+        "schema_name": "diemLetter",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "String; giữ chữ/số nguồn",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "dieu_occurrence",
+        "schema_name": "dieuOccurrence",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Integer; giữ khi tồn tại, không tự điền 1",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "khoan_occurrence",
+        "schema_name": "khoanOccurrence",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Integer; giữ khi tồn tại, không tự điền 1",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "diem_occurrence",
+        "schema_name": "diemOccurrence",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "Integer; giữ khi tồn tại, không tự điền 1",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "qcvn_id",
+        "schema_name": "qcvnId",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "3 string + integer; qcvn_id không là FK toàn cục",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "scope",
+        "schema_name": "scope",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "3 string + integer; qcvn_id không là FK toàn cục",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "section_number",
+        "schema_name": "sectionNumber",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "3 string + integer; qcvn_id không là FK toàn cục",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "section_occurrence",
+        "schema_name": "sectionOccurrence",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "U",
+        "source_field": "Cùng tên",
+        "source_requirement": "Không",
+        "notes": "3 string + integer; qcvn_id không là FK toàn cục",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_id",
+        "schema_name": "penaltyId",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "penalty_id, join unit_id",
+        "source_requirement": "Có khi có P",
+        "notes": "Marker record xử phạt; không node mới",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_dieu_title",
+        "schema_name": "penaltyDieuTitle",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "dieu_title",
+        "source_requirement": "Có khi có P",
+        "notes": "Title trích xuất, không ghi đè unit.title",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_doi_tuong",
+        "schema_name": "penaltyDoiTuong",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "doi_tuong, hanh_vi",
+        "source_requirement": "Có khi có P",
+        "notes": "doi_tuong được phép rỗng",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_hanh_vi",
+        "schema_name": "penaltyHanhVi",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "doi_tuong, hanh_vi",
+        "source_requirement": "Có khi có P",
+        "notes": "doi_tuong được phép rỗng",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_phat_tien_min",
+        "schema_name": "penaltyPhatTienMin",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "P",
+        "source_field": "phat_tien_min, phat_tien_max",
+        "source_requirement": "Có khi có P",
+        "notes": "Integer; bảo toàn 0",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_phat_tien_max",
+        "schema_name": "penaltyPhatTienMax",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "P",
+        "source_field": "phat_tien_min, phat_tien_max",
+        "source_requirement": "Có khi có P",
+        "notes": "Integer; bảo toàn 0",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_canh_cao",
+        "schema_name": "penaltyCanhCao",
+        "contract_type": "BOOLEAN_ENCODING",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "canh_cao",
+        "source_requirement": "Có khi có P",
+        "notes": "Boolean; bảo toàn false",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_tru_diem_gplx",
+        "schema_name": "penaltyTruDiemGplx",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "P",
+        "source_field": "tru_diem_gplx",
+        "source_requirement": "Không; nullable",
+        "notes": "Integer nếu có; null không phải 0",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_tuoc_gplx_thang_min",
+        "schema_name": "penaltyTuocGplxThangMin",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "P",
+        "source_field": "tuoc_gplx_thang[0], [1]",
+        "source_requirement": "Không; nullable",
+        "notes": "Cặp đủ 2 integer mới map; null giữ thiếu cả cặp",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_tuoc_gplx_thang_max",
+        "schema_name": "penaltyTuocGplxThangMax",
+        "contract_type": "OPTIONAL_INTEGER",
+        "physical_type": "Integer",
+        "source_file": "P",
+        "source_field": "tuoc_gplx_thang[0], [1]",
+        "source_requirement": "Không; nullable",
+        "notes": "Cặp đủ 2 integer mới map; null giữ thiếu cả cặp",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_tich_thu",
+        "schema_name": "penaltyTichThu",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "tich_thu",
+        "source_requirement": "Không; nullable",
+        "notes": "Text nguyên nguồn",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "penalty_source_record",
+        "schema_name": "penaltySourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "P",
+        "source_field": "Vị trí record + checksum file",
+        "source_requirement": "Có khi có P",
+        "notes": "Provenance riêng cho thuộc tính merge",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "D/U/S tương ứng",
+        "source_field": "Path + checksum file + số dòng",
+        "source_requirement": "Có, derived",
+        "notes": "Truy vết nguồn; không phải identity",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "README/corpus snapshot",
+        "source_field": "LOCKED R2",
+        "source_requirement": "Có, hằng manifest",
+        "notes": "Không giả vờ là trường JSONL",
+        "intrinsic": false,
+        "required": true
+      }
+    ],
+    "TrafficSign": [
+      {
+        "logical_name": "id",
+        "schema_name": "id",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "sign_id, sign_id",
+        "source_requirement": "Có",
+        "notes": "name không phải ten được suy diễn",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "name",
+        "schema_name": "name",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "sign_id, sign_id",
+        "source_requirement": "Có",
+        "notes": "name không phải ten được suy diễn",
+        "intrinsic": true,
+        "required": true
+      },
+      {
+        "logical_name": "doc_id",
+        "schema_name": "docId",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Kiểm tra FK và doc ownership",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "unit_id",
+        "schema_name": "unitId",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Kiểm tra FK và doc ownership",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "so_hieu",
+        "schema_name": "soHieu",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Kiểm tra FK và doc ownership",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "ma_bien",
+        "schema_name": "maBien",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ phiên bản QCVN",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "nhom",
+        "schema_name": "nhom",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ phiên bản QCVN",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "qcvn",
+        "schema_name": "qcvn",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có",
+        "notes": "Giữ phiên bản QCVN",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "ten",
+        "schema_name": "ten",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có key; cho rỗng",
+        "notes": "Không sinh tên/biển biến thể",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "bien_phu_variant",
+        "schema_name": "bienPhuVariant",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "Cùng tên",
+        "source_requirement": "Có key; cho rỗng",
+        "notes": "Không sinh tên/biển biến thể",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "mo_ta",
+        "schema_name": "moTa",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "mo_ta",
+        "source_requirement": "Có",
+        "notes": "Nội dung trích xuất, không thay unit.text",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "ngay_hieu_luc",
+        "schema_name": "ngayHieuLuc",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "ngay_hieu_luc",
+        "source_requirement": "Có",
+        "notes": "Ngày nguồn",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "ngay_het_hieu_luc",
+        "schema_name": "ngayHetHieuLuc",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "source_file": "S",
+        "source_field": "ngay_het_hieu_luc",
+        "source_requirement": "Không; nullable",
+        "notes": "441 ngày, 446 null",
+        "intrinsic": false,
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "source_file": "D/U/S tương ứng",
+        "source_field": "Path + checksum file + số dòng",
+        "source_requirement": "Có, derived",
+        "notes": "Truy vết nguồn; không phải identity",
+        "intrinsic": false,
+        "required": true
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "source_file": "README/corpus snapshot",
+        "source_field": "LOCKED R2",
+        "source_requirement": "Có, hằng manifest",
+        "notes": "Không giả vờ là trường JSONL",
+        "intrinsic": false,
+        "required": true
+      }
+    ]
+  },
+  "node_property_count": 78,
+  "logical_to_physical_predicates": {
+    "HAS_UNIT": "hasUnit",
+    "HAS_CHILD": "hasChild",
+    "HAS_SIGN": "hasSign",
+    "CITES_UNIT": "citesUnit",
+    "EXCLUDES_UNIT": "excludesUnit",
+    "CITES": "cites",
+    "AMENDS": "amends",
+    "REPEALS": "repeals",
+    "IMPLEMENTS": "implements",
+    "CONSOLIDATES": "consolidates"
+  },
+  "logical_to_physical_properties": {
+    "LegalDocument": {
+      "id": "id",
+      "name": "name",
+      "so_hieu": "soHieu",
+      "title": "title",
+      "loai": "loai",
+      "co_quan": "coQuan",
+      "official_so_hieu": "officialSoHieu",
+      "identity_note": "identityNote",
+      "scope": "scope",
+      "tier": "tier",
+      "document_role": "documentRole",
+      "legal_domains": "legalDomains",
+      "current_status": "currentStatus",
+      "status_hint": "statusHint",
+      "phan_lien_quan": "phanLienQuan",
+      "ngay_ban_hanh": "ngayBanHanh",
+      "effective_from": "effectiveFrom",
+      "effective_to": "effectiveTo",
+      "hieu_luc_note": "hieuLucNote",
+      "het_hieu_luc_note": "hetHieuLucNote",
+      "ngay_hieu_luc_bo_phan": "ngayHieuLucBoPhan",
+      "consolidation_as_of": "consolidationAsOf",
+      "underlying_effective_from": "underlyingEffectiveFrom",
+      "source_url": "sourceUrl",
+      "source_kind": "sourceKind",
+      "source_quality": "sourceQuality",
+      "source_note": "sourceNote",
+      "markdown_path": "markdownPath",
+      "source_record": "sourceRecord",
+      "dataset_version": "datasetVersion"
+    },
+    "LegalUnit": {
+      "id": "id",
+      "name": "name",
+      "doc_id": "docId",
+      "so_hieu": "soHieu",
+      "unit_type": "unitType",
+      "text": "text",
+      "order": "order",
+      "parent_id": "parentId",
+      "title": "title",
+      "dieu_number": "dieuNumber",
+      "khoan_number": "khoanNumber",
+      "diem_letter": "diemLetter",
+      "dieu_occurrence": "dieuOccurrence",
+      "khoan_occurrence": "khoanOccurrence",
+      "diem_occurrence": "diemOccurrence",
+      "qcvn_id": "qcvnId",
+      "scope": "scope",
+      "section_number": "sectionNumber",
+      "section_occurrence": "sectionOccurrence",
+      "penalty_id": "penaltyId",
+      "penalty_dieu_title": "penaltyDieuTitle",
+      "penalty_doi_tuong": "penaltyDoiTuong",
+      "penalty_hanh_vi": "penaltyHanhVi",
+      "penalty_phat_tien_min": "penaltyPhatTienMin",
+      "penalty_phat_tien_max": "penaltyPhatTienMax",
+      "penalty_canh_cao": "penaltyCanhCao",
+      "penalty_tru_diem_gplx": "penaltyTruDiemGplx",
+      "penalty_tuoc_gplx_thang_min": "penaltyTuocGplxThangMin",
+      "penalty_tuoc_gplx_thang_max": "penaltyTuocGplxThangMax",
+      "penalty_tich_thu": "penaltyTichThu",
+      "penalty_source_record": "penaltySourceRecord",
+      "source_record": "sourceRecord",
+      "dataset_version": "datasetVersion"
+    },
+    "TrafficSign": {
+      "id": "id",
+      "name": "name",
+      "doc_id": "docId",
+      "unit_id": "unitId",
+      "so_hieu": "soHieu",
+      "ma_bien": "maBien",
+      "nhom": "nhom",
+      "qcvn": "qcvn",
+      "ten": "ten",
+      "bien_phu_variant": "bienPhuVariant",
+      "mo_ta": "moTa",
+      "ngay_hieu_luc": "ngayHieuLuc",
+      "ngay_het_hieu_luc": "ngayHetHieuLuc",
+      "source_record": "sourceRecord",
+      "dataset_version": "datasetVersion"
+    }
+  },
+  "property_codec_contract": {
+    "boolean_encoding": "lowercase Text 'true' or 'false'; null/missing omitted",
+    "json_text_encoding": "json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')); lists are ordered",
+    "integer_encoding": "exact int excluding bool; schema Integer; writer emits decimal string; server type coercion pending",
+    "optional_encoding": "omit null/missing from graph payload; never send literal 'null' for unknown values; source provenance retains source representation",
+    "empty_string_encoding": "retain present empty string",
+    "name_encoding": "technical name=id; ten/title source strings preserved",
+    "schema_multivalue_used": false,
+    "property_name_mapping": "snake_case to lowerCamelCase; logical property set preserved",
+    "physical_types": {
+      "TEXT": "Text",
+      "OPTIONAL_TEXT": "Text",
+      "INTEGER": "Integer",
+      "OPTIONAL_INTEGER": "Integer",
+      "BOOLEAN_ENCODING": "Text",
+      "JSON_TEXT": "Text"
+    },
+    "boolean_values": [
+      "true",
+      "false"
+    ],
+    "penalty_encoding": "All penalty properties omitted when no penalty record exists; null is omitted, never replaced by zero or false.",
+    "codec_implementation": "Deferred to builder; definitions only."
+  },
+  "unit_type_values": [
+    "Dieu",
+    "Khoan",
+    "Diem",
+    "QCVN",
+    "QCVN_Muc"
+  ],
+  "relations": {
+    "hasUnit": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalUnit"
+    },
+    "hasChild": {
+      "from_type": "LegalUnit",
+      "to_type": "LegalUnit"
+    },
+    "hasSign": {
+      "from_type": "LegalUnit",
+      "to_type": "TrafficSign"
+    },
+    "citesUnit": {
+      "from_type": "LegalUnit",
+      "to_type": "LegalUnit"
+    },
+    "excludesUnit": {
+      "from_type": "LegalUnit",
+      "to_type": "LegalUnit"
+    },
+    "cites": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalDocument"
+    },
+    "amends": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalDocument"
+    },
+    "repeals": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalDocument"
+    },
+    "implements": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalDocument"
+    },
+    "consolidates": {
+      "from_type": "LegalDocument",
+      "to_type": "LegalDocument"
+    }
+  },
+  "relation_properties": {
+    "hasUnit": [
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "hasChild": [
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "hasSign": [
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "citesUnit": [
+      {
+        "logical_name": "evidence_records",
+        "schema_name": "evidenceRecords",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "classification_provenance",
+        "schema_name": "classificationProvenance",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "excludesUnit": [
+      {
+        "logical_name": "evidence_records",
+        "schema_name": "evidenceRecords",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "classification_provenance",
+        "schema_name": "classificationProvenance",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "cites": [
+      {
+        "logical_name": "evidence",
+        "schema_name": "evidence",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "note",
+        "schema_name": "note",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "amends": [
+      {
+        "logical_name": "evidence",
+        "schema_name": "evidence",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "note",
+        "schema_name": "note",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "repeals": [
+      {
+        "logical_name": "evidence",
+        "schema_name": "evidence",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "note",
+        "schema_name": "note",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "implements": [
+      {
+        "logical_name": "evidence",
+        "schema_name": "evidence",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "note",
+        "schema_name": "note",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ],
+    "consolidates": [
+      {
+        "logical_name": "evidence",
+        "schema_name": "evidence",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "note",
+        "schema_name": "note",
+        "contract_type": "OPTIONAL_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "source_record",
+        "schema_name": "sourceRecord",
+        "contract_type": "JSON_TEXT",
+        "physical_type": "Text",
+        "required": false
+      },
+      {
+        "logical_name": "dataset_version",
+        "schema_name": "datasetVersion",
+        "contract_type": "TEXT",
+        "physical_type": "Text",
+        "required": false
+      }
+    ]
+  },
+  "relation_provenance_contract": {
+    "structural": "sourceRecord retains source locator; datasetVersion identifies snapshot.",
+    "document": "evidence and note preserve source missing/empty distinction via sourceRecord; no SAFE_EDGE gate.",
+    "unit_xref": {
+      "evidenceRecords": "JSON array of every approved complete source record, including scope, is_exclusion, in_corpus, endpoints, evidence, fingerprint and source locator.",
+      "classificationProvenance": "JSON array of approved ledger records with fingerprint, downstream_use, artifact name, artifact SHA256 and classification provenance.",
+      "sourceRecord": "JSON array of all contributing relative source paths, file SHA256 and one-based line locators.",
+      "merge": "Deduplicate identical records by compact canonical JSON, then sort by that canonical UTF-8 representation; retain every distinct approved record."
+    }
+  },
+  "identity_strategy": {
+    "LegalDocument": "id = exact doc_id; name = id",
+    "LegalUnit": "id = exact unit_id including occurrence suffix; name = id",
+    "TrafficSign": "id = exact sign_id including QCVN version; name = id",
+    "source_record": "Relative source path + SHA256 of source file + one-based line number; provenance is not node identity.",
+    "normalization": "No Unicode normalization, trimming, UUID, or replacement by title/order/text hash."
+  },
+  "xref_contract": {
+    "xref_sha256": "6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188",
+    "required_safe_edge_ledger_sha256": "1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4",
+    "ledger_artifact_role": "approved_locked_r2_xref_classification_ledger",
+    "ledger_artifact_name": "xref_a3g2_final_ledger.jsonl",
+    "runtime_path_source": "Later runtime configuration; no absolute path dependency.",
+    "join_contract": "EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON",
+    "fingerprint_input": "Complete 13-field original xref record, including from_so_hieu; preserve missing/null/empty and string bytes.",
+    "fingerprint_canonical_json": "json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')",
+    "fingerprint_algorithm": "SHA256",
+    "classification_total": 17512,
+    "safe_edge_total": 8144,
+    "safe_edge_affirmative": 7709,
+    "safe_edge_exclusion": 435,
+    "classification_field": "downstream_use",
+    "allowed_classification": "SAFE_EDGE",
+    "affirmative_predicate": "citesUnit",
+    "exclusion_predicate": "excludesUnit",
+    "fail_closed": true,
+    "validation_gate": "Verify both file hashes, complete unambiguous one-to-one fingerprint join, exact counts, source/target production units and matching document IDs, in_corpus=true and nonempty evidence. Missing, conflict or mismatch blocks unit xref edges."
+  },
+  "graph_inclusion_policy": {
+    "documents": {
+      "rule": "doc_id exists in documents.jsonl, scope != out_of_scope, and corresponding processed/documents/{doc_id}.md exists",
+      "expected_count": 91,
+      "excluded_doc_ids": [
+        "22_VBHN_BXD"
+      ],
+      "retain_historical_superseded": true
+    },
+    "units": {
+      "rule": "Source unit_id and doc_id belong to production whitelist; preserve source parent_id hierarchy",
+      "expected_count": 55597
+    },
+    "penalties": {
+      "rule": "Merge by unit_id only, LegalUnit 1:0..1 source penalty; duplicate/join/document mismatch fails closed",
+      "expected_count": 1966
+    },
+    "signs": {
+      "rule": "Version-specific sign_id; hasSign follows source unit_id, endpoint exists and doc_id matches; broad extraction anchor is provenance, not exclusive definition",
+      "expected_count": 887
+    },
+    "hierarchy": {
+      "hasUnit": "Document to root unit only (parent_id=null)",
+      "hasChild": "Existing parent to child, same production document, no cycles; no invented numbering hierarchy",
+      "order": "Source order, exact unit_id as deterministic tie-break only"
+    },
+    "document_relations": {
+      "rule": "Both corpus flags true and both IDs in production whitelist; original direction; no duplicate edges from document metadata arrays",
+      "expected_count": 238,
+      "external_reference_only_count": 583
+    },
+    "unit_xrefs": "Only external ledger SAFE_EDGE plus xref validation gate; retain self-reference, separate affirmative/exclusion predicates; other classifications never create unit edges.",
+    "excluded_sources": [
+      "processed/out_of_scope/**",
+      "processed/penalties/excluded_out_of_scope.jsonl",
+      "processed/eval/**",
+      "raw/**"
+    ],
+    "metadata_only": [
+      "metadata/**",
+      "README.md",
+      "DATASHEET.md"
+    ],
+    "external_references": "Keep outside production graph; no placeholder nodes.",
+    "on_invalid_identity_or_hierarchy": "Fail closed; do not infer repairs or modify LOCKED R2."
+  },
+  "edge_application_key_contract": {
+    "tuple_fields": [
+      "fully_qualified_from_type",
+      "from_id",
+      "physical_predicate",
+      "fully_qualified_to_type",
+      "to_id"
+    ],
+    "canonical_json": "json.dumps(tuple_fields, ensure_ascii=False, separators=(\",\", \":\")).encode(\"utf-8\")",
+    "algorithm": "SHA256",
+    "type_qualification": "VietRoadTraffic.<EntityType>",
+    "evidence_in_identity": false,
+    "merge_provenance_deterministically": true,
+    "server_idempotency_verified": false,
+    "production_ingestion_enabled": false,
+    "status": "Recorded only; server identity/upsert/dedup/evidence update validation required before use."
+  },
+  "server_confirmations": {
+    "required_before_ingestion": [
+      "Schema sync, built-in Thing id/name and NotNull/enum enforcement",
+      "Codec round-trip, Integer coercion, omitted/empty values and storage/index limits",
+      "Edge identity/upsert/dedup and deterministic evidence/provenance update"
+    ],
+    "server_schema_synced": false,
+    "server_codec_verified": false,
+    "server_edge_idempotency_verified": false
+  }
+}

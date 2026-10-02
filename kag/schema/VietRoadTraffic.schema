@@ -1,0 +1,181 @@
+namespace VietRoadTraffic
+
+LegalDocument(LegalDocument): EntityType
+  properties:
+    id(id): Text
+      constraint: NotNull
+    name(name): Text
+      constraint: NotNull
+    soHieu(soHieu): Text
+      constraint: NotNull
+    title(title): Text
+      constraint: NotNull
+    loai(loai): Text
+      constraint: NotNull
+    coQuan(coQuan): Text
+      constraint: NotNull
+    officialSoHieu(officialSoHieu): Text
+    identityNote(identityNote): Text
+    scope(scope): Text
+      constraint: NotNull
+    tier(tier): Text
+      constraint: NotNull
+    documentRole(documentRole): Text
+    legalDomains(legalDomains): Text
+    currentStatus(currentStatus): Text
+    statusHint(statusHint): Text
+    phanLienQuan(phanLienQuan): Text
+    ngayBanHanh(ngayBanHanh): Text
+      constraint: NotNull
+    effectiveFrom(effectiveFrom): Text
+    effectiveTo(effectiveTo): Text
+    hieuLucNote(hieuLucNote): Text
+    hetHieuLucNote(hetHieuLucNote): Text
+    ngayHieuLucBoPhan(ngayHieuLucBoPhan): Text
+    consolidationAsOf(consolidationAsOf): Text
+    underlyingEffectiveFrom(underlyingEffectiveFrom): Text
+    sourceUrl(sourceUrl): Text
+      constraint: NotNull
+    sourceKind(sourceKind): Text
+      constraint: NotNull
+    sourceQuality(sourceQuality): Text
+    sourceNote(sourceNote): Text
+    markdownPath(markdownPath): Text
+      constraint: NotNull
+    sourceRecord(sourceRecord): Text
+      constraint: NotNull
+    datasetVersion(datasetVersion): Text
+      constraint: NotNull
+  relations:
+    hasUnit(hasUnit): LegalUnit
+      properties:
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    cites(cites): LegalDocument
+      properties:
+        evidence(evidence): Text
+        note(note): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    amends(amends): LegalDocument
+      properties:
+        evidence(evidence): Text
+        note(note): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    repeals(repeals): LegalDocument
+      properties:
+        evidence(evidence): Text
+        note(note): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    implements(implements): LegalDocument
+      properties:
+        evidence(evidence): Text
+        note(note): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    consolidates(consolidates): LegalDocument
+      properties:
+        evidence(evidence): Text
+        note(note): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+
+LegalUnit(LegalUnit): EntityType
+  properties:
+    id(id): Text
+      constraint: NotNull
+    name(name): Text
+      constraint: NotNull
+    docId(docId): Text
+      constraint: NotNull
+    soHieu(soHieu): Text
+      constraint: NotNull
+    unitType(unitType): Text
+      constraint: NotNull, Enum="Dieu,Khoan,Diem,QCVN,QCVN_Muc"
+    text(text): Text
+      constraint: NotNull
+    order(order): Integer
+      constraint: NotNull
+    parentId(parentId): Text
+    title(title): Text
+    dieuNumber(dieuNumber): Text
+    khoanNumber(khoanNumber): Text
+    diemLetter(diemLetter): Text
+    dieuOccurrence(dieuOccurrence): Integer
+    khoanOccurrence(khoanOccurrence): Integer
+    diemOccurrence(diemOccurrence): Integer
+    qcvnId(qcvnId): Text
+    scope(scope): Text
+    sectionNumber(sectionNumber): Text
+    sectionOccurrence(sectionOccurrence): Integer
+    penaltyId(penaltyId): Text
+    penaltyDieuTitle(penaltyDieuTitle): Text
+    penaltyDoiTuong(penaltyDoiTuong): Text
+    penaltyHanhVi(penaltyHanhVi): Text
+    penaltyPhatTienMin(penaltyPhatTienMin): Integer
+    penaltyPhatTienMax(penaltyPhatTienMax): Integer
+    penaltyCanhCao(penaltyCanhCao): Text
+    penaltyTruDiemGplx(penaltyTruDiemGplx): Integer
+    penaltyTuocGplxThangMin(penaltyTuocGplxThangMin): Integer
+    penaltyTuocGplxThangMax(penaltyTuocGplxThangMax): Integer
+    penaltyTichThu(penaltyTichThu): Text
+    penaltySourceRecord(penaltySourceRecord): Text
+    sourceRecord(sourceRecord): Text
+      constraint: NotNull
+    datasetVersion(datasetVersion): Text
+      constraint: NotNull
+  relations:
+    hasChild(hasChild): LegalUnit
+      properties:
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    hasSign(hasSign): TrafficSign
+      properties:
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    citesUnit(citesUnit): LegalUnit
+      properties:
+        evidenceRecords(evidenceRecords): Text
+        classificationProvenance(classificationProvenance): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+    excludesUnit(excludesUnit): LegalUnit
+      properties:
+        evidenceRecords(evidenceRecords): Text
+        classificationProvenance(classificationProvenance): Text
+        sourceRecord(sourceRecord): Text
+        datasetVersion(datasetVersion): Text
+
+TrafficSign(TrafficSign): EntityType
+  properties:
+    id(id): Text
+      constraint: NotNull
+    name(name): Text
+      constraint: NotNull
+    docId(docId): Text
+      constraint: NotNull
+    unitId(unitId): Text
+      constraint: NotNull
+    soHieu(soHieu): Text
+      constraint: NotNull
+    maBien(maBien): Text
+      constraint: NotNull
+    nhom(nhom): Text
+      constraint: NotNull
+    qcvn(qcvn): Text
+      constraint: NotNull
+    ten(ten): Text
+      constraint: NotNull
+    bienPhuVariant(bienPhuVariant): Text
+      constraint: NotNull
+    moTa(moTa): Text
+      constraint: NotNull
+    ngayHieuLuc(ngayHieuLuc): Text
+      constraint: NotNull
+    ngayHetHieuLuc(ngayHetHieuLuc): Text
+    sourceRecord(sourceRecord): Text
+      constraint: NotNull
+    datasetVersion(datasetVersion): Text
+      constraint: NotNull
