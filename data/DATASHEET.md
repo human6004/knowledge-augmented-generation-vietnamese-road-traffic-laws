@@ -56,7 +56,7 @@ Văn bản được lưu để tham khảo nhưng không thuộc corpus chính.
 - 92 văn bản metadata
 - 91 văn bản production Markdown
 - 55,597 production units
-- 819 relations
+- 821 relations
 - 17,512 xrefs
 - 1,966 penalties
 - 887 signs

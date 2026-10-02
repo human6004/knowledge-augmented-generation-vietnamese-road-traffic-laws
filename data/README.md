@@ -10,7 +10,7 @@ Checkpoint dữ liệu ngày 02/10/2026:
 
 - 92 văn bản metadata; 91 văn bản Markdown trong corpus chính.
 - 55.597 đơn vị pháp lý (units).
-- 17.512 tham chiếu (xrefs); 819 quan hệ giữa văn bản.
+- 17.512 tham chiếu (xrefs); 821 quan hệ giữa văn bản.
 - 1.966 bản ghi xử phạt; 887 bản ghi biển báo.
 
 A2 đã khóa cấu trúc units. A3 (xrefs) và A4 (relations) đã khóa. Một số tham chiếu vẫn unresolved hoặc cần đối chiếu nguồn.
