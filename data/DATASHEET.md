@@ -51,12 +51,12 @@ Văn bản được lưu để tham khảo nhưng không thuộc corpus chính.
 
 ## Current Dataset
 
-Đếm từ production JSONL ngày 02/10/2026, sau A3-F2. `metadata/corpus.json` vẫn giữ số liệu checkpoint trước; metadata và dữ liệu pháp lý không được chỉnh trong lần công bố repo này.
+Đếm từ production JSONL ngày 02/10/2026, sau khi A3 và A4 đã khóa. `metadata/corpus.json`, `metadata/sources.csv` và `metadata/checksums.json` đã được làm mới theo cùng số liệu.
 
 - 92 văn bản metadata
 - 91 văn bản production Markdown
 - 55,597 production units
-- 918 relations
+- 819 relations
 - 17,512 xrefs
 - 1,966 penalties
 - 887 signs

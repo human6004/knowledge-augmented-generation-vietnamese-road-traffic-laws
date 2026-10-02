@@ -10,12 +10,12 @@ Checkpoint dữ liệu ngày 02/10/2026:
 
 - 92 văn bản metadata; 91 văn bản Markdown trong corpus chính.
 - 55.597 đơn vị pháp lý (units).
-- 17.512 tham chiếu (xrefs); 918 quan hệ giữa văn bản.
+- 17.512 tham chiếu (xrefs); 819 quan hệ giữa văn bản.
 - 1.966 bản ghi xử phạt; 887 bản ghi biển báo.
 
-A2 đã khóa cấu trúc units. A3-F2 đã áp dụng 12 alias retarget. A3-F3 hoàn tất review có mục tiêu; manifest ứng viên chưa được áp dụng. Một số tham chiếu vẫn unresolved hoặc cần đối chiếu nguồn.
+A2 đã khóa cấu trúc units. A3 (xrefs) và A4 (relations) đã khóa. Một số tham chiếu vẫn unresolved hoặc cần đối chiếu nguồn.
 
-Các số liệu tổng hợp trong `metadata/corpus.json` thuộc checkpoint cũ; số liệu trên được đếm trực tiếp từ JSONL hiện tại. Repo này không chứa scripts và báo cáo review nằm trong workspace riêng.
+Các số liệu tổng hợp trong `metadata/corpus.json` đã được làm mới và khớp với số liệu trên (đếm trực tiếp từ JSONL hiện tại). Repo này không chứa scripts và báo cáo review nằm trong workspace riêng.
 
 ## Cấu trúc
 
