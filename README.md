@@ -1,7 +1,9 @@
 # Knowledge-Augmented Generation cho luật giao thông đường bộ Việt Nam
 
 Kho mã mới phục vụ nghiên cứu suy luận trên luật giao thông đường bộ Việt Nam.
-Hiện chỉ có dataset đã khóa và khung thư mục; các thành phần KAG chưa triển khai.
+Dataset **LOCKED R2** và schema miền chính thức **v0.1** đã có.
+Xem [mô hình miền](docs/domain_model.md), [schema kỹ thuật](docs/schema.md)
+và [VietRoadTraffic.schema](kag/schema/VietRoadTraffic.schema).
 
 Dataset chuẩn nằm tại `data/` và phải giữ nguyên. Xem [tài liệu dataset](data/README.md),
 [datasheet](data/DATASHEET.md) và [giấy phép dữ liệu](data/LICENSE.md).
@@ -32,5 +34,5 @@ Sau khi clone kho mã, lấy đúng phiên bản đã pin bằng:
 git submodule update --init vendor/KAG
 ```
 
-Chưa thiết lập dependency hoặc dịch vụ OpenSPG. Chưa triển khai schema, builder,
-retriever, solver; chưa build graph, ingestion hay chạy benchmark.
+Builder, retriever, solver chưa triển khai; graph chưa build, chưa chạy production
+ingestion OpenSPG hoặc benchmark. Ba nhóm xác nhận server còn bắt buộc trước ingestion.
