@@ -1,0 +1,4 @@
+# Preserve source files and locked dataset checksums across platforms.
+* -text
+*.pdf binary
+*.doc binary

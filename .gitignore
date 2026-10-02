@@ -1,0 +1,15 @@
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+
+# Generated caches and editor state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
