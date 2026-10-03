@@ -4,7 +4,7 @@
 
 Bộ dữ liệu pháp luật giao thông đường bộ Việt Nam (luật, nghị định, thông tư, QCVN, văn bản hợp nhất), được chuẩn hóa để dùng cho retrieval, knowledge graph, KAG và đánh giá về sau.
 
-Repo này hiện chỉ là **lớp dữ liệu (dataset layer)**. Hệ thống truy xuất, KAG và suy luận chưa thuộc repo này. Trạng thái hiện tại: **Dataset Lock R2 — 02/10/2026**.
+Thư mục này là **lớp dữ liệu (dataset layer)**. Các thành phần truy xuất, KAG và suy luận nằm ngoài thư mục `data/`. Số liệu dưới đây được đếm từ dữ liệu production ngày **02/10/2026**.
 
 ## 2. Luồng dữ liệu
 
@@ -78,7 +78,7 @@ Tất cả đường dẫn dưới đây tính từ thư mục `data/`.
 
 Có **92** bản ghi văn bản trong `documents.jsonl`, trong đó **91** thuộc production corpus (có Markdown trong `processed/documents/`) và **1** cố ý ngoài phạm vi: `22_VBHN_BXD`. Dữ liệu của văn bản này nằm riêng trong `processed/out_of_scope/` (và `penalties/excluded_out_of_scope.jsonl`). Không trộn vào graph hoặc dữ liệu production nếu không có chủ đích.
 
-## 7. Checkpoint: Dataset Lock R2 — 02/10/2026
+## 7. Thống kê dữ liệu production — 02/10/2026
 
 | Thành phần | Số lượng |
 |---|---|
@@ -96,6 +96,6 @@ Có **92** bản ghi văn bản trong `documents.jsonl`, trong đó **91** thu�
 2. **`out_of_scope/` không phải production corpus.**
 3. **`eval_questions.jsonl` là dữ liệu benchmark**, không dùng làm nguồn luật hay đưa vào corpus truy xuất.
 4. **`raw/`** dùng để kiểm chứng khi nội dung đã trích có vấn đề.
-5. **Dataset đã LOCKED R2:** các công việc schema / graph về sau nên coi đây là baseline, không sửa trực tiếp file production.
+5. **Giữ nguyên dữ liệu nguồn:** các thành phần schema / graph đọc dữ liệu production, không sửa trực tiếp record hoặc suy đoán sửa lỗi nguồn.
 
 Xem thêm [DATASHEET.md](DATASHEET.md) để biết chi tiết về dataset. Điều kiện sử dụng nằm trong [LICENSE.md](LICENSE.md).

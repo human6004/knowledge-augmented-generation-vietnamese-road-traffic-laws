@@ -1,8 +1,5 @@
 {
-  "schema_version": "0.1",
-  "dataset_version": "LOCKED R2",
   "namespace": "VietRoadTraffic",
-  "pinned_kag_commit": "fdab15b3929d2ee40dfcdd388f90233096a6afc9",
   "node_types": [
     "LegalDocument",
     "LegalUnit",
@@ -20,6 +17,8 @@
         "source_requirement": "Có",
         "notes": "name là nhãn kỹ thuật",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -32,6 +31,8 @@
         "source_requirement": "Có",
         "notes": "name là nhãn kỹ thuật",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -357,18 +358,6 @@
         "notes": "Truy vết nguồn; không phải identity",
         "intrinsic": false,
         "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
-        "intrinsic": false,
-        "required": true
       }
     ],
     "LegalUnit": [
@@ -382,6 +371,8 @@
         "source_requirement": "Có",
         "notes": "Identity exact",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -394,6 +385,8 @@
         "source_requirement": "Có",
         "notes": "Identity exact",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -755,18 +748,6 @@
         "notes": "Truy vết nguồn; không phải identity",
         "intrinsic": false,
         "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
-        "intrinsic": false,
-        "required": true
       }
     ],
     "TrafficSign": [
@@ -780,6 +761,8 @@
         "source_requirement": "Có",
         "notes": "name không phải ten được suy diễn",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -792,6 +775,8 @@
         "source_requirement": "Có",
         "notes": "name không phải ten được suy diễn",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -937,22 +922,16 @@
         "notes": "Truy vết nguồn; không phải identity",
         "intrinsic": false,
         "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
-        "intrinsic": false,
-        "required": true
       }
     ]
   },
-  "node_property_count": 78,
+  "node_property_count": 75,
+  "logical_property_count": 75,
+  "declared_project_property_count": 69,
+  "built_in_properties_inherited": [
+    "id",
+    "name"
+  ],
   "logical_to_physical_predicates": {
     "HAS_UNIT": "hasUnit",
     "HAS_CHILD": "hasChild",
@@ -995,8 +974,7 @@
       "source_quality": "sourceQuality",
       "source_note": "sourceNote",
       "markdown_path": "markdownPath",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     },
     "LegalUnit": {
       "id": "id",
@@ -1030,8 +1008,7 @@
       "penalty_tuoc_gplx_thang_max": "penaltyTuocGplxThangMax",
       "penalty_tich_thu": "penaltyTichThu",
       "penalty_source_record": "penaltySourceRecord",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     },
     "TrafficSign": {
       "id": "id",
@@ -1047,14 +1024,13 @@
       "mo_ta": "moTa",
       "ngay_hieu_luc": "ngayHieuLuc",
       "ngay_het_hieu_luc": "ngayHetHieuLuc",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     }
   },
   "property_codec_contract": {
     "boolean_encoding": "lowercase Text 'true' or 'false'; null/missing omitted",
     "json_text_encoding": "json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')); lists are ordered",
-    "integer_encoding": "exact int excluding bool; schema Integer; writer emits decimal string; server type coercion pending",
+    "integer_encoding": "exact native int (type(value) is int), excluding bool; schema Integer; writer emits decimal string; native integer after server property JSON decoding",
     "optional_encoding": "omit null/missing from graph payload; never send literal 'null' for unknown values; source provenance retains source representation",
     "empty_string_encoding": "retain present empty string",
     "name_encoding": "technical name=id; ten/title source strings preserved",
@@ -1073,7 +1049,7 @@
       "false"
     ],
     "penalty_encoding": "All penalty properties omitted when no penalty record exists; null is omitted, never replaced by zero or false.",
-    "codec_implementation": "Deferred to builder; definitions only."
+    "codec_implementation": "Builder owns property encoding and decoding."
   },
   "unit_type_values": [
     "Dieu",
@@ -1132,13 +1108,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "hasChild": [
@@ -1148,13 +1117,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "hasSign": [
@@ -1162,13 +1124,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1194,13 +1149,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "excludesUnit": [
@@ -1222,13 +1170,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1254,13 +1195,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "amends": [
@@ -1282,13 +1216,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1314,13 +1241,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "implements": [
@@ -1342,13 +1262,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1374,18 +1287,11 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ]
   },
   "relation_provenance_contract": {
-    "structural": "sourceRecord retains source locator; datasetVersion identifies snapshot.",
+    "structural": "sourceRecord retains the relative source path, file SHA256 and one-based line locator.",
     "document": "evidence and note preserve source missing/empty distinction via sourceRecord; no SAFE_EDGE gate.",
     "unit_xref": {
       "evidenceRecords": "JSON array of every approved complete source record, including scope, is_exclusion, in_corpus, endpoints, evidence, fingerprint and source locator.",
@@ -1404,9 +1310,8 @@
   "xref_contract": {
     "xref_sha256": "6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188",
     "required_safe_edge_ledger_sha256": "1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4",
-    "ledger_artifact_role": "approved_locked_r2_xref_classification_ledger",
     "ledger_artifact_name": "xref_a3g2_final_ledger.jsonl",
-    "runtime_path_source": "Later runtime configuration; no absolute path dependency.",
+    "runtime_path_source": "Runtime configuration; no absolute path dependency.",
     "join_contract": "EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON",
     "fingerprint_input": "Complete 13-field original xref record, including from_so_hieu; preserve missing/null/empty and string bytes.",
     "fingerprint_canonical_json": "json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')",
@@ -1466,7 +1371,7 @@
       "DATASHEET.md"
     ],
     "external_references": "Keep outside production graph; no placeholder nodes.",
-    "on_invalid_identity_or_hierarchy": "Fail closed; do not infer repairs or modify LOCKED R2."
+    "on_invalid_identity_or_hierarchy": "Fail closed; do not infer repairs or modify source records."
   },
   "edge_application_key_contract": {
     "tuple_fields": [
@@ -1481,18 +1386,30 @@
     "type_qualification": "VietRoadTraffic.<EntityType>",
     "evidence_in_identity": false,
     "merge_provenance_deterministically": true,
-    "server_idempotency_verified": false,
-    "production_ingestion_enabled": false,
-    "status": "Recorded only; server identity/upsert/dedup/evidence update validation required before use."
-  },
-  "server_confirmations": {
-    "required_before_ingestion": [
-      "Schema sync, built-in Thing id/name and NotNull/enum enforcement",
-      "Codec round-trip, Integer coercion, omitted/empty values and storage/index limits",
-      "Edge identity/upsert/dedup and deterministic evidence/provenance update"
+    "uses": [
+      "reproducibility",
+      "logging",
+      "local_deduplication",
+      "evidence_aggregation"
     ],
-    "server_schema_synced": false,
-    "server_codec_verified": false,
-    "server_edge_idempotency_verified": false
+    "controls_server_uniqueness": false
+  },
+  "runtime_contract": {
+    "schema_sha256": "0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b",
+    "constraint_enforcement": "DECLARATIVE_ONLY",
+    "builder_schema_validation_required": true,
+    "builder_unit_type_validation_required": true,
+    "builder_integer_validation_required": true,
+    "integer_input": "NATIVE_INT_EXCLUDING_BOOL",
+    "integer_storage": "NATIVE_INTEGER",
+    "property_read_decoding": "JSON_DECODE_NON_ID_PROPERTIES",
+    "json_text_read_decoding": "ADDITIONAL_SEMANTIC_JSON_DECODE",
+    "json_text_write_encoding": "ONCE_BEFORE_WRITER",
+    "node_write_order": "NODES_BEFORE_EDGES",
+    "edge_identity": "FROM_PREDICATE_TO_TUPLE",
+    "edge_property_update": "LAST_WRITE_WINS",
+    "edge_provenance_aggregation": "DETERMINISTIC_CANONICAL_JSON_BEFORE_WRITE",
+    "edge_property_write": "COMPLETE_PROPERTIES_AFTER_AGGREGATION",
+    "text_payload_support": "CURRENT_DATASET_MAXIMUM_TEXT_SIZE"
   }
 }

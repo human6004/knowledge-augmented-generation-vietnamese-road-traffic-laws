@@ -5,7 +5,7 @@ Dockerfile của backend, frontend và MinIO nằm tại đây. Hai stack dùng 
 | WebApp | `docker-compose.yml` | `webapp` | `.env` |
 | KAG / OpenSPG | `docker-compose.kag.yml` | `kag` | `.env.kag` |
 
-Hai stack có image, mạng, database, tài khoản và volume riêng. Không có dependency Compose giữa hai stack. WebApp tích hợp với adapter KAG qua HTTP `KAG_BASE_URL` và cùng phiên bản schema contract. Chạy/dừng/build từng stack bằng file tương ứng; không ghép hai file bằng nhiều cờ `-f` vào một project.
+Hai stack có image, mạng, database, tài khoản và volume riêng. Không có dependency Compose giữa hai stack. WebApp tích hợp với adapter KAG qua HTTP `KAG_BASE_URL` và cùng identity schema contract (`namespace`, `schema_sha256`, `contract_sha256`). Chạy/dừng/build từng stack bằng file tương ứng; không ghép hai file bằng nhiều cờ `-f` vào một project.
 
 ## Chạy WebApp độc lập
 
@@ -23,7 +23,7 @@ Backend dùng tài khoản `luatgt` và `DB_PASSWORD`, không dùng root. MySQL 
 
 Đây là schema MySQL mới; Flyway V1/V2 đã chuyển cú pháp từ PostgreSQL, V3 thêm đơn vị pháp lý. Không chạy các migration này lên PostgreSQL. Volume cũ `webapp_postgres-data` không bị sửa/xóa và không tự chuyển dữ liệu sang MySQL. Người dùng đã xác nhận chưa có dữ liệu cần chuyển.
 
-Backend build từ root để Maven đóng gói trực tiếp `kag/schema/schema_contract.json` và `VietRoadTraffic.schema` cùng source Java. Build context chỉ lấy source WebApp và hai file schema; runtime/core KAG không nằm trong image Java. Khi contract đổi cần build lại backend.
+Backend build từ root để Maven đóng gói trực tiếp `kag/schema/schema_contract.json` và `VietRoadTraffic.schema` cùng source Java tại `WebApp/`. Build context chỉ lấy source WebApp và hai file schema; runtime/core KAG không nằm trong image Java. Backend kiểm tra SHA-256 của schema đóng gói khớp `runtime_contract.schema_sha256`; khi contract hoặc schema đổi cần build lại backend. Namespace vẫn là `VietRoadTraffic`, với 75 thuộc tính logical, 69 thuộc tính khai báo và sáu thuộc tính `id/name` kế thừa OpenSPG `Thing`.
 
 ```powershell
 # Build hoặc dừng riêng WebApp:
@@ -84,4 +84,4 @@ Trong OpenSPG UI, cấu hình lưu trữ MinIO theo URL `minio://openspg-minio:9
 
 Image server/MySQL/Neo4j mặc định dùng `latest` như upstream. Để tái lập bộ đã kiểm thử, đặt `OPENSPG_SERVER_IMAGE`, `OPENSPG_MYSQL_IMAGE`, `OPENSPG_NEO4J_IMAGE` trong `.env.kag` thành image `@sha256:...`. MinIO dùng Dockerfile đã pin nguồn của project. JVM mặc định 2–8 GB, Neo4j heap tối đa 4 GB và page cache 1 GB. Có thể chỉnh `OPENSPG_JAVA_XMS`, `OPENSPG_JAVA_XMX`, `OPENSPG_BUILDER_CONCURRENCY` (mặc định 4).
 
-OpenSPG engine không cung cấp `/v1/query` và `/v1/query/stream` mà WebApp gọi. Giữ `KAG_BASE_URL` trong `.env` cho adapter Python tại cổng 8000; không trỏ tới OpenSPG UI cổng 28887. Không tự import dataset/schema hoặc bật ingestion khi khởi động. Các xác nhận server trong [schema.md](../docs/schema.md#xác-nhận-bắt-buộc-trước-ingestion) vẫn chờ thực hiện trước ingestion.
+OpenSPG engine không cung cấp `/v1/query` và `/v1/query/stream` mà WebApp gọi. Giữ `KAG_BASE_URL` trong `.env` cho adapter Python tại cổng 8000; không trỏ tới OpenSPG UI cổng 28887. Không tự import dataset/schema hoặc bật ingestion khi khởi động. Core KAG sẽ triển khai riêng; Builder phải tuân thủ [contract runtime](../docs/schema.md#contract-runtime-và-yêu-cầu-builder), kiểm tra dữ liệu, codec và gộp provenance xác định trước khi ghi graph.

@@ -2,10 +2,6 @@ namespace VietRoadTraffic
 
 LegalDocument(LegalDocument): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     soHieu(soHieu): Text
       constraint: NotNull
     title(title): Text
@@ -44,50 +40,38 @@ LegalDocument(LegalDocument): EntityType
       constraint: NotNull
     sourceRecord(sourceRecord): Text
       constraint: NotNull
-    datasetVersion(datasetVersion): Text
-      constraint: NotNull
   relations:
     hasUnit(hasUnit): LegalUnit
       properties:
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     cites(cites): LegalDocument
       properties:
         evidence(evidence): Text
         note(note): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     amends(amends): LegalDocument
       properties:
         evidence(evidence): Text
         note(note): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     repeals(repeals): LegalDocument
       properties:
         evidence(evidence): Text
         note(note): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     implements(implements): LegalDocument
       properties:
         evidence(evidence): Text
         note(note): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     consolidates(consolidates): LegalDocument
       properties:
         evidence(evidence): Text
         note(note): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
 
 LegalUnit(LegalUnit): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     docId(docId): Text
       constraint: NotNull
     soHieu(soHieu): Text
@@ -124,36 +108,26 @@ LegalUnit(LegalUnit): EntityType
     penaltySourceRecord(penaltySourceRecord): Text
     sourceRecord(sourceRecord): Text
       constraint: NotNull
-    datasetVersion(datasetVersion): Text
-      constraint: NotNull
   relations:
     hasChild(hasChild): LegalUnit
       properties:
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     hasSign(hasSign): TrafficSign
       properties:
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     citesUnit(citesUnit): LegalUnit
       properties:
         evidenceRecords(evidenceRecords): Text
         classificationProvenance(classificationProvenance): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
     excludesUnit(excludesUnit): LegalUnit
       properties:
         evidenceRecords(evidenceRecords): Text
         classificationProvenance(classificationProvenance): Text
         sourceRecord(sourceRecord): Text
-        datasetVersion(datasetVersion): Text
 
 TrafficSign(TrafficSign): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     docId(docId): Text
       constraint: NotNull
     unitId(unitId): Text
@@ -176,6 +150,4 @@ TrafficSign(TrafficSign): EntityType
       constraint: NotNull
     ngayHetHieuLuc(ngayHetHieuLuc): Text
     sourceRecord(sourceRecord): Text
-      constraint: NotNull
-    datasetVersion(datasetVersion): Text
       constraint: NotNull

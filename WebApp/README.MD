@@ -42,7 +42,7 @@ Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của
 - Biển báo: nhập JSON/CSV/XLSX hàng loạt, giữ metadata pháp lý, ghép ZIP PNG/JPEG theo mã biển. Chưa có bộ dữ liệu/ảnh biển báo đầy đủ do người dùng cung cấp; ảnh trong bộ câu hỏi không tự trở thành thư viện biển báo.
 - Văn bản: metadata, PDF nguồn, nháp/xuất bản, lịch sử sửa và quan hệ thay thế/sửa đổi có ngày hiệu lực; mức phạt có cấu trúc gắn với văn bản đã xuất bản/còn hiệu lực.
 - Ôn tập, tiến độ và thi thử chấm bằng đáp án server đã kiểm duyệt, bản chụp bất biến khi tạo bài và thời gian server. Hạng B ghim cấu hình bộ mẫu `B-2025-06`.
-- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Trang cấu hình KAG đọc trực tiếp contract chung tại `kag/schema/schema_contract.json`; quản lý đơn vị pháp lý theo `unit_id`, `doc_id`, `parent_id` và giữ metadata nguồn. Các trang pipeline/graph/benchmark KAG vẫn hiển thị chưa triển khai.
+- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Trang cấu hình KAG đọc contract chung tại [`kag/schema/schema_contract.json`](../kag/schema/schema_contract.json), namespace `VietRoadTraffic`; schema có 75 thuộc tính logical, 69 thuộc tính khai báo và `id/name` kế thừa OpenSPG `Thing`. Backend đóng gói contract/schema, kiểm tra fingerprint schema theo `runtime_contract.schema_sha256` và gửi identity `{namespace, schema_sha256, contract_sha256}` cho adapter KAG. Quản lý đơn vị pháp lý theo `unit_id`, `doc_id`, `parent_id` và giữ metadata nguồn. Các trang pipeline/graph/benchmark KAG vẫn hiển thị chưa triển khai; core KAG sẽ phát triển riêng dựa trên sườn `kag-legal-assistant`.
 
 ## Phát triển local
 

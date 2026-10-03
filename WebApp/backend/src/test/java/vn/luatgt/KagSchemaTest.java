@@ -45,6 +45,10 @@ class KagSchemaTest {
         byte[] bytes=Files.readAllBytes(Path.of("../../kag/schema/schema_contract.json"));
         assertEquals(json.readTree(bytes),schema.contract());
         assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)),schema.identity().get("contract_sha256"));
+        byte[] schemaBytes=Files.readAllBytes(Path.of("../../kag/schema/VietRoadTraffic.schema"));
+        assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(schemaBytes)),schema.identity().get("schema_sha256"));
+        assertEquals(schema.contract().path("runtime_contract").path("schema_sha256").asText(),schema.identity().get("schema_sha256"));
+        assertEquals(Set.of("namespace","schema_sha256","contract_sha256"),schema.identity().keySet());
         var n=schema.normalize("units",node("{\"id\":\" D::1::occ2 \",\"name\":\" D::1::occ2 \",\"docId\":\"D\",\"unitType\":\"Dieu\",\"order\":0,\"penaltyPhatTienMin\":0,\"penaltyCanhCao\":false,\"parentId\":null,\"sourceRecord\":\"{\\\"value\\\":null}\"}"));
         assertEquals(" D::1::occ2 ",n.path("unit_id").asText()); assertEquals("D",n.path("doc_id").asText());
         assertTrue(n.path("parent_id").isNull()); assertEquals(0,n.path("penalty_phat_tien_min").asInt()); assertFalse(n.path("penalty_canh_cao").asBoolean());
@@ -55,13 +59,16 @@ class KagSchemaTest {
         assertThrows(ResponseStatusException.class,()->schema.normalize("units",node("{\"unit_id\":\"D::1\",\"penalty_id\":\"D::2\"}")));
         assertThrows(ResponseStatusException.class,()->schema.normalize("units",node("{\"sourceRecord\":\"\"}")));
         assertThrows(ResponseStatusException.class,()->schema.normalize("documents",node("{\"effective_from\":\"2025-01-01\",\"ngay_hieu_luc\":\"2026-01-01\"}")));
-        var doc=content.validate("documents",node("{\"doc_id\":\" D \",\"title\":\" Tiêu đề nguồn \",\"effective_from\":\"2025-01-01\",\"dataset_version\":\"LOCKED R2\"}"),false);
+        var doc=content.validate("documents",node("{\"doc_id\":\" D \",\"title\":\" Tiêu đề nguồn \",\"effective_from\":\"2025-01-01\"}"),false);
         assertEquals(" D ",doc.path("externalId").asText()); assertEquals(" Tiêu đề nguồn ",doc.path("title").asText()); assertEquals("2025-01-01",doc.path("ngay_hieu_luc").asText());
         assertFalse(doc.has("ngay_het_hieu_luc"));
         mvc.perform(get("/api/admin/kag/schema")).andExpect(status().isUnauthorized());
         var login=mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"admin@test.vn\",\"password\":\"TEST-only-admin-password\"}")).andReturn();
         String token=json.readTree(login.getResponse().getContentAsString()).path("accessToken").asText();
-        mvc.perform(get("/api/admin/kag/schema").header("Authorization","Bearer "+token)).andExpect(status().isOk()).andExpect(jsonPath("$.identity.namespace").value("VietRoadTraffic"));
+        mvc.perform(get("/api/admin/kag/schema").header("Authorization","Bearer "+token)).andExpect(status().isOk()).andExpect(jsonPath("$.identity.namespace").value("VietRoadTraffic"))
+            .andExpect(jsonPath("$.identity.schema_sha256").value(schema.identity().get("schema_sha256")))
+            .andExpect(jsonPath("$.identity.contract_sha256").value(schema.identity().get("contract_sha256")))
+            .andExpect(jsonPath("$.identity.schema_version").doesNotExist()).andExpect(jsonPath("$.identity.dataset_version").doesNotExist());
         mvc.perform(post("/api/admin/imports/units/preview").header("Authorization","Bearer "+token).contentType(MediaType.APPLICATION_JSON).content("{\"rows\":[{\"unit_id\":\"missing\"}]}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$[0].valid").value(false));
     }

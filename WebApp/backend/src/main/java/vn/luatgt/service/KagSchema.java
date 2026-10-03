@@ -12,7 +12,7 @@ import vn.luatgt.exception.ApiErrors;
 @Service
 public class KagSchema {
     private final JsonNode contract;
-    private final String sha256;
+    private final String sha256, schemaSha256;
     private final ObjectMapper json;
     private static final Map<String,String> TYPES=Map.of("documents","LegalDocument","units","LegalUnit","signs","TrafficSign");
     private static final Map<String,String> IDS=Map.of("documents","doc_id","units","unit_id","signs","sign_id");
@@ -22,13 +22,17 @@ public class KagSchema {
             byte[] bytes=input.readAllBytes(); contract=json.readTree(bytes);
             sha256=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
         }
-        for(String key:List.of("namespace","schema_version","dataset_version","node_properties","relations","identity_strategy","server_confirmations"))
+        for(String key:List.of("namespace","node_properties","relations","identity_strategy","runtime_contract"))
             if(!contract.hasNonNull(key)) throw new IllegalStateException("KAG contract thiếu "+key);
+        try(var input=new ClassPathResource("kag-schema/VietRoadTraffic.schema").getInputStream()) {
+            schemaSha256=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(input.readAllBytes()));
+        }
+        if(!schemaSha256.equals(contract.path("runtime_contract").path("schema_sha256").asText()))
+            throw new IllegalStateException("KAG schema không khớp SHA-256 trong runtime contract");
     }
     public JsonNode contract() { return contract.deepCopy(); }
     public Map<String,String> identity() {
-        return Map.of("namespace",contract.path("namespace").asText(),"schema_version",contract.path("schema_version").asText(),
-            "dataset_version",contract.path("dataset_version").asText(),"contract_sha256",sha256);
+        return Map.of("namespace",contract.path("namespace").asText(),"schema_sha256",schemaSha256,"contract_sha256",sha256);
     }
     public ObjectNode normalize(String kind,ObjectNode input) {
         var n=input.deepCopy(); String type=TYPES.get(kind);
@@ -67,7 +71,6 @@ public class KagSchema {
             };
             if(!valid) throw ApiErrors.bad(field+": sai kiểu trong KAG contract");
         }
-        if(n.hasNonNull("dataset_version")&&!n.path("dataset_version").asText().equals(contract.path("dataset_version").asText())) throw ApiErrors.bad("dataset_version không khớp KAG contract");
         if(kind.equals("units")&&n.hasNonNull("unit_type")) {
             boolean found=false; for(var value:contract.path("unit_type_values")) if(value.equals(n.get("unit_type"))) found=true;
             if(!found) throw ApiErrors.bad("unit_type không thuộc KAG contract");

@@ -1,6 +1,6 @@
-# Mô hình miền pháp lý v0.1
+# Mô hình miền pháp lý
 
-Nguồn tri thức: dataset **LOCKED R2**. Mô hình có đúng ba loại node:
+Nguồn tri thức: corpus pháp lý trong `data/`. Mô hình có đúng ba loại node:
 
 - **LegalDocument**: văn bản production, identity giữ nguyên `doc_id`.
 - **LegalUnit**: đơn vị nội dung, identity giữ nguyên `unit_id`; `unitType`
@@ -27,7 +27,7 @@ Text cha có thể lặp text con, không coi hai tầng là hai chứng cứ đ
 
 ## Xử phạt và biển báo
 
-Penalty gộp vào thuộc tính `penalty*` của LegalUnit: R2 có 1.966 record,
+Penalty gộp vào thuộc tính `penalty*` của LegalUnit: nguồn có 1.966 record,
 quan hệ nguồn 1:0..1, `penalty_id=unit_id`, không có vòng đời độc lập.
 Unit không có penalty giữ toàn bộ thuộc tính penalty vắng mặt. Không đổi
 null thành 0/false. Tước GPLX `[min,max]` giữ hai thuộc tính tháng; không lấy
@@ -57,12 +57,16 @@ và mọi record evidence/provenance đã duyệt. Không tạo node Evidence.
 Khóa cạnh ứng dụng là SHA-256 canonical JSON của type nguồn fully qualified,
 ID nguồn, predicate vật lý, type đích fully qualified, ID đích. Evidence nằm
 ngoài identity; nhiều record cùng cạnh được gộp xác định, không ghi đè.
-Khóa này chưa được phép dùng production trước xác nhận server.
+Khóa cục bộ này phục vụ tái lập, logging, dedup cục bộ và tổng hợp evidence.
+Identity server là **(node nguồn, predicate vật lý, node đích)**; khóa ứng dụng
+không điều khiển uniqueness server. Server cập nhật thuộc tính cạnh theo
+**LAST_WRITE_WINS**: Builder gộp evidence/provenance trước, rồi ghi đầy đủ thuộc
+tính cạnh. Codec và quy tắc ghi theo [schema.md](schema.md).
 
 ## Phạm vi graph production
 
 Whitelist gồm document có record, `scope != out_of_scope` và Markdown tương ứng
-trong `processed/documents/`: R2 có 91 document, loại `22_VBHN_BXD`.
+trong `processed/documents/`: corpus có 91 document, loại `22_VBHN_BXD`.
 Giữ văn bản lịch sử/Superseded. Theo nguồn có 55.597 unit, 887 biển,
 238 quan hệ văn bản nội bộ; penalty chỉ merge thuộc tính. 8.144 SAFE_EDGE
 là số record được duyệt, không phải số cạnh duy nhất sau gộp provenance.
@@ -71,7 +75,7 @@ Loại `processed/out_of_scope/**`, penalty bị loại, `processed/eval/**`, `r
 eval không đi vào retrieval corpus hoặc sinh tri thức. Metadata/manifest chỉ
 phục vụ provenance. Tham chiếu ngoài corpus và classification khác SAFE_EDGE
 giữ ngoài graph; không tạo placeholder. ID trùng, join penalty sai, endpoint
-thiếu, lệch doc hoặc parent cycle phải fail closed; không sửa snapshot bằng suy đoán.
+thiếu, lệch doc hoặc parent cycle phải fail closed; không suy đoán sửa dữ liệu nguồn.
 
-Mô hình không kết luận pháp luật hiện hành ngoài snapshot. Chunking, suy luận
-thời gian và độ chính xác neo biển/QCVN thuộc các giai đoạn sau.
+Mô hình không kết luận pháp luật hiện hành ngoài corpus. Chunking, suy luận
+thời gian và độ chính xác neo biển/QCVN nằm ngoài phạm vi schema miền.

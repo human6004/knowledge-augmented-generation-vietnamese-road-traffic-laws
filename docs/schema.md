@@ -1,11 +1,16 @@
-# Schema kỹ thuật v0.1
+# Schema kỹ thuật
 
-Namespace: **VietRoadTraffic**. Dataset: **LOCKED R2**. KAG pin:
+Namespace: **VietRoadTraffic**. Nguồn dữ liệu: `data/`. KAG pin:
 `fdab15b3929d2ee40dfcdd388f90233096a6afc9`.
 
 [VietRoadTraffic.schema](../kag/schema/VietRoadTraffic.schema) khai báo đúng
-`LegalDocument`, `LegalUnit`, `TrafficSign`, 78 thuộc tính node gồm `id/name`
-(30/33/15), 10 predicate và 34 khai báo thuộc tính cạnh.
+`LegalDocument`, `LegalUnit`, `TrafficSign`, 69 thuộc tính node của dự án
+(27/30/12), 10 predicate và 24 khai báo thuộc tính cạnh.
+Ba EntityType kế thừa `id/name` từ OpenSPG `Thing`, không khai báo lại.
+`id/name` vẫn là thuộc tính logical của dự án: `logical_property_count = 75`
+(29/32/14), `declared_project_property_count = 69`; sáu thuộc tính logical
+`id/name` được kế thừa. `description` cũng là built-in server của `Thing`,
+nhưng không thuộc contract miền của dự án hoặc mapping logical/physical.
 [schema_contract.json](../kag/schema/schema_contract.json) là contract máy đọc
 cho toàn bộ property, codec, quan hệ, identity và inclusion policy.
 Ngữ nghĩa miền: [domain_model.md](domain_model.md).
@@ -34,21 +39,27 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
 ## Kiểu và codec
 
 - `TEXT`, `OPTIONAL_TEXT` → `Text`; `INTEGER`, `OPTIONAL_INTEGER` → `Integer`.
-  Integer nhận int thật, từ chối bool; writer upstream gửi chuỗi thập phân,
-  coercion/query số phải được xác nhận trên server.
+  Builder phải nhận int thật (`type(value) is int`), từ chối bool, string và
+  mọi giá trị không nguyên. Writer biểu diễn int bằng chuỗi thập phân;
+  sau JSON decode thuộc tính server, giá trị giữ kiểu integer, kể cả 0.
 - `BOOLEAN_ENCODING` → `Text`, chỉ `"true"`/`"false"`; không native Boolean.
 - `JSON_TEXT` → `Text`: `json.dumps(value, ensure_ascii=False, sort_keys=True,
   separators=(",", ":"))`. List giữ thứ tự. Không `Text[]` hoặc MultiValue.
 - Bỏ null/missing khỏi payload; không gửi literal `"null"` cho unknown.
   Giữ 0, false và chuỗi rỗng. Source provenance bảo toàn khác biệt null/missing.
   Encode JSON_TEXT trước writer đúng một lần; codec implementation thuộc builder.
+- Server JSON-serialize thuộc tính trừ intrinsic `id`: khi đọc dùng `json.loads`.
+  Với JSON_TEXT, decode thêm JSON bên trong khi cần giá trị semantic.
 - `NotNull` chỉ cho property thực sự bắt buộc; optional và toàn bộ penalty
   sparse không có NotNull. `unitType` có Enum đủ năm giá trị miền.
-  Parser ghi nhận constraint; chưa xác minh server enforcement.
+  `required=true` của logical `id/name` là yêu cầu contract; không khai báo
+  `NotNull` riêng cho hai thuộc tính kế thừa trong schema EntityType.
+  Server constraints chỉ **DECLARATIVE_ONLY**; Builder phải kiểm tra required
+  fields và `unitType` thuộc `Dieu`, `Khoan`, `Diem`, `QCVN`, `QCVN_Muc`.
 
-Cạnh cấu trúc giữ `sourceRecord`, `datasetVersion`; cạnh văn bản thêm
+Cạnh cấu trúc giữ `sourceRecord`; cạnh văn bản thêm
 `evidence`, `note`. Hai cạnh xref giữ `evidenceRecords`,
-`classificationProvenance`, `sourceRecord`, `datasetVersion` dưới Text/JSON_TEXT.
+`classificationProvenance`, `sourceRecord` dưới Text/JSON_TEXT.
 Các array provenance chứa đủ record đã duyệt, cờ corpus/polarity, scope,
 endpoint, fingerprint và locator. Gộp bằng canonical JSON: chỉ bỏ record giống
 hệt, sắp xếp theo biểu diễn UTF-8; không mất các evidence khác nhau cùng cạnh.
@@ -56,7 +67,7 @@ hệt, sắp xếp theo biểu diễn UTF-8; không mất các evidence khác nh
 ## Gate SAFE_EDGE bên ngoài
 
 Runtime nhận đường dẫn ledger qua cấu hình; không phụ thuộc đường dẫn Windows.
-Artifact: `xref_a3g2_final_ledger.jsonl`, vai trò classification LOCKED R2.
+Artifact: `xref_a3g2_final_ledger.jsonl`, chứa classification của các record xref.
 
 ```text
 xrefs SHA256: 6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188
@@ -66,7 +77,7 @@ SAFE_EDGE records: 8144 = 7709 affirmative + 435 exclusion
 join: EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON
 ```
 
-Fingerprint lịch sử dùng **đủ 13 trường record xref nguồn**, kể cả
+Fingerprint dùng **đủ 13 trường record xref nguồn**, kể cả
 `from_so_hieu`, không normalize/trim hoặc đổi missing/null/rỗng:
 
 ```python
@@ -93,10 +104,37 @@ application_edge_key = hashlib.sha256(canonical).hexdigest()
 
 Type fully qualified dùng `VietRoadTraffic.<EntityType>`, ID nguồn nguyên trạng.
 Evidence không nằm trong identity; citation và exclusion có predicate khác
-nên khóa khác. Gộp provenance xác định trước writer. Contract ghi
-`server_idempotency_verified=false`, `production_ingestion_enabled=false`.
+nên khóa khác. Giữ khóa ứng dụng cho tái lập, logging, truy vết, dedup cục bộ
+và tổng hợp evidence xác định; khóa này không điều khiển uniqueness server.
 
-## Xác nhận bắt buộc trước ingestion
+## Contract runtime và yêu cầu Builder
+
+Schema tương thích với runtime OpenSPG/KAG đã pin. `runtime_contract` trong
+contract máy đọc gắn yêu cầu runtime với SHA-256 của schema:
+
+```text
+0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b
+```
+
+OpenSPG cung cấp `id/name` qua `Thing`. Constraints schema là khai báo
+**DECLARATIVE_ONLY**; Builder kiểm tra trường bắt buộc, enum `unitType` và
+Integer trước khi ghi. Chỉ `type(value) is int` hợp lệ cho Integer; bool,
+string và giá trị không nguyên bị từ chối. None/missing được bỏ khỏi payload;
+chuỗi rỗng, 0 và false được giữ theo codec ở trên.
+
+Khi đọc, thuộc tính server ngoài intrinsic `id` cần JSON decode; JSON_TEXT
+cần thêm một lần decode semantic JSON. Builder encode JSON_TEXT xác định
+đúng một lần trước writer. Runtime hỗ trợ kích thước text của dataset hiện tại,
+bao gồm payload text lớn nhất trong dữ liệu nguồn.
+
+Identity cạnh OpenSPG là **(node nguồn, predicate vật lý, node đích)**
+(`FROM_PREDICATE_TO_TUPLE`). Ghi lặp hoặc đổi client edge ID không tạo cạnh trùng.
+Cập nhật thuộc tính cạnh là **LAST_WRITE_WINS**: gộp evidence/provenance xác định
+theo tuple trước khi ghi, rồi gửi đầy đủ thuộc tính cạnh cuối cùng.
+Ghi toàn bộ node thật trước cạnh; không dựa vào server tạo endpoint ngầm.
+Khóa cạnh ứng dụng là khóa cục bộ riêng, không thay thế tuple identity server.
+
+## Kiểm thử offline
 
 Parser offline chấp nhận schema bằng source/model thật của KAG đã pin,
 `with_server=False`. Test dùng boundary Configuration/SchemaClient trong bộ
@@ -108,8 +146,4 @@ python -B tests/schema/test_schema_contract.py
 python -B -m unittest discover -s tests/schema -p "test_*.py" -v
 ```
 
-Trước ingestion phải xác nhận trên server ba nhóm: sync schema/built-in Thing `id/name` và constraints;
-codec round-trip/coercion/omission/empty và giới hạn storage/index; edge
-upsert/identity/dedup và cập nhật nhiều evidence. Khóa xác định ở ứng dụng
-không chứng minh server idempotent. Graph chưa build; chưa chạy production
-ingestion hoặc benchmark; builder/retriever/solver chưa triển khai.
+Trạng thái triển khai các thành phần nằm tại [README](../README.md).
