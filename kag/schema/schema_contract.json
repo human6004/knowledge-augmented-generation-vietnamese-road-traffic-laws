@@ -1,8 +1,5 @@
 {
-  "schema_version": "0.1",
-  "dataset_version": "LOCKED R2",
   "namespace": "VietRoadTraffic",
-  "pinned_kag_commit": "fdab15b3929d2ee40dfcdd388f90233096a6afc9",
   "node_types": [
     "LegalDocument",
     "LegalUnit",
@@ -359,18 +356,6 @@
         "source_field": "Path + checksum file + số dòng",
         "source_requirement": "Có, derived",
         "notes": "Truy vết nguồn; không phải identity",
-        "intrinsic": false,
-        "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
         "intrinsic": false,
         "required": true
       }
@@ -763,18 +748,6 @@
         "notes": "Truy vết nguồn; không phải identity",
         "intrinsic": false,
         "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
-        "intrinsic": false,
-        "required": true
       }
     ],
     "TrafficSign": [
@@ -949,24 +922,12 @@
         "notes": "Truy vết nguồn; không phải identity",
         "intrinsic": false,
         "required": true
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "source_file": "README/corpus snapshot",
-        "source_field": "LOCKED R2",
-        "source_requirement": "Có, hằng manifest",
-        "notes": "Không giả vờ là trường JSONL",
-        "intrinsic": false,
-        "required": true
       }
     ]
   },
-  "node_property_count": 78,
-  "logical_property_count": 78,
-  "declared_project_property_count": 72,
+  "node_property_count": 75,
+  "logical_property_count": 75,
+  "declared_project_property_count": 69,
   "built_in_properties_inherited": [
     "id",
     "name"
@@ -1013,8 +974,7 @@
       "source_quality": "sourceQuality",
       "source_note": "sourceNote",
       "markdown_path": "markdownPath",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     },
     "LegalUnit": {
       "id": "id",
@@ -1048,8 +1008,7 @@
       "penalty_tuoc_gplx_thang_max": "penaltyTuocGplxThangMax",
       "penalty_tich_thu": "penaltyTichThu",
       "penalty_source_record": "penaltySourceRecord",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     },
     "TrafficSign": {
       "id": "id",
@@ -1065,8 +1024,7 @@
       "mo_ta": "moTa",
       "ngay_hieu_luc": "ngayHieuLuc",
       "ngay_het_hieu_luc": "ngayHetHieuLuc",
-      "source_record": "sourceRecord",
-      "dataset_version": "datasetVersion"
+      "source_record": "sourceRecord"
     }
   },
   "property_codec_contract": {
@@ -1150,13 +1108,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "hasChild": [
@@ -1166,13 +1117,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "hasSign": [
@@ -1180,13 +1124,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1212,13 +1149,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "excludesUnit": [
@@ -1240,13 +1170,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1272,13 +1195,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "amends": [
@@ -1300,13 +1216,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1332,13 +1241,6 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ],
     "implements": [
@@ -1360,13 +1262,6 @@
         "logical_name": "source_record",
         "schema_name": "sourceRecord",
         "contract_type": "JSON_TEXT",
-        "physical_type": "Text",
-        "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
         "physical_type": "Text",
         "required": false
       }
@@ -1392,18 +1287,11 @@
         "contract_type": "JSON_TEXT",
         "physical_type": "Text",
         "required": false
-      },
-      {
-        "logical_name": "dataset_version",
-        "schema_name": "datasetVersion",
-        "contract_type": "TEXT",
-        "physical_type": "Text",
-        "required": false
       }
     ]
   },
   "relation_provenance_contract": {
-    "structural": "sourceRecord retains source locator; datasetVersion identifies snapshot.",
+    "structural": "sourceRecord retains the relative source path, file SHA256 and one-based line locator.",
     "document": "evidence and note preserve source missing/empty distinction via sourceRecord; no SAFE_EDGE gate.",
     "unit_xref": {
       "evidenceRecords": "JSON array of every approved complete source record, including scope, is_exclusion, in_corpus, endpoints, evidence, fingerprint and source locator.",
@@ -1422,7 +1310,6 @@
   "xref_contract": {
     "xref_sha256": "6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188",
     "required_safe_edge_ledger_sha256": "1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4",
-    "ledger_artifact_role": "approved_locked_r2_xref_classification_ledger",
     "ledger_artifact_name": "xref_a3g2_final_ledger.jsonl",
     "runtime_path_source": "Runtime configuration; no absolute path dependency.",
     "join_contract": "EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON",
@@ -1484,7 +1371,7 @@
       "DATASHEET.md"
     ],
     "external_references": "Keep outside production graph; no placeholder nodes.",
-    "on_invalid_identity_or_hierarchy": "Fail closed; do not infer repairs or modify LOCKED R2."
+    "on_invalid_identity_or_hierarchy": "Fail closed; do not infer repairs or modify source records."
   },
   "edge_application_key_contract": {
     "tuple_fields": [
@@ -1508,7 +1395,7 @@
     "controls_server_uniqueness": false
   },
   "runtime_contract": {
-    "schema_sha256": "5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc",
+    "schema_sha256": "0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b",
     "constraint_enforcement": "DECLARATIVE_ONLY",
     "builder_schema_validation_required": true,
     "builder_unit_type_validation_required": true,

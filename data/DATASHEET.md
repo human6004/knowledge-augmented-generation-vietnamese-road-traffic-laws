@@ -51,7 +51,7 @@ Văn bản được lưu để tham khảo nhưng không thuộc corpus chính.
 
 ## Current Dataset
 
-Đếm từ production JSONL ngày 02/10/2026, sau khi A3 và A4 đã khóa. `metadata/corpus.json`, `metadata/sources.csv` và `metadata/checksums.json` đã được làm mới theo cùng số liệu.
+Đếm từ production JSONL ngày 02/10/2026. `metadata/corpus.json`, `metadata/sources.csv` và `metadata/checksums.json` mô tả cùng tập dữ liệu production.
 
 - 92 văn bản metadata
 - 91 văn bản production Markdown

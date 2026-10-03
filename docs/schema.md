@@ -1,14 +1,14 @@
-# Schema kỹ thuật v0.1
+# Schema kỹ thuật
 
-Namespace: **VietRoadTraffic**. Dataset: **LOCKED R2**. KAG pin:
+Namespace: **VietRoadTraffic**. Nguồn dữ liệu: `data/`. KAG pin:
 `fdab15b3929d2ee40dfcdd388f90233096a6afc9`.
 
 [VietRoadTraffic.schema](../kag/schema/VietRoadTraffic.schema) khai báo đúng
-`LegalDocument`, `LegalUnit`, `TrafficSign`, 72 thuộc tính node của dự án
-(28/31/13), 10 predicate và 34 khai báo thuộc tính cạnh.
+`LegalDocument`, `LegalUnit`, `TrafficSign`, 69 thuộc tính node của dự án
+(27/30/12), 10 predicate và 24 khai báo thuộc tính cạnh.
 Ba EntityType kế thừa `id/name` từ OpenSPG `Thing`, không khai báo lại.
-`id/name` vẫn là thuộc tính logical của dự án: `logical_property_count = 78`
-(30/33/15), `declared_project_property_count = 72`; sáu thuộc tính logical
+`id/name` vẫn là thuộc tính logical của dự án: `logical_property_count = 75`
+(29/32/14), `declared_project_property_count = 69`; sáu thuộc tính logical
 `id/name` được kế thừa. `description` cũng là built-in server của `Thing`,
 nhưng không thuộc contract miền của dự án hoặc mapping logical/physical.
 [schema_contract.json](../kag/schema/schema_contract.json) là contract máy đọc
@@ -57,9 +57,9 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
   Server constraints chỉ **DECLARATIVE_ONLY**; Builder phải kiểm tra required
   fields và `unitType` thuộc `Dieu`, `Khoan`, `Diem`, `QCVN`, `QCVN_Muc`.
 
-Cạnh cấu trúc giữ `sourceRecord`, `datasetVersion`; cạnh văn bản thêm
+Cạnh cấu trúc giữ `sourceRecord`; cạnh văn bản thêm
 `evidence`, `note`. Hai cạnh xref giữ `evidenceRecords`,
-`classificationProvenance`, `sourceRecord`, `datasetVersion` dưới Text/JSON_TEXT.
+`classificationProvenance`, `sourceRecord` dưới Text/JSON_TEXT.
 Các array provenance chứa đủ record đã duyệt, cờ corpus/polarity, scope,
 endpoint, fingerprint và locator. Gộp bằng canonical JSON: chỉ bỏ record giống
 hệt, sắp xếp theo biểu diễn UTF-8; không mất các evidence khác nhau cùng cạnh.
@@ -67,7 +67,7 @@ hệt, sắp xếp theo biểu diễn UTF-8; không mất các evidence khác nh
 ## Gate SAFE_EDGE bên ngoài
 
 Runtime nhận đường dẫn ledger qua cấu hình; không phụ thuộc đường dẫn Windows.
-Artifact: `xref_a3g2_final_ledger.jsonl`, vai trò classification LOCKED R2.
+Artifact: `xref_a3g2_final_ledger.jsonl`, chứa classification của các record xref.
 
 ```text
 xrefs SHA256: 6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188
@@ -113,7 +113,7 @@ Schema tương thích với runtime OpenSPG/KAG đã pin. `runtime_contract` tro
 contract máy đọc gắn yêu cầu runtime với SHA-256 của schema:
 
 ```text
-5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc
+0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b
 ```
 
 OpenSPG cung cấp `id/name` qua `Thing`. Constraints schema là khai báo
@@ -125,7 +125,7 @@ chuỗi rỗng, 0 và false được giữ theo codec ở trên.
 Khi đọc, thuộc tính server ngoài intrinsic `id` cần JSON decode; JSON_TEXT
 cần thêm một lần decode semantic JSON. Builder encode JSON_TEXT xác định
 đúng một lần trước writer. Runtime hỗ trợ kích thước text của dataset hiện tại,
-bao gồm payload text lớn nhất trong snapshot.
+bao gồm payload text lớn nhất trong dữ liệu nguồn.
 
 Identity cạnh OpenSPG là **(node nguồn, predicate vật lý, node đích)**
 (`FROM_PREDICATE_TO_TUPLE`). Ghi lặp hoặc đổi client edge ID không tạo cạnh trùng.

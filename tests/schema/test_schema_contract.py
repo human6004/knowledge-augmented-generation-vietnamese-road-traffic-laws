@@ -1,4 +1,4 @@
-"""Official v0.1 contract checks; pinned parser/models, no network or server.
+"""Official schema contract checks; pinned parser/models, no network or server.
 
 Run from any cwd: python -B tests/schema/test_schema_contract.py
 Requires six (already an upstream KAG SDK dependency).
@@ -20,9 +20,9 @@ UPSTREAM = ROOT / 'vendor/KAG'
 SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
-SCHEMA_SHA256 = '5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc'
-NODE_COUNTS = {'LegalDocument': 30, 'LegalUnit': 33, 'TrafficSign': 15}
-DECLARED_COUNTS = {'LegalDocument': 28, 'LegalUnit': 31, 'TrafficSign': 13}
+SCHEMA_SHA256 = '0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b'
+NODE_COUNTS = {'LegalDocument': 29, 'LegalUnit': 32, 'TrafficSign': 14}
+DECLARED_COUNTS = {'LegalDocument': 27, 'LegalUnit': 30, 'TrafficSign': 12}
 PREDICATES = {
     'HAS_UNIT': 'hasUnit', 'HAS_CHILD': 'hasChild', 'HAS_SIGN': 'hasSign',
     'CITES_UNIT': 'citesUnit', 'EXCLUDES_UNIT': 'excludesUnit', 'CITES': 'cites',
@@ -113,11 +113,8 @@ class SchemaContractTest(unittest.TestCase):
         commit = subprocess.check_output(
             ['git', '-C', str(UPSTREAM), 'rev-parse', 'HEAD'], text=True).strip()
         self.assertEqual(commit, PIN)
-        self.assertEqual(self.contract['pinned_kag_commit'], PIN)
         self.assertEqual(self.parsed.namespace, 'VietRoadTraffic')
         self.assertEqual(self.contract['namespace'], 'VietRoadTraffic')
-        self.assertEqual(self.contract['schema_version'], '0.1')
-        self.assertEqual(self.contract['dataset_version'], 'LOCKED R2')
         self.assertEqual(set(self.contract['node_types']), set(NODE_COUNTS))
         self.assertEqual(set(self.parsed.types), {'VietRoadTraffic.' + n for n in NODE_COUNTS})
         for node in self.parsed.types.values():
@@ -135,7 +132,7 @@ class SchemaContractTest(unittest.TestCase):
                     for t, properties in rows.items()}
         digest = hashlib.sha256(json.dumps(approved, ensure_ascii=False, sort_keys=True,
                                 separators=(',', ':')).encode('utf-8')).hexdigest()
-        self.assertEqual(digest, 'f283f3258468eb3fcffc120b329bd5a7ec59d0b82b178f3150bc3dc04005b9dc')
+        self.assertEqual(digest, '7c0e8d0bfcd27a7cc24f8d74f5170b5a5fe1a83a138c62ff4a833ec505970ca7')
         for name, count in NODE_COUNTS.items():
             properties = self.parsed.types['VietRoadTraffic.' + name].properties
             declared = [p for p in rows[name] if p['logical_name'] not in ('id', 'name')]
@@ -176,17 +173,17 @@ class SchemaContractTest(unittest.TestCase):
         self.assertEqual(inherited_count, 6)
 
     def test_logical_and_declared_property_count_metadata(self):
-        self.assertEqual(self.contract['node_property_count'], 78)
-        self.assertEqual(self.contract.get('logical_property_count'), 78)
-        self.assertEqual(self.contract.get('declared_project_property_count'), 72)
+        self.assertEqual(self.contract['node_property_count'], 75)
+        self.assertEqual(self.contract.get('logical_property_count'), 75)
+        self.assertEqual(self.contract.get('declared_project_property_count'), 69)
         self.assertEqual(self.contract.get('built_in_properties_inherited'), ['id', 'name'])
-        self.assertEqual(sum(len(rows) for rows in self.contract['node_properties'].values()), 78)
-        self.assertEqual(sum(len(node.properties) for node in self.parsed.types.values()), 72)
+        self.assertEqual(sum(len(rows) for rows in self.contract['node_properties'].values()), 75)
+        self.assertEqual(sum(len(node.properties) for node in self.parsed.types.values()), 69)
 
     def test_domain_contract_invariants(self):
         # Golden digest covers the complete domain model, including Thing inheritance.
         domain_fields = (
-            'schema_version', 'dataset_version', 'namespace', 'pinned_kag_commit',
+            'namespace',
             'node_types', 'node_properties', 'node_property_count', 'logical_property_count',
             'declared_project_property_count', 'built_in_properties_inherited',
             'logical_to_physical_predicates', 'logical_to_physical_properties',
@@ -205,7 +202,7 @@ class SchemaContractTest(unittest.TestCase):
             k: approved['edge_application_key_contract'][k] for k in key_fields}
         digest = hashlib.sha256(json.dumps(approved, ensure_ascii=False, sort_keys=True,
                                 separators=(',', ':')).encode('utf-8')).hexdigest()
-        self.assertEqual(digest, '74f821c874c215d6ac1666ea85b83de75f69ad030694275130bf739d2c0b32b6')
+        self.assertEqual(digest, '2f7e33b0bd5c2fa129d21ab4c58119e5078bc07363945689882fbb917507a478')
 
     def test_exact_predicates_endpoints_and_relation_provenance(self):
         self.assertEqual(self.contract['logical_to_physical_predicates'], PREDICATES)
@@ -220,20 +217,29 @@ class SchemaContractTest(unittest.TestCase):
                 for p in fields:
                     self.assertEqual(relation.sub_properties[p['schema_name']].object_type_name, 'Text')
         self.assertEqual(set(actual), set(PREDICATES.values()))
+        self.assertEqual(sum(len(relation.sub_properties)
+                             for node in self.parsed.types.values()
+                             for relation in node.relations.values()), 24)
         for name in PREDICATES.values():
             owner = 'LegalDocument' if name in ('hasUnit', 'cites', 'amends', 'repeals', 'implements', 'consolidates') else 'LegalUnit'
             target = 'TrafficSign' if name == 'hasSign' else ('LegalDocument' if owner == 'LegalDocument' and name != 'hasUnit' else 'LegalUnit')
             self.assertEqual(actual[name], ('VietRoadTraffic.' + owner, 'VietRoadTraffic.' + target))
         for name in ('citesUnit', 'excludesUnit'):
             self.assertEqual({p['schema_name'] for p in self.contract['relation_properties'][name]},
-                             {'evidenceRecords', 'classificationProvenance', 'sourceRecord', 'datasetVersion'})
+                             {'evidenceRecords', 'classificationProvenance', 'sourceRecord'})
+        for name in ('hasUnit', 'hasChild', 'hasSign'):
+            self.assertEqual({p['schema_name'] for p in self.contract['relation_properties'][name]},
+                             {'sourceRecord'})
+        for name in ('cites', 'amends', 'repeals', 'implements', 'consolidates'):
+            self.assertEqual({p['schema_name'] for p in self.contract['relation_properties'][name]},
+                             {'evidence', 'note', 'sourceRecord'})
 
     def test_five_unit_type_values(self):
         self.assertEqual(self.contract['unit_type_values'], UNIT_TYPES)
         prop = self.parsed.types['VietRoadTraffic.LegalUnit'].properties['unitType']
         self.assertEqual(prop.constraint[self.base.ConstraintTypeEnum.Enum], UNIT_TYPES)
 
-    def test_locked_r2_xref_gate(self):
+    def test_xref_integrity_gate(self):
         xref = self.contract['xref_contract']
         expected = {
             'xref_sha256': '6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188',

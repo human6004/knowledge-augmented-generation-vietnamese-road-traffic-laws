@@ -7,13 +7,13 @@ Việt Nam bằng Knowledge-Augmented Generation (KAG).
 
 Dataset chuẩn nằm tại `data/` và phải giữ nguyên. Xem [tài liệu dataset](data/README.md),
 [datasheet](data/DATASHEET.md) và [giấy phép dữ liệu](data/LICENSE.md).
-Snapshot **LOCKED R2** cung cấp văn bản, đơn vị nội dung, thuộc tính xử phạt,
+Dataset cung cấp văn bản, đơn vị nội dung, thuộc tính xử phạt,
 biển báo và quan hệ pháp lý. Phạm vi graph gồm 91 văn bản, 55.597 đơn vị nội dung
 và 887 bản ghi biển báo; dữ liệu eval không thuộc retrieval corpus.
 
-Schema **v0.1**, namespace `VietRoadTraffic`, có ba EntityType `LegalDocument`,
-`LegalUnit`, `TrafficSign` và mười predicate. 78 thuộc tính node logical gồm
-72 thuộc tính khai báo trong schema và sáu thuộc tính `id/name` kế thừa OpenSPG
+Schema namespace `VietRoadTraffic` có ba EntityType `LegalDocument`,
+`LegalUnit`, `TrafficSign` và mười predicate. 75 thuộc tính node logical gồm
+69 thuộc tính khai báo trong schema và sáu thuộc tính `id/name` kế thừa OpenSPG
 `Thing`. Penalty là thuộc tính của `LegalUnit`; evidence nằm trong provenance
 cạnh. Xem [mô hình miền](docs/domain_model.md), [schema kỹ thuật](docs/schema.md),
 [VietRoadTraffic.schema](kag/schema/VietRoadTraffic.schema) và
@@ -21,7 +21,7 @@ cạnh. Xem [mô hình miền](docs/domain_model.md), [schema kỹ thuật](docs
 
 ## Cấu trúc
 
-- `data/`: snapshot LOCKED R2 và tài liệu dữ liệu.
+- `data/`: corpus pháp lý và tài liệu dữ liệu.
 - `kag/`: schema/contract và các package dành cho `builder`, `retriever`, `solver`, `config`.
 - `vendor/KAG/`: framework upstream; không đặt mã riêng của dự án tại đây.
 - `benchmark/`: thư mục dành cho dữ liệu, runner và kết quả đánh giá.
