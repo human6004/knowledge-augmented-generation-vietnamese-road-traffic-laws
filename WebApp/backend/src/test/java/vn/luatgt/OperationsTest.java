@@ -1,0 +1,62 @@
+package vn.luatgt;
+import vn.luatgt.model.*;
+import vn.luatgt.repository.*;
+import vn.luatgt.service.RateLimit;
+import vn.luatgt.integration.*;
+import com.fasterxml.jackson.databind.*;
+import java.util.*;
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.*;
+import org.springframework.http.MediaType;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@SpringBootTest @AutoConfigureMockMvc
+class OperationsTest {
+    @Autowired MockMvc mvc; @Autowired ObjectMapper json; @Autowired ContentRepository contents; @Autowired ChatRepository chats;
+    @Autowired ContentHistoryRepository history;
+    @MockitoBean RateLimit rate; @MockitoBean KagClient kag; @MockitoBean ObjectStorage storage;
+    String admin,user; UUID userId;
+    JsonNode body(MvcResult result) throws Exception { return json.readTree(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)); }
+    @BeforeEach void auth() throws Exception {
+        admin=body(mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"admin@test.vn\",\"password\":\"TEST-only-admin-password\"}")).andReturn()).path("accessToken").asText();
+        var result=body(mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("email",UUID.randomUUID()+"@test.vn","name","Test","password","TEST-user-password")))).andReturn());
+        user=result.path("accessToken").asText(); userId=UUID.fromString(result.path("user").path("id").asText());
+    }
+    Content doc() throws Exception {
+        var c=new Content(); c.kind="documents"; c.externalId="TEST-"+UUID.randomUUID(); c.published=true;
+        c.data=json.writeValueAsString(Map.of("externalId",c.externalId,"title","Văn bản kiểm tra","so_hieu","TEST","source","test-only","reviewed",true,"fileKey","test-pdf","fileMime","application/pdf","ngay_hieu_luc","2025-01-01")); return contents.save(c);
+    }
+    @Test void replacementInvalidatesOldLawAndPenaltiesAndRejectsCycles() throws Exception {
+        var old=doc(); var next=doc();
+        var penalty=body(mvc.perform(post("/api/admin/penalties").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("documentId",old.id,"published",true,"version",0,"data",Map.of("behavior","Hành vi thử","vehicle","Ô tô","minFine",100,"maxFine",200,"points",2,"unit_id","TEST::1","reviewed",true))))).andExpect(status().isOk()).andReturn());
+        var rules=body(mvc.perform(get("/api/penalties").header("Authorization","Bearer "+user)).andReturn()); assertTrue(rules.toString().contains(penalty.path("id").asText()));
+        var relation=Map.of("predecessor",old.id,"successor",next.id,"type","REPLACES","effectiveDate","2025-01-01","note","Thay thế thử");
+        mvc.perform(post("/api/admin/law-relations").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(relation))).andExpect(status().isOk());
+        rules=body(mvc.perform(get("/api/penalties").header("Authorization","Bearer "+user)).andReturn()); assertFalse(rules.toString().contains(penalty.path("id").asText()));
+        var docs=body(mvc.perform(get("/api/documents").header("Authorization","Bearer "+user)).andReturn()); assertFalse(docs.toString().contains(old.id.toString())); assertTrue(docs.toString().contains(next.id.toString()));
+        mvc.perform(post("/api/admin/law-relations").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("predecessor",next.id,"successor",old.id,"type","AMENDS","effectiveDate","2025-01-01","note","Vòng lặp")))).andExpect(status().isBadRequest());
+    }
+    @Test void feedbackIsOwnedAndResolutionsAreReported() throws Exception {
+        var c=new ChatMessage(); c.ownerId=userId; c.question="Câu hỏi thử"; c.state="UNAVAILABLE"; c=chats.save(c);
+        mvc.perform(post("/api/chat/"+c.id+"/feedback").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"feedback\":\"NO_BASIS\",\"note\":\"Thiếu căn cứ\"}")).andExpect(status().isOk());
+        mvc.perform(post("/api/chat/"+c.id+"/feedback").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"feedback\":\"WRONG\"}")).andExpect(status().isNotFound());
+        var pending=body(mvc.perform(get("/api/admin/chatlogs?pending=true").header("Authorization","Bearer "+admin)).andReturn()); assertTrue(pending.toString().contains(c.id.toString()));
+        mvc.perform(post("/api/admin/chatlogs/"+c.id+"/resolve").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"Chờ bổ sung KAG\"}")).andExpect(status().isOk());
+        pending=body(mvc.perform(get("/api/admin/chatlogs?pending=true").header("Authorization","Bearer "+admin)).andReturn()); assertFalse(pending.toString().contains(c.id.toString()));
+        mvc.perform(get("/api/admin/reports").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.pendingChats").isNumber());
+    }
+    @Test void batchReviewCannotPublishMissingImageAndHistoryKeepsPreviousMetadata() throws Exception {
+        var q=new Content(); q.kind="questions"; q.externalId="TEST-"+UUID.randomUUID(); q.data=json.writeValueAsString(Map.of("externalId",q.externalId,"text","Câu hỏi thử","chapter",1,"options",List.of("A","B"),"correctAnswer",0,"critical",false,"source","test-only","imageRequired",true)); q=contents.save(q);
+        mvc.perform(post("/api/admin/questions/publication-batch").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("rows",List.of(Map.of("id",q.id,"version",q.version)),"reviewed",true,"published",true)))).andExpect(status().isBadRequest());
+        assertFalse(contents.findById(q.id).orElseThrow().published);
+        var updated=(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(q.data); updated.put("text","Câu đã sửa");
+        mvc.perform(put("/api/admin/content/"+q.id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("version",q.version,"data",updated)))).andExpect(status().isOk());
+        assertTrue(history.findByContentIdOrderByChangedAtDesc(q.id).getFirst().data.contains("Câu hỏi thử"));
+    }
+}
