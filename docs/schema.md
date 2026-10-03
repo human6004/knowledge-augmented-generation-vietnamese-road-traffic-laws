@@ -4,8 +4,13 @@ Namespace: **VietRoadTraffic**. Dataset: **LOCKED R2**. KAG pin:
 `fdab15b3929d2ee40dfcdd388f90233096a6afc9`.
 
 [VietRoadTraffic.schema](../kag/schema/VietRoadTraffic.schema) khai báo đúng
-`LegalDocument`, `LegalUnit`, `TrafficSign`, 78 thuộc tính node gồm `id/name`
-(30/33/15), 10 predicate và 34 khai báo thuộc tính cạnh.
+`LegalDocument`, `LegalUnit`, `TrafficSign`, 72 thuộc tính node của dự án
+(28/31/13), 10 predicate và 34 khai báo thuộc tính cạnh.
+Ba EntityType kế thừa `id/name` từ OpenSPG `Thing`, không khai báo lại.
+`id/name` vẫn là thuộc tính logical của dự án: `logical_property_count = 78`
+(30/33/15), `declared_project_property_count = 72`; sáu thuộc tính logical
+`id/name` được kế thừa. `description` cũng là built-in server của `Thing`,
+nhưng không thuộc contract miền của dự án hoặc mapping logical/physical.
 [schema_contract.json](../kag/schema/schema_contract.json) là contract máy đọc
 cho toàn bộ property, codec, quan hệ, identity và inclusion policy.
 Ngữ nghĩa miền: [domain_model.md](domain_model.md).
@@ -44,6 +49,8 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
   Encode JSON_TEXT trước writer đúng một lần; codec implementation thuộc builder.
 - `NotNull` chỉ cho property thực sự bắt buộc; optional và toàn bộ penalty
   sparse không có NotNull. `unitType` có Enum đủ năm giá trị miền.
+  `required=true` của logical `id/name` là yêu cầu contract; không khai báo
+  `NotNull` riêng cho hai thuộc tính kế thừa trong schema EntityType.
   Parser ghi nhận constraint; chưa xác minh server enforcement.
 
 Cạnh cấu trúc giữ `sourceRecord`, `datasetVersion`; cạnh văn bản thêm

@@ -21,6 +21,7 @@ SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
 NODE_COUNTS = {'LegalDocument': 30, 'LegalUnit': 33, 'TrafficSign': 15}
+DECLARED_COUNTS = {'LegalDocument': 28, 'LegalUnit': 31, 'TrafficSign': 13}
 PREDICATES = {
     'HAS_UNIT': 'hasUnit', 'HAS_CHILD': 'hasChild', 'HAS_SIGN': 'hasSign',
     'CITES_UNIT': 'citesUnit', 'EXCLUDES_UNIT': 'excludesUnit', 'CITES': 'cites',
@@ -136,11 +137,13 @@ class SchemaContractTest(unittest.TestCase):
         self.assertEqual(digest, 'f283f3258468eb3fcffc120b329bd5a7ec59d0b82b178f3150bc3dc04005b9dc')
         for name, count in NODE_COUNTS.items():
             properties = self.parsed.types['VietRoadTraffic.' + name].properties
+            declared = [p for p in rows[name] if p['logical_name'] not in ('id', 'name')]
             self.assertEqual(len(rows[name]), count)
-            self.assertEqual(set(properties), {p['schema_name'] for p in rows[name]})
+            self.assertEqual(len(properties), DECLARED_COUNTS[name])
+            self.assertEqual(set(properties), {p['schema_name'] for p in declared})
             self.assertEqual(self.contract['logical_to_physical_properties'][name],
                              {p['logical_name']: p['schema_name'] for p in rows[name]})
-            for p in rows[name]:
+            for p in declared:
                 prop = properties[p['schema_name']]
                 self.assertNotIn('_', prop.name)
                 self.assertEqual(prop.object_type_name, p['physical_type'])
@@ -149,6 +152,50 @@ class SchemaContractTest(unittest.TestCase):
                                  p['required'])
                 if p['contract_type'].startswith('OPTIONAL_') or p['logical_name'].startswith('penalty_'):
                     self.assertFalse(p['required'])
+
+    def test_identity_properties_inherited_from_thing_without_redeclaration(self):
+        inherited_count = 0
+        for name in NODE_COUNTS:
+            properties = self.parsed.types['VietRoadTraffic.' + name].properties
+            self.assertTrue({'id', 'name', 'description'}.isdisjoint(properties))
+            rows = self.contract['node_properties'][name]
+            inherited = [p for p in rows if p['logical_name'] in ('id', 'name')]
+            self.assertEqual({p['logical_name'] for p in inherited}, {'id', 'name'})
+            self.assertEqual(len(inherited), 2)
+            for p in inherited:
+                self.assertEqual(p['schema_name'], p['logical_name'])
+                self.assertEqual(p['physical_type'], 'Text')
+                self.assertIs(p.get('intrinsic'), True)
+                self.assertEqual(p.get('inherited_from'), 'Thing')
+                self.assertIs(p.get('declared_in_entity_schema'), False)
+                self.assertIs(p['required'], True)  # Logical requirement, not schema NotNull.
+            self.assertNotIn('description', self.contract['logical_to_physical_properties'][name])
+            self.assertEqual({p['logical_name'] for p in rows if p['intrinsic']}, {'id', 'name'})
+            inherited_count += len(inherited)
+        self.assertEqual(inherited_count, 6)
+
+    def test_logical_and_declared_property_count_metadata(self):
+        self.assertEqual(self.contract['node_property_count'], 78)
+        self.assertEqual(self.contract.get('logical_property_count'), 78)
+        self.assertEqual(self.contract.get('declared_project_property_count'), 72)
+        self.assertEqual(self.contract.get('built_in_properties_inherited'), ['id', 'name'])
+        self.assertEqual(sum(len(rows) for rows in self.contract['node_properties'].values()), 78)
+        self.assertEqual(sum(len(node.properties) for node in self.parsed.types.values()), 72)
+
+    def test_approved_logical_contract_unchanged(self):
+        # Baseline contract digest; allow only inheritance metadata additions.
+        approved = json.loads(json.dumps(self.contract))
+        for key in ('logical_property_count', 'declared_project_property_count',
+                    'built_in_properties_inherited'):
+            approved.pop(key, None)
+        for rows in approved['node_properties'].values():
+            for p in rows:
+                if p['logical_name'] in ('id', 'name'):
+                    p.pop('inherited_from', None)
+                    p.pop('declared_in_entity_schema', None)
+        digest = hashlib.sha256(json.dumps(approved, ensure_ascii=False, sort_keys=True,
+                                separators=(',', ':')).encode('utf-8')).hexdigest()
+        self.assertEqual(digest, '3f73d76d348565594d6005c49d104844bcb67cf4fe5842ee09426f8c9a0bfe9b')
 
     def test_exact_predicates_endpoints_and_relation_provenance(self):
         self.assertEqual(self.contract['logical_to_physical_predicates'], PREDICATES)

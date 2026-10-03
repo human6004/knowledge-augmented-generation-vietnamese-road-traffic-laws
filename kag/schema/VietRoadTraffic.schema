@@ -2,10 +2,6 @@ namespace VietRoadTraffic
 
 LegalDocument(LegalDocument): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     soHieu(soHieu): Text
       constraint: NotNull
     title(title): Text
@@ -84,10 +80,6 @@ LegalDocument(LegalDocument): EntityType
 
 LegalUnit(LegalUnit): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     docId(docId): Text
       constraint: NotNull
     soHieu(soHieu): Text
@@ -150,10 +142,6 @@ LegalUnit(LegalUnit): EntityType
 
 TrafficSign(TrafficSign): EntityType
   properties:
-    id(id): Text
-      constraint: NotNull
-    name(name): Text
-      constraint: NotNull
     docId(docId): Text
       constraint: NotNull
     unitId(unitId): Text

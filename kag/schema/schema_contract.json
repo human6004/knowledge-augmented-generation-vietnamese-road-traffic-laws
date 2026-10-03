@@ -20,6 +20,8 @@
         "source_requirement": "Có",
         "notes": "name là nhãn kỹ thuật",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -32,6 +34,8 @@
         "source_requirement": "Có",
         "notes": "name là nhãn kỹ thuật",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -382,6 +386,8 @@
         "source_requirement": "Có",
         "notes": "Identity exact",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -394,6 +400,8 @@
         "source_requirement": "Có",
         "notes": "Identity exact",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -780,6 +788,8 @@
         "source_requirement": "Có",
         "notes": "name không phải ten được suy diễn",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -792,6 +802,8 @@
         "source_requirement": "Có",
         "notes": "name không phải ten được suy diễn",
         "intrinsic": true,
+        "inherited_from": "Thing",
+        "declared_in_entity_schema": false,
         "required": true
       },
       {
@@ -953,6 +965,12 @@
     ]
   },
   "node_property_count": 78,
+  "logical_property_count": 78,
+  "declared_project_property_count": 72,
+  "built_in_properties_inherited": [
+    "id",
+    "name"
+  ],
   "logical_to_physical_predicates": {
     "HAS_UNIT": "hasUnit",
     "HAS_CHILD": "hasChild",
