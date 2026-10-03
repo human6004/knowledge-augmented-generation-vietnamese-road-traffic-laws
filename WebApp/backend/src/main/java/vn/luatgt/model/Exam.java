@@ -11,8 +11,8 @@ public class Exam {
     @Column(nullable=false) public Instant startedAt;
     @Column(nullable=false) public Instant expiresAt;
     public Instant submittedAt;
-    @Column(nullable=false, columnDefinition="text") public String snapshot;
-    @Column(nullable=false, columnDefinition="text") public String answers = "{}";
+    @Column(nullable=false, columnDefinition="longtext") public String snapshot;
+    @Column(nullable=false, columnDefinition="longtext") public String answers = "{}";
     public Integer score;
     public Boolean criticalFailed;
     public Boolean passed;

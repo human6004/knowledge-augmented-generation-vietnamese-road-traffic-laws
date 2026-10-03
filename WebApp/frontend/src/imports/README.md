@@ -21,7 +21,7 @@
 ```
 React (FE) --REST/SSE--> Spring Boot (BE) --HTTP--> KAG Service (Python)
                            |   |                        |
-                     PostgreSQL Redis            Graph DB + Vector/Search
+                     MySQL Redis            Graph DB + Vector/Search
 ```
 
 | Thành phần | Công nghệ |
@@ -29,7 +29,7 @@ React (FE) --REST/SSE--> Spring Boot (BE) --HTTP--> KAG Service (Python)
 | Frontend | React, TypeScript, Vite, React Router, TanStack Query, Tailwind |
 | Backend | Spring Boot (Web, Security + JWT, Data JPA, Validation), Resilience4j |
 | Tri thức / chatbot | KAG (OpenSPG) bọc thành dịch vụ HTTP, LLM + embedding |
-| Dữ liệu | PostgreSQL, Redis, lưu trữ đối tượng cho ảnh/tài liệu |
+| Dữ liệu | MySQL, Redis, lưu trữ đối tượng cho ảnh/tài liệu |
 
 Spring Boot đóng vai gateway: xác thực, giới hạn tốc độ, lưu lịch sử chat, proxy streaming (SSE) sang dịch vụ KAG.
 
@@ -52,7 +52,7 @@ Bản thiết kế giao diện nằm trong canvas thiết kế đi kèm, gồm 4
 
 ```bash
 # 1. Hạ tầng
-docker compose up -d postgres redis
+docker compose up -d mysql redis
 
 # 2. Dịch vụ KAG
 cd kag-service && pip install -r requirements.txt && uvicorn app.main:app --port 8000

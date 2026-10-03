@@ -10,7 +10,7 @@ public class InfrastructureService {
     public InfrastructureService(DataSource database,StringRedisTemplate redis,ObjectStorage storage) { this.database=database; this.redis=redis; this.storage=storage; }
     public Map<String,String> status() {
         var result=new LinkedHashMap<String,String>();
-        try(var connection=database.getConnection()) { result.put("PostgreSQL",connection.isValid(2)?"UP":"DOWN"); } catch(Exception e) { result.put("PostgreSQL","DOWN"); }
+        try(var connection=database.getConnection()) { result.put("MySQL",connection.isValid(2)?"UP":"DOWN"); } catch(Exception e) { result.put("MySQL","DOWN"); }
         try(var connection=Objects.requireNonNull(redis.getConnectionFactory()).getConnection()) { result.put("Redis","PONG".equals(connection.ping())?"UP":"DOWN"); } catch(Exception e) { result.put("Redis","DOWN"); }
         result.put("MinIO",storage.available()?"UP":"DOWN"); return result;
     }

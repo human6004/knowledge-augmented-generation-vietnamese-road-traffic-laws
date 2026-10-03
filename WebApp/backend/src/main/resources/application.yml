@@ -1,12 +1,16 @@
 spring:
   jackson.deserialization.fail-on-unknown-properties: true
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/luatgt}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/luatgt?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
     username: ${DB_USER:luatgt}
     password: ${DB_PASSWORD}
   jpa:
     open-in-view: false
     hibernate.ddl-auto: validate
+    properties:
+      hibernate.type.preferred_uuid_jdbc_type: BINARY
+      hibernate.type.preferred_instant_jdbc_type: TIMESTAMP
+      hibernate.jdbc.time_zone: UTC
   data.redis:
     url: ${REDIS_URL:redis://localhost:6379}
     repositories.enabled: false

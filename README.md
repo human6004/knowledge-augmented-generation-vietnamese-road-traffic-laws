@@ -14,7 +14,9 @@ Dataset chuẩn nằm tại `data/` và phải giữ nguyên. Xem [tài liệu d
 - `vendor/KAG/`: framework upstream; không đặt mã riêng của dự án tại đây.
 - `benchmark/`: bộ dữ liệu, bộ chạy và kết quả đánh giá trong tương lai.
 - `tests/`: kiểm thử theo từng thành phần dự án.
-- `scripts/`, `docker/`, `docs/`: vận hành, môi trường và tài liệu trong tương lai.
+- `WebApp/`: frontend và backend LuậtGT.
+- `docker-compose.yml`: stack WebApp, project `webapp`; `docker-compose.kag.yml`: stack KAG/OpenSPG, project `kag`. Hai stack chạy/build/dừng độc lập; xem [hướng dẫn Docker](docker/README.md).
+- `scripts/`, `docs/`: vận hành và tài liệu nghiên cứu.
 
 Luồng dự kiến, chưa vận hành:
 

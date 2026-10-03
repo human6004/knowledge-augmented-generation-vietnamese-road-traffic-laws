@@ -1,11 +1,15 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:luatgt;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
-    username: sa
-    password: ""
+    url: ${TEST_DB_URL:jdbc:h2:mem:luatgt;MODE=MySQL;DB_CLOSE_DELAY=-1}
+    username: ${TEST_DB_USER:sa}
+    password: ${TEST_DB_PASSWORD:}
   jpa:
     open-in-view: false
     hibernate.ddl-auto: validate
+    properties:
+      hibernate.type.preferred_uuid_jdbc_type: BINARY
+      hibernate.type.preferred_instant_jdbc_type: TIMESTAMP
+      hibernate.jdbc.time_zone: UTC
   jackson.deserialization.fail-on-unknown-properties: true
 app:
   jwt-secret: TEST-ONLY-secret-at-least-32-bytes-long

@@ -23,11 +23,18 @@ import vn.luatgt.model.ContentHistory;
 public class ContentService {
     private final ContentRepository contents; private final ObjectMapper json;
     private final ContentHistoryRepository history; private final LawRelationRepository relations;
+    private final KagSchema schema;
+    private final vn.luatgt.repository.LegalUnitRepository units;
     public ObjectMapper mapper() { return json; }
-    public ContentService(ContentRepository contents,ObjectMapper json,ContentHistoryRepository history,LawRelationRepository relations) { this.contents=contents; this.json=json; this.history=history; this.relations=relations; }
+    public ContentService(ContentRepository contents,ObjectMapper json,ContentHistoryRepository history,LawRelationRepository relations,KagSchema schema,vn.luatgt.repository.LegalUnitRepository units) { this.contents=contents; this.json=json; this.history=history; this.relations=relations; this.schema=schema; this.units=units; }
     public void remember(Content c) { var h=new ContentHistory(); h.contentId=c.id; h.contentVersion=c.version; h.data=c.data; h.published=c.published; history.save(h); }
     public boolean isEffective(Content c) {
         if(!effective(read(c))) return false;
+        if(c.kind.equals("signs")) {
+            var n=read(c); var doc=contents.findByKindAndExternalId("documents",n.path("doc_id").asText());
+            var unit=units.findByUnitId(n.path("unit_id").asText());
+            return doc.isPresent()&&doc.get().published&&isEffective(doc.get())&&unit.isPresent()&&unit.get().published&&unit.get().documentId.equals(doc.get().id);
+        }
         return !c.kind.equals("documents")||relations.findAll().stream().noneMatch(r -> r.predecessor.equals(c.id)&&r.type.equals("REPLACES")&&!r.effectiveDate.isAfter(LocalDate.now())&&contents.findById(r.successor).map(next -> next.published&&effective(read(next))).orElse(false));
     }
     public static void kind(String kind) { if(!Set.of("questions","signs","documents").contains(kind)) throw ApiErrors.bad("Loại dữ liệu không hợp lệ"); }
@@ -41,14 +48,23 @@ public class ContentService {
         n.put(field,s); return s;
     }
     public static void alias(ObjectNode n,String target,String source) { if(!n.has(target)&&n.has(source)) n.set(target,n.get(source)); }
+    private static void sourceAlias(ObjectNode n,String target,String source) {
+        if(n.has(target)&&n.has(source)&&!n.get(target).equals(n.get(source))) throw ApiErrors.bad(target+" và "+source+" không khớp");
+        alias(n,target,source); alias(n,source,target);
+    }
+    private static void sourceText(ObjectNode n,String field,int max,boolean required) {
+        var value=n.get(field);
+        if(value==null||value.isNull()) { if(required) throw ApiErrors.bad(field+": thiếu dữ liệu nguồn"); return; }
+        if(!value.isTextual()||value.asText().length()>max||required&&value.asText().isBlank()) throw ApiErrors.bad(field+": trống hoặc quá dài");
+    }
     public static void date(ObjectNode n,String key,boolean required) {
-        if(!n.hasNonNull(key)||n.path(key).asText().isBlank()) { if(required) throw ApiErrors.bad(key+": thiếu ngày"); n.putNull(key); return; }
+        if(!n.hasNonNull(key)||n.path(key).asText().isBlank()) { if(required) throw ApiErrors.bad(key+": thiếu ngày"); if(n.has(key)&&n.path(key).asText().isBlank()) n.putNull(key); return; }
         try { LocalDate.parse(n.get(key).textValue()); } catch(Exception e) { throw ApiErrors.bad(key+": phải là YYYY-MM-DD"); }
     }
     public ObjectNode validate(String kind,JsonNode input,boolean publish) {
         kind(kind);
         if(!input.isObject()) throw ApiErrors.bad("Mỗi dòng cần là object JSON");
-        ObjectNode n=((ObjectNode)input).deepCopy();
+        ObjectNode n=schema.normalize(kind,(ObjectNode)input);
         if(write(n).length()>50_000) throw ApiErrors.bad("Dòng dữ liệu quá lớn");
         n.remove(List.of("published","version","id"));
         if(n.hasNonNull("reviewed")&&!n.get("reviewed").isBoolean()) throw ApiErrors.bad("reviewed: phải là boolean");
@@ -66,16 +82,23 @@ public class ContentService {
             if(publish && (!n.hasNonNull("correctAnswer")||!n.hasNonNull("critical")||!n.path("reviewed").asBoolean(false))) throw ApiErrors.bad("Cần kiểm duyệt đáp án, phân loại điểm liệt và reviewed=true");
             if(publish && n.path("imageRequired").asBoolean(false) && !n.hasNonNull("imageKey")) throw ApiErrors.bad("Câu hỏi còn thiếu ảnh");
         } else if(kind.equals("signs")) {
-            alias(n,"externalId","sign_id"); alias(n,"code","ma_bien"); alias(n,"name","ten"); alias(n,"group","nhom"); alias(n,"meaning","mo_ta");
+            alias(n,"externalId","sign_id"); sourceAlias(n,"code","ma_bien"); sourceAlias(n,"name","ten"); sourceAlias(n,"group","nhom"); sourceAlias(n,"meaning","mo_ta");
             if(!n.hasNonNull("externalId")) n.put("externalId",n.path("code").asText());
-            text(n,"externalId",250,true); text(n,"code",100,true); text(n,"name",500,true);
-            text(n,"group",200,true); text(n,"meaning",20000,publish);
-            text(n,"doc_id",250,publish); text(n,"unit_id",500,publish); text(n,"qcvn",200,publish); text(n,"so_hieu",200,publish);
+            KagSchema.exactId(n,"externalId",250); sourceText(n,"code",100,true); sourceText(n,"name",500,true);
+            sourceText(n,"group",200,true); sourceText(n,"meaning",20000,publish);
+            if(publish||n.hasNonNull("doc_id")) KagSchema.exactId(n,"doc_id",250);
+            if(publish||n.hasNonNull("unit_id")) KagSchema.exactId(n,"unit_id",500);
+            sourceText(n,"qcvn",200,publish); sourceText(n,"so_hieu",200,publish);
             date(n,"ngay_hieu_luc",publish); date(n,"ngay_het_hieu_luc",false);
             if(publish && (!n.path("reviewed").asBoolean(false)||!n.hasNonNull("imageKey"))) throw ApiErrors.bad("Biển báo cần ảnh và reviewed=true trước khi xuất bản");
+            if(publish) {
+                var doc=contents.findByKindAndExternalId("documents",n.path("doc_id").asText());
+                var unit=units.findByUnitId(n.path("unit_id").asText());
+                if(doc.isEmpty()||!doc.get().published||unit.isEmpty()||!unit.get().published||!unit.get().documentId.equals(doc.get().id)) throw ApiErrors.bad("Biển báo cần unit và văn bản nguồn tương ứng đã xuất bản");
+            }
         } else {
-            alias(n,"externalId","doc_id"); text(n,"externalId",250,true); text(n,"title",1000,true);
-            text(n,"so_hieu",200,publish); text(n,"source",2000,publish);
+            alias(n,"externalId","doc_id"); KagSchema.exactId(n,"externalId",250); sourceText(n,"title",1000,true);
+            sourceText(n,"so_hieu",200,publish); text(n,"source",2000,publish);
             date(n,"ngay_hieu_luc",publish); date(n,"ngay_het_hieu_luc",false);
             if(publish && (!n.path("reviewed").asBoolean(false)||!n.hasNonNull("fileKey"))) throw ApiErrors.bad("Văn bản cần tệp nguồn và reviewed=true");
         }
@@ -139,6 +162,7 @@ public class ContentService {
         var c=contents.findById(id).orElseThrow(ApiErrors::missing);
         if(c.version!=input.version()) throw new ResponseStatusException(HttpStatus.CONFLICT,"Bản ghi vừa thay đổi");
         var n=validate(c.kind,input.data(),false); var old=read(c);
+        if(!c.kind.equals("questions")&&!c.externalId.equals(n.path("externalId").asText())) throw ApiErrors.bad("Không đổi ID nguồn; tạo bản nháp mới nếu nguồn khác");
         remember(c);
         n.remove(List.of("imageKey","fileKey","imageMime","fileMime"));
         for(String field:List.of("imageKey","fileKey","imageMime","fileMime")) if(old.has(field)) n.set(field,old.get(field));

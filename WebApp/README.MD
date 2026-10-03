@@ -5,21 +5,23 @@
 ## Cấu trúc
 
 - `frontend/`: React, TypeScript, Vite, Tailwind; trang người dùng và quản trị.
-- `backend/`: một ứng dụng Spring Boot/Java 21; controller → service → repository, PostgreSQL, Redis và MinIO.
+- `backend/`: một ứng dụng Spring Boot/Java 21; controller → service → repository, MySQL, Redis và MinIO.
 - `docs/imports/`: 600 câu nháp, ZIP ảnh, nguồn điểm liệt và báo cáo đối chiếu.
 - `scripts/`: chuẩn hóa PDF, nhập dữ liệu và kiểm tra hạ tầng/API.
-- `docker-compose.yml`: frontend, backend, PostgreSQL, Redis, MinIO.
+- `../docker-compose.yml` và `../docker/`: stack WebApp gồm frontend, backend, MySQL, Redis, MinIO. OpenSPG nằm riêng trong `../docker-compose.kag.yml`.
 
 ## Chạy bằng Docker
 
-Bạn tự chạy các lệnh dưới đây từ thư mục gốc. Không cần khởi động KAG trong giai đoạn này.
+Bạn tự chạy các lệnh dưới đây từ thư mục gốc repository (thư mục cha của `WebApp`). Không cần khởi động KAG trong giai đoạn này.
+
+Nếu `.env` đã tồn tại từ cấu hình cũ, chạy `./docker/init-env.ps1 -Update` để bổ sung biến WebApp còn thiếu. WebApp dùng project `webapp` và `.env`; engine OpenSPG dùng Compose riêng, project `kag` và `.env.kag`, xem [hướng dẫn Docker](../docker/README.md#chạy-kag--openspg-độc-lập). API chat Python vẫn cần triển khai riêng. Các tính năng WebApp khác chạy được khi KAG tắt.
 
 ```powershell
 # Chỉ chạy nếu chưa có .env; script không ghi đè file hiện hữu.
-./scripts/init-env.ps1
+./docker/init-env.ps1
 docker compose up -d --build
-./scripts/verify-stack.ps1
-./scripts/import-question-bank.ps1
+./WebApp/scripts/verify-stack.ps1
+./WebApp/scripts/import-question-bank.ps1
 ```
 
 Giao diện: http://127.0.0.1:8081. API: http://127.0.0.1:8080/api. Đăng nhập ADMIN bằng `ADMIN_EMAIL`/`ADMIN_PASSWORD` trong `.env`; tài khoản người học tự đăng ký, chỉ nhận USER. Nếu đổi thông tin ADMIN sau lần tạo đầu tiên, backend không tự đặt lại tài khoản đã có.
@@ -27,12 +29,12 @@ Giao diện: http://127.0.0.1:8081. API: http://127.0.0.1:8080/api. Đăng nhậ
 Sau khi nhập, vào **Ngân hàng câu hỏi**, đối chiếu đáp án, câu điểm liệt và ảnh rồi duyệt xuất bản. Script nhập không xuất bản tự động và mặc định bỏ qua mã đã tồn tại. Sau khi ngân hàng đủ các chương đã được duyệt:
 
 ```powershell
-./scripts/verify-stack.ps1 -WithExam
+./WebApp/scripts/verify-stack.ps1 -WithExam
 ```
 
-Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của chúng; không sửa ngân hàng dữ liệu. Kiểm tra PostgreSQL/Redis/MinIO, phân quyền, thu hồi JWT; `-WithExam` kiểm tra đề B, sở hữu bài, ẩn đáp án, ảnh MinIO, chấm 30/30, nộp lại và lưu tiến độ. Chỉ chạy một lượt tại một thời điểm, tránh giới hạn đăng nhập.
+Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của chúng; không sửa ngân hàng dữ liệu. Kiểm tra MySQL/Redis/MinIO, phân quyền, thu hồi JWT; `-WithExam` kiểm tra đề B, sở hữu bài, ẩn đáp án, ảnh MinIO, chấm 30/30, nộp lại và lưu tiến độ. Chỉ chạy một lượt tại một thời điểm, tránh giới hạn đăng nhập.
 
-Đã có cấu hình để bạn chạy Docker; build image và kiểm thử xuyên suốt trên hạ tầng thật chưa được thực hiện trong phiên này theo yêu cầu của bạn. `mvn verify` dùng H2 và mock các dịch vụ ngoài.
+`mvn verify` mặc định dùng H2 chế độ MySQL và mock các dịch vụ ngoài. Build image và kiểm thử xuyên suốt trên Docker/MySQL thật cần Docker engine đang chạy; cách chạy bộ test trên database MySQL riêng có trong [backend/README.md](backend/README.md).
 
 ## Dữ liệu và nghiệp vụ
 
@@ -40,7 +42,7 @@ Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của
 - Biển báo: nhập JSON/CSV/XLSX hàng loạt, giữ metadata pháp lý, ghép ZIP PNG/JPEG theo mã biển. Chưa có bộ dữ liệu/ảnh biển báo đầy đủ do người dùng cung cấp; ảnh trong bộ câu hỏi không tự trở thành thư viện biển báo.
 - Văn bản: metadata, PDF nguồn, nháp/xuất bản, lịch sử sửa và quan hệ thay thế/sửa đổi có ngày hiệu lực; mức phạt có cấu trúc gắn với văn bản đã xuất bản/còn hiệu lực.
 - Ôn tập, tiến độ và thi thử chấm bằng đáp án server đã kiểm duyệt, bản chụp bất biến khi tạo bài và thời gian server. Hạng B ghim cấu hình bộ mẫu `B-2025-06`.
-- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Các trang pipeline/graph/benchmark/config KAG hiển thị chưa triển khai.
+- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Trang cấu hình KAG đọc trực tiếp contract chung tại `kag/schema/schema_contract.json`; quản lý đơn vị pháp lý theo `unit_id`, `doc_id`, `parent_id` và giữ metadata nguồn. Các trang pipeline/graph/benchmark KAG vẫn hiển thị chưa triển khai.
 
 ## Phát triển local
 

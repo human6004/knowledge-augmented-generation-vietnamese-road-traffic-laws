@@ -2,8 +2,8 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskSettings = @{}
-$taskEnvFile = Join-Path $taskRoot '.env'
-if (!(Test-Path -LiteralPath $taskEnvFile)) { throw 'Tạo .env trước bằng scripts/init-env.ps1.' }
+$taskEnvFile = Join-Path (Split-Path -Parent $taskRoot) '.env'
+if (!(Test-Path -LiteralPath $taskEnvFile)) { throw 'Tạo .env trước bằng WebApp/scripts/init-env.ps1.' }
 foreach ($taskLine in [IO.File]::ReadAllLines($taskEnvFile)) {
     if ($taskLine -match '^([A-Z_]+)=(.*)$') { $taskSettings[$Matches[1]] = $Matches[2] }
 }

@@ -1,0 +1,95 @@
+name: kag
+
+services:
+  openspg-mysql:
+    image: ${OPENSPG_MYSQL_IMAGE:-spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-mysql:latest}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      MYSQL_ROOT_PASSWORD: ${OPENSPG_MYSQL_PASSWORD:?Run docker/init-env.ps1 -Kag first}
+      MYSQL_DATABASE: openspg
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
+    ports: ["127.0.0.1:23306:3306"]
+    volumes: ["openspg-mysql-data:/var/lib/mysql"]
+    networks:
+      openspg: {aliases: [mysql]}
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysql -h 127.0.0.1 -u root -e 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+  openspg-neo4j:
+    image: ${OPENSPG_NEO4J_IMAGE:-spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-neo4j:latest}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      NEO4J_AUTH: neo4j/${OPENSPG_NEO4J_PASSWORD:?Run docker/init-env.ps1 -Kag first}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_initial__size: 1G
+      NEO4J_server_memory_heap_max__size: 4G
+      NEO4J_server_memory_pagecache_size: 1G
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+    ports: ["127.0.0.1:27474:7474", "127.0.0.1:27687:7687"]
+    volumes: ["openspg-neo4j-data:/data", "openspg-neo4j-logs:/logs"]
+    networks:
+      openspg: {aliases: [neo4j, release-openspg-neo4j]}
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+  openspg-minio:
+    build:
+      context: ./docker/minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      MINIO_ROOT_USER: ${OPENSPG_MINIO_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${OPENSPG_MINIO_PASSWORD:?Run docker/init-env.ps1 -Kag first}
+    ports: ["127.0.0.1:29000:9000", "127.0.0.1:29001:9001"]
+    volumes: ["openspg-minio-data:/data"]
+    networks:
+      openspg: {aliases: [minio, release-openspg-minio]}
+  openspg-server:
+    image: ${OPENSPG_SERVER_IMAGE:-spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-server:latest}
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      LANG: C.UTF-8
+    # Override upstream ENTRYPOINT so JVM flags precede -jar exactly once.
+    entrypoint: ["java"]
+    command:
+      - -Dfile.encoding=UTF-8
+      - -Xms${OPENSPG_JAVA_XMS:-2g}
+      - -Xmx${OPENSPG_JAVA_XMX:-8g}
+      - -jar
+      - arks-sofaboot-0.0.1-SNAPSHOT-executable.jar
+      - --server.repository.impl.jdbc.host=openspg-mysql
+      - --server.repository.impl.jdbc.password=${OPENSPG_MYSQL_PASSWORD:?Run docker/init-env.ps1 -Kag first}
+      - --builder.model.execute.num=${OPENSPG_BUILDER_CONCURRENCY:-4}
+      - --cloudext.graphstore.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${OPENSPG_NEO4J_PASSWORD:?Run docker/init-env.ps1 -Kag first}&database=neo4j
+      - --cloudext.searchengine.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${OPENSPG_NEO4J_PASSWORD:?Run docker/init-env.ps1 -Kag first}&database=neo4j
+    ports: ["127.0.0.1:28887:8887"]
+    networks:
+      openspg: {aliases: [server, release-openspg-server]}
+    depends_on:
+      openspg-mysql: {condition: service_healthy}
+      openspg-neo4j: {condition: service_healthy}
+      openspg-minio: {condition: service_started}
+networks:
+  openspg:
+volumes:
+  openspg-mysql-data:
+    name: kag_openspg-mysql-data
+  openspg-neo4j-data:
+    name: kag_openspg-neo4j-data
+  openspg-neo4j-logs:
+    name: kag_openspg-neo4j-logs
+  openspg-minio-data:
+    name: kag_openspg-minio-data

@@ -20,7 +20,7 @@ Ví dụ đã chốt: bỏ pill vàng “Chào mừng trở lại” trên trang
 
 ## Kiến trúc backend đã chốt
 
-- Backend Spring Boot là monolith theo MVC, một ứng dụng triển khai và một PostgreSQL.
+- Backend Spring Boot là monolith theo MVC, một ứng dụng triển khai và một MySQL.
 - Thư mục/package tách rõ `controller`, `service`, `repository`, `model`, `dto`, `config`, `integration`, `exception`; mỗi entity, repository và request DTO có tên riêng theo nhiệm vụ.
 - Controller chỉ nhận HTTP, kiểm tra DTO, gọi service; không truy cập repository. Service giữ quy tắc nghiệp vụ và giao dịch; repository chỉ truy cập dữ liệu. Không trả entity trực tiếp qua API.
 - KAG Python là dịch vụ tích hợp bên ngoài theo README, không chia các nghiệp vụ Java thành microservice nếu chưa có yêu cầu mới.

@@ -7,7 +7,7 @@ public class ContentHistory {
     @Id public UUID id=UUID.randomUUID();
     public UUID contentId;
     public long contentVersion;
-    @Column(columnDefinition="text") public String data;
+    @Column(columnDefinition="longtext") public String data;
     public boolean published;
     public Instant changedAt=Instant.now();
 }

@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .env
 .env.*
+!/.env.example
+!/.env.kag.example
 
 .pytest_cache/
 .idea/

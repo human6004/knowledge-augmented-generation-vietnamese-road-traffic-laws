@@ -1,9 +1,0 @@
-.git
-.env*
-frontend
-backend/target
-scripts
-docs/*.pdf
-docs/*.png
-App-design.zip
-**/__pycache__

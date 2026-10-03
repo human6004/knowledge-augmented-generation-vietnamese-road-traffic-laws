@@ -4,10 +4,10 @@ try {
     Wait-TaskBackend
     $taskAdmin = Get-TaskAdminToken
     $taskInfra = Invoke-TaskApi GET '/admin/infrastructure' -Token $taskAdmin
-    foreach ($taskName in @('PostgreSQL','Redis','MinIO')) {
+    foreach ($taskName in @('MySQL','Redis','MinIO')) {
         Assert-Task ($taskInfra.$taskName -eq 'UP') "$taskName chưa khả dụng."
     }
-    Write-Output 'PASS: PostgreSQL, Redis, MinIO.'
+    Write-Output 'PASS: MySQL, Redis, MinIO.'
     # Creates test accounts and retains their practice/exam history; never changes the content bank.
     $taskSuffix = [Guid]::NewGuid().ToString('N')
     $taskPassword = [Guid]::NewGuid().ToString('N')

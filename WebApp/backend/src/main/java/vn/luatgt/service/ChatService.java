@@ -18,13 +18,14 @@ import vn.luatgt.repository.ContentRepository;
 @Service
 public class ChatService {
     private final ChatRepository chats; private final ContentRepository contents; private final ContentService data; private final KagClient kag; private final RateLimit rate;
+    private final KagSchema schema; private final LegalUnitService units;
     // ponytail: one monolith instance admits 8 concurrent streams; use a shared admission limit when running multiple replicas.
     private final Semaphore streams=new Semaphore(8);
-    public ChatService(ChatRepository chats,ContentRepository contents,ContentService data,KagClient kag,RateLimit rate) { this.chats=chats; this.contents=contents; this.data=data; this.kag=kag; this.rate=rate; }
+    public ChatService(ChatRepository chats,ContentRepository contents,ContentService data,KagClient kag,RateLimit rate,KagSchema schema,LegalUnitService units) { this.chats=chats; this.contents=contents; this.data=data; this.kag=kag; this.rate=rate; this.schema=schema; this.units=units; }
     private ChatMessage start(UUID owner,ChatRequest input) {
         rate.check("chat:"+owner,20,60); var chat=new ChatMessage(); chat.ownerId=owner; chat.question=input.message(); chat.state="PROCESSING"; return chats.save(chat);
     }
-    private Map<String,Object> request(UUID owner,ChatRequest input) { return Map.of("user_id",owner,"message",input.message(),"context_id",input.contextId()==null?"":input.contextId()); }
+    private Map<String,Object> request(UUID owner,ChatRequest input) { return Map.of("user_id",owner,"message",input.message(),"context_id",input.contextId()==null?"":input.contextId(),"schema_contract",schema.identity()); }
     private void complete(ChatMessage chat,JsonNode response) {
         if(response==null||!response.path("answer").isTextual()||response.path("answer").asText().isBlank()||response.path("answer").asText().length()>20000||!response.path("citations").isArray()||response.path("citations").isEmpty()||response.path("citations").size()>20)
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"KAG trả về câu trả lời thiếu căn cứ");
@@ -32,6 +33,7 @@ public class ChatService {
             if(!citation.path("doc_id").isTextual()||!citation.path("unit_id").isTextual()||citation.path("unit_id").asText().isBlank()) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Trích dẫn KAG không hợp lệ");
             var source=contents.findByKindAndExternalId("documents",citation.path("doc_id").asText());
             if(source.isEmpty()||!source.get().published||!data.isEffective(source.get())) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"KAG dẫn văn bản chưa xuất bản hoặc hết hiệu lực");
+            if(!citation.path("quote").isTextual()||!units.citation(citation.path("doc_id").asText(),citation.path("unit_id").asText(),citation.path("quote").asText())) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"KAG dẫn unit chưa xuất bản, sai văn bản hoặc trích đoạn không có trong nguồn");
         }
         chat.answer=response.path("answer").asText(); chat.citations=data.write(response.path("citations")); chat.state="ANSWERED"; chats.save(chat);
     }

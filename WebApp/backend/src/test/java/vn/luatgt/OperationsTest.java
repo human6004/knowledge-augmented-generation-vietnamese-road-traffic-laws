@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class OperationsTest {
     @Autowired MockMvc mvc; @Autowired ObjectMapper json; @Autowired ContentRepository contents; @Autowired ChatRepository chats;
     @Autowired ContentHistoryRepository history;
+    @Autowired StudyAttemptRepository attempts;
     @MockitoBean RateLimit rate; @MockitoBean KagClient kag; @MockitoBean ObjectStorage storage;
     String admin,user; UUID userId;
     JsonNode body(MvcResult result) throws Exception { return json.readTree(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)); }
@@ -31,6 +32,22 @@ class OperationsTest {
     Content doc() throws Exception {
         var c=new Content(); c.kind="documents"; c.externalId="TEST-"+UUID.randomUUID(); c.published=true;
         c.data=json.writeValueAsString(Map.of("externalId",c.externalId,"title","Văn bản kiểm tra","so_hieu","TEST","source","test-only","reviewed",true,"fileKey","test-pdf","fileMime","application/pdf","ngay_hieu_luc","2025-01-01")); return contents.save(c);
+    }
+    @Test void mysqlStoragePreservesUuidUnicodeLargeTextUtcAndForeignKeys() throws Exception {
+        var c=new Content(); c.kind="documents"; c.externalId="Storage-"+UUID.randomUUID();
+        c.data="Luật giao thông 🚦 " + "x".repeat(70000); c=contents.saveAndFlush(c);
+        var stored=contents.findById(c.id).orElseThrow();
+        assertEquals(c.id,stored.id); assertEquals(c.data,stored.data);
+        var variant=new Content(); variant.kind=c.kind; variant.externalId=c.externalId.toLowerCase(Locale.ROOT); variant.data="{}";
+        contents.saveAndFlush(variant);
+        assertEquals(c.id,contents.findByKindAndExternalId(c.kind,c.externalId).orElseThrow().id);
+        var chat=new ChatMessage(); chat.ownerId=userId; chat.question="Kiểm tra UTC"; chat.state="UNAVAILABLE";
+        chat.createdAt=java.time.Instant.parse("2026-10-03T01:02:03.123456Z"); chat=chats.saveAndFlush(chat);
+        assertEquals(chat.createdAt,chats.findById(chat.id).orElseThrow().createdAt);
+        var invalid=new StudyAttempt(); invalid.ownerId=UUID.randomUUID(); invalid.questionId=c.id; invalid.chapter=1;
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class,() -> attempts.saveAndFlush(invalid));
+        mvc.perform(get("/api/admin/infrastructure").header("Authorization","Bearer "+admin))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.MySQL").value("UP"));
     }
     @Test void replacementInvalidatesOldLawAndPenaltiesAndRejectsCycles() throws Exception {
         var old=doc(); var next=doc();

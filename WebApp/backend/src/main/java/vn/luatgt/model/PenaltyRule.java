@@ -5,7 +5,7 @@ import java.util.UUID;
 public class PenaltyRule {
     @Id public UUID id=UUID.randomUUID();
     public UUID documentId;
-    @Column(columnDefinition="text") public String data;
+    @Column(columnDefinition="longtext") public String data;
     public boolean published;
     @Version public long version;
 }
