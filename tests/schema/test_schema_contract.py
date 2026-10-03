@@ -20,6 +20,7 @@ UPSTREAM = ROOT / 'vendor/KAG'
 SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
+VALIDATED_SCHEMA_SHA256 = '5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc'
 NODE_COUNTS = {'LegalDocument': 30, 'LegalUnit': 33, 'TrafficSign': 15}
 DECLARED_COUNTS = {'LegalDocument': 28, 'LegalUnit': 31, 'TrafficSign': 13}
 PREDICATES = {
@@ -183,8 +184,16 @@ class SchemaContractTest(unittest.TestCase):
         self.assertEqual(sum(len(node.properties) for node in self.parsed.types.values()), 72)
 
     def test_approved_logical_contract_unchanged(self):
-        # Baseline contract digest; allow only inheritance metadata additions.
+        # Preserve the baseline outside approved inheritance/server metadata.
         approved = json.loads(json.dumps(self.contract))
+        server = approved['server_confirmations']
+        for flag in ('server_schema_synced', 'server_codec_verified',
+                     'server_edge_idempotency_verified'):
+            server[flag] = False
+        for key in ('server_validation_schema_sha256', 'server_constraint_enforcement',
+                    'edge_identity', 'edge_property_update',
+                    'builder_schema_validation_required', 'builder_integer_validation_required'):
+            server.pop(key, None)
         for key in ('logical_property_count', 'declared_project_property_count',
                     'built_in_properties_inherited'):
             approved.pop(key, None)
@@ -246,13 +255,26 @@ class SchemaContractTest(unittest.TestCase):
                          'physical_predicate', 'fully_qualified_to_type', 'to_id'])
         self.assertFalse(key['evidence_in_identity'])
         self.assertTrue(key['merge_provenance_deterministically'])
+        # The application key is not proof of server relation uniqueness.
         self.assertFalse(key['server_idempotency_verified'])
         self.assertFalse(key['production_ingestion_enabled'])
         server = self.contract['server_confirmations']
         self.assertEqual(len(server['required_before_ingestion']), 3)
         for flag in ('server_schema_synced', 'server_codec_verified',
                      'server_edge_idempotency_verified'):
-            self.assertIs(server[flag], False)
+            self.assertIs(server[flag], True)
+
+    def test_server_validation_bound_to_official_schema_and_runtime_requirements(self):
+        server = self.contract['server_confirmations']
+        self.assertEqual(hashlib.sha256(SCHEMA.read_bytes()).hexdigest(),
+                         VALIDATED_SCHEMA_SHA256)
+        self.assertEqual(server.get('server_validation_schema_sha256'),
+                         VALIDATED_SCHEMA_SHA256)
+        self.assertEqual(server.get('server_constraint_enforcement'), 'DECLARATIVE_ONLY')
+        self.assertIs(server.get('builder_schema_validation_required'), True)
+        self.assertIs(server.get('builder_integer_validation_required'), True)
+        self.assertEqual(server.get('edge_identity'), 'FROM_PREDICATE_TO_TUPLE')
+        self.assertEqual(server.get('edge_property_update'), 'LAST_WRITE_WINS')
 
 
 if __name__ == '__main__':

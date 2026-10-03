@@ -57,7 +57,7 @@ và mọi record evidence/provenance đã duyệt. Không tạo node Evidence.
 Khóa cạnh ứng dụng là SHA-256 canonical JSON của type nguồn fully qualified,
 ID nguồn, predicate vật lý, type đích fully qualified, ID đích. Evidence nằm
 ngoài identity; nhiều record cùng cạnh được gộp xác định, không ghi đè.
-Khóa này chưa được phép dùng production trước xác nhận server.
+Identity server và quy tắc cập nhật cạnh theo [schema.md](schema.md).
 
 ## Phạm vi graph production
 

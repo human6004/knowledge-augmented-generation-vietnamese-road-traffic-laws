@@ -1509,8 +1509,14 @@
       "Codec round-trip, Integer coercion, omitted/empty values and storage/index limits",
       "Edge identity/upsert/dedup and deterministic evidence/provenance update"
     ],
-    "server_schema_synced": false,
-    "server_codec_verified": false,
-    "server_edge_idempotency_verified": false
+    "server_schema_synced": true,
+    "server_codec_verified": true,
+    "server_edge_idempotency_verified": true,
+    "server_validation_schema_sha256": "5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc",
+    "server_constraint_enforcement": "DECLARATIVE_ONLY",
+    "edge_identity": "FROM_PREDICATE_TO_TUPLE",
+    "edge_property_update": "LAST_WRITE_WINS",
+    "builder_schema_validation_required": true,
+    "builder_integer_validation_required": true
   }
 }

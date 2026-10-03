@@ -39,19 +39,22 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
 ## Kiểu và codec
 
 - `TEXT`, `OPTIONAL_TEXT` → `Text`; `INTEGER`, `OPTIONAL_INTEGER` → `Integer`.
-  Integer nhận int thật, từ chối bool; writer upstream gửi chuỗi thập phân,
-  coercion/query số phải được xác nhận trên server.
+  Builder phải nhận int thật (`type(value) is int`), từ chối bool, string và
+  mọi giá trị không nguyên. Native int 0/7 round-trip giữ kiểu integer sau decode.
 - `BOOLEAN_ENCODING` → `Text`, chỉ `"true"`/`"false"`; không native Boolean.
 - `JSON_TEXT` → `Text`: `json.dumps(value, ensure_ascii=False, sort_keys=True,
   separators=(",", ":"))`. List giữ thứ tự. Không `Text[]` hoặc MultiValue.
 - Bỏ null/missing khỏi payload; không gửi literal `"null"` cho unknown.
   Giữ 0, false và chuỗi rỗng. Source provenance bảo toàn khác biệt null/missing.
   Encode JSON_TEXT trước writer đúng một lần; codec implementation thuộc builder.
+- Server JSON-serialize thuộc tính trừ intrinsic `id`: khi đọc dùng `json.loads`.
+  Với JSON_TEXT, decode thêm JSON bên trong khi cần giá trị semantic.
 - `NotNull` chỉ cho property thực sự bắt buộc; optional và toàn bộ penalty
   sparse không có NotNull. `unitType` có Enum đủ năm giá trị miền.
   `required=true` của logical `id/name` là yêu cầu contract; không khai báo
   `NotNull` riêng cho hai thuộc tính kế thừa trong schema EntityType.
-  Parser ghi nhận constraint; chưa xác minh server enforcement.
+  Server constraints chỉ **DECLARATIVE_ONLY**; Builder phải kiểm tra required
+  fields và `unitType` thuộc `Dieu`, `Khoan`, `Diem`, `QCVN`, `QCVN_Muc`.
 
 Cạnh cấu trúc giữ `sourceRecord`, `datasetVersion`; cạnh văn bản thêm
 `evidence`, `note`. Hai cạnh xref giữ `evidenceRecords`,
@@ -100,10 +103,31 @@ application_edge_key = hashlib.sha256(canonical).hexdigest()
 
 Type fully qualified dùng `VietRoadTraffic.<EntityType>`, ID nguồn nguyên trạng.
 Evidence không nằm trong identity; citation và exclusion có predicate khác
-nên khóa khác. Gộp provenance xác định trước writer. Contract ghi
-`server_idempotency_verified=false`, `production_ingestion_enabled=false`.
+nên khóa khác. Giữ khóa ứng dụng cho tái lập, logging, truy vết, dedup cục bộ
+và tổng hợp evidence xác định; khóa này không điều khiển uniqueness server.
 
-## Xác nhận bắt buộc trước ingestion
+OpenSPG xác nhận identity cạnh là **(node nguồn, predicate vật lý, node đích)**
+(`FROM_PREDICATE_TO_TUPLE`). Ghi lặp hoặc đổi client edge ID không tạo cạnh trùng.
+Cập nhật thuộc tính cạnh là **LAST_WRITE_WINS**: gộp evidence/provenance xác định
+theo tuple trước khi ghi, rồi gửi đầy đủ thuộc tính cạnh cuối cùng.
+Ghi toàn bộ node thật trước cạnh; không dựa vào server tạo endpoint ngầm.
+Xác nhận runtime nằm trong `server_confirmations`; `production_ingestion_enabled`
+vẫn `false`.
+
+## Contract runtime và kiểm thử
+
+Official schema đã được kiểm chứng trên OpenSPG: ba EntityType, mười predicate,
+`id/name` kế thừa Thing; TEXT, INTEGER, BOOLEAN_ENCODING, OPTIONAL, EMPTY_STRING,
+JSON_TEXT và UNICODE round-trip đúng semantic. Ba cờ `server_schema_synced`,
+`server_codec_verified`, `server_edge_idempotency_verified` đều `true`, gắn với
+`server_validation_schema_sha256`:
+
+```text
+5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc
+```
+
+Builder Phase C phải thực hiện validation, codec đọc/ghi và quy tắc ghi node/cạnh
+ở trên; xác nhận server không thay thế validation phía ứng dụng.
 
 Parser offline chấp nhận schema bằng source/model thật của KAG đã pin,
 `with_server=False`. Test dùng boundary Configuration/SchemaClient trong bộ
@@ -115,8 +139,5 @@ python -B tests/schema/test_schema_contract.py
 python -B -m unittest discover -s tests/schema -p "test_*.py" -v
 ```
 
-Trước ingestion phải xác nhận trên server ba nhóm: sync schema/built-in Thing `id/name` và constraints;
-codec round-trip/coercion/omission/empty và giới hạn storage/index; edge
-upsert/identity/dedup và cập nhật nhiều evidence. Khóa xác định ở ứng dụng
-không chứng minh server idempotent. Graph chưa build; chưa chạy production
-ingestion hoặc benchmark; builder/retriever/solver chưa triển khai.
+Graph production chưa build; chưa chạy production ingestion hoặc benchmark;
+builder/retriever/solver chưa triển khai.
