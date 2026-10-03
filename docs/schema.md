@@ -40,7 +40,8 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
 
 - `TEXT`, `OPTIONAL_TEXT` → `Text`; `INTEGER`, `OPTIONAL_INTEGER` → `Integer`.
   Builder phải nhận int thật (`type(value) is int`), từ chối bool, string và
-  mọi giá trị không nguyên. Native int 0/7 round-trip giữ kiểu integer sau decode.
+  mọi giá trị không nguyên. Writer biểu diễn int bằng chuỗi thập phân;
+  sau JSON decode thuộc tính server, giá trị giữ kiểu integer, kể cả 0.
 - `BOOLEAN_ENCODING` → `Text`, chỉ `"true"`/`"false"`; không native Boolean.
 - `JSON_TEXT` → `Text`: `json.dumps(value, ensure_ascii=False, sort_keys=True,
   separators=(",", ":"))`. List giữ thứ tự. Không `Text[]` hoặc MultiValue.
@@ -76,7 +77,7 @@ SAFE_EDGE records: 8144 = 7709 affirmative + 435 exclusion
 join: EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON
 ```
 
-Fingerprint lịch sử dùng **đủ 13 trường record xref nguồn**, kể cả
+Fingerprint dùng **đủ 13 trường record xref nguồn**, kể cả
 `from_so_hieu`, không normalize/trim hoặc đổi missing/null/rỗng:
 
 ```python
@@ -106,28 +107,34 @@ Evidence không nằm trong identity; citation và exclusion có predicate khác
 nên khóa khác. Giữ khóa ứng dụng cho tái lập, logging, truy vết, dedup cục bộ
 và tổng hợp evidence xác định; khóa này không điều khiển uniqueness server.
 
-OpenSPG xác nhận identity cạnh là **(node nguồn, predicate vật lý, node đích)**
-(`FROM_PREDICATE_TO_TUPLE`). Ghi lặp hoặc đổi client edge ID không tạo cạnh trùng.
-Cập nhật thuộc tính cạnh là **LAST_WRITE_WINS**: gộp evidence/provenance xác định
-theo tuple trước khi ghi, rồi gửi đầy đủ thuộc tính cạnh cuối cùng.
-Ghi toàn bộ node thật trước cạnh; không dựa vào server tạo endpoint ngầm.
-Xác nhận runtime nằm trong `server_confirmations`; `production_ingestion_enabled`
-vẫn `false`.
+## Contract runtime và yêu cầu Builder
 
-## Contract runtime và kiểm thử
-
-Official schema đã được kiểm chứng trên OpenSPG: ba EntityType, mười predicate,
-`id/name` kế thừa Thing; TEXT, INTEGER, BOOLEAN_ENCODING, OPTIONAL, EMPTY_STRING,
-JSON_TEXT và UNICODE round-trip đúng semantic. Ba cờ `server_schema_synced`,
-`server_codec_verified`, `server_edge_idempotency_verified` đều `true`, gắn với
-`server_validation_schema_sha256`:
+Schema tương thích với runtime OpenSPG/KAG đã pin. `runtime_contract` trong
+contract máy đọc gắn yêu cầu runtime với SHA-256 của schema:
 
 ```text
 5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc
 ```
 
-Builder Phase C phải thực hiện validation, codec đọc/ghi và quy tắc ghi node/cạnh
-ở trên; xác nhận server không thay thế validation phía ứng dụng.
+OpenSPG cung cấp `id/name` qua `Thing`. Constraints schema là khai báo
+**DECLARATIVE_ONLY**; Builder kiểm tra trường bắt buộc, enum `unitType` và
+Integer trước khi ghi. Chỉ `type(value) is int` hợp lệ cho Integer; bool,
+string và giá trị không nguyên bị từ chối. None/missing được bỏ khỏi payload;
+chuỗi rỗng, 0 và false được giữ theo codec ở trên.
+
+Khi đọc, thuộc tính server ngoài intrinsic `id` cần JSON decode; JSON_TEXT
+cần thêm một lần decode semantic JSON. Builder encode JSON_TEXT xác định
+đúng một lần trước writer. Runtime hỗ trợ kích thước text của dataset hiện tại,
+bao gồm payload text lớn nhất trong snapshot.
+
+Identity cạnh OpenSPG là **(node nguồn, predicate vật lý, node đích)**
+(`FROM_PREDICATE_TO_TUPLE`). Ghi lặp hoặc đổi client edge ID không tạo cạnh trùng.
+Cập nhật thuộc tính cạnh là **LAST_WRITE_WINS**: gộp evidence/provenance xác định
+theo tuple trước khi ghi, rồi gửi đầy đủ thuộc tính cạnh cuối cùng.
+Ghi toàn bộ node thật trước cạnh; không dựa vào server tạo endpoint ngầm.
+Khóa cạnh ứng dụng là khóa cục bộ riêng, không thay thế tuple identity server.
+
+## Kiểm thử offline
 
 Parser offline chấp nhận schema bằng source/model thật của KAG đã pin,
 `with_server=False`. Test dùng boundary Configuration/SchemaClient trong bộ
@@ -139,5 +146,4 @@ python -B tests/schema/test_schema_contract.py
 python -B -m unittest discover -s tests/schema -p "test_*.py" -v
 ```
 
-Graph production chưa build; chưa chạy production ingestion hoặc benchmark;
-builder/retriever/solver chưa triển khai.
+Trạng thái triển khai các thành phần nằm tại [README](../README.md).

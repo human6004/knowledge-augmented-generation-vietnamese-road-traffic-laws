@@ -20,7 +20,7 @@ UPSTREAM = ROOT / 'vendor/KAG'
 SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
-VALIDATED_SCHEMA_SHA256 = '5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc'
+SCHEMA_SHA256 = '5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc'
 NODE_COUNTS = {'LegalDocument': 30, 'LegalUnit': 33, 'TrafficSign': 15}
 DECLARED_COUNTS = {'LegalDocument': 28, 'LegalUnit': 31, 'TrafficSign': 13}
 PREDICATES = {
@@ -183,28 +183,29 @@ class SchemaContractTest(unittest.TestCase):
         self.assertEqual(sum(len(rows) for rows in self.contract['node_properties'].values()), 78)
         self.assertEqual(sum(len(node.properties) for node in self.parsed.types.values()), 72)
 
-    def test_approved_logical_contract_unchanged(self):
-        # Preserve the baseline outside approved inheritance/server metadata.
-        approved = json.loads(json.dumps(self.contract))
-        server = approved['server_confirmations']
-        for flag in ('server_schema_synced', 'server_codec_verified',
-                     'server_edge_idempotency_verified'):
-            server[flag] = False
-        for key in ('server_validation_schema_sha256', 'server_constraint_enforcement',
-                    'edge_identity', 'edge_property_update',
-                    'builder_schema_validation_required', 'builder_integer_validation_required'):
-            server.pop(key, None)
-        for key in ('logical_property_count', 'declared_project_property_count',
-                    'built_in_properties_inherited'):
-            approved.pop(key, None)
-        for rows in approved['node_properties'].values():
-            for p in rows:
-                if p['logical_name'] in ('id', 'name'):
-                    p.pop('inherited_from', None)
-                    p.pop('declared_in_entity_schema', None)
+    def test_domain_contract_invariants(self):
+        # Golden digest covers the complete domain model, including Thing inheritance.
+        domain_fields = (
+            'schema_version', 'dataset_version', 'namespace', 'pinned_kag_commit',
+            'node_types', 'node_properties', 'node_property_count', 'logical_property_count',
+            'declared_project_property_count', 'built_in_properties_inherited',
+            'logical_to_physical_predicates', 'logical_to_physical_properties',
+            'property_codec_contract', 'unit_type_values', 'relations', 'relation_properties',
+            'relation_provenance_contract', 'identity_strategy', 'xref_contract',
+            'graph_inclusion_policy', 'edge_application_key_contract',
+        )
+        approved = json.loads(json.dumps({k: self.contract[k] for k in domain_fields}))
+        # Runtime encoding and local-key roles have separate assertions below.
+        for key in ('integer_encoding', 'codec_implementation'):
+            approved['property_codec_contract'].pop(key)
+        approved['xref_contract'].pop('runtime_path_source')
+        key_fields = ('tuple_fields', 'canonical_json', 'algorithm', 'type_qualification',
+                      'evidence_in_identity', 'merge_provenance_deterministically')
+        approved['edge_application_key_contract'] = {
+            k: approved['edge_application_key_contract'][k] for k in key_fields}
         digest = hashlib.sha256(json.dumps(approved, ensure_ascii=False, sort_keys=True,
                                 separators=(',', ':')).encode('utf-8')).hexdigest()
-        self.assertEqual(digest, '3f73d76d348565594d6005c49d104844bcb67cf4fe5842ee09426f8c9a0bfe9b')
+        self.assertEqual(digest, '74f821c874c215d6ac1666ea85b83de75f69ad030694275130bf739d2c0b32b6')
 
     def test_exact_predicates_endpoints_and_relation_provenance(self):
         self.assertEqual(self.contract['logical_to_physical_predicates'], PREDICATES)
@@ -255,26 +256,38 @@ class SchemaContractTest(unittest.TestCase):
                          'physical_predicate', 'fully_qualified_to_type', 'to_id'])
         self.assertFalse(key['evidence_in_identity'])
         self.assertTrue(key['merge_provenance_deterministically'])
-        # The application key is not proof of server relation uniqueness.
-        self.assertFalse(key['server_idempotency_verified'])
-        self.assertFalse(key['production_ingestion_enabled'])
-        server = self.contract['server_confirmations']
-        self.assertEqual(len(server['required_before_ingestion']), 3)
-        for flag in ('server_schema_synced', 'server_codec_verified',
-                     'server_edge_idempotency_verified'):
-            self.assertIs(server[flag], True)
+        self.assertEqual(key.get('uses'), ['reproducibility', 'logging',
+                         'local_deduplication', 'evidence_aggregation'])
+        self.assertIs(key.get('controls_server_uniqueness'), False)
+        self.assertEqual(codec['integer_encoding'],
+                         'exact native int (type(value) is int), excluding bool; schema Integer; '
+                         'writer emits decimal string; native integer after server property JSON decoding')
+        self.assertEqual(codec['codec_implementation'], 'Builder owns property encoding and decoding.')
+        self.assertEqual(self.contract['xref_contract']['runtime_path_source'],
+                         'Runtime configuration; no absolute path dependency.')
 
-    def test_server_validation_bound_to_official_schema_and_runtime_requirements(self):
-        server = self.contract['server_confirmations']
+    def test_runtime_requirements_bound_to_official_schema(self):
+        self.assertIn('runtime_contract', self.contract)
+        runtime = self.contract['runtime_contract']
         self.assertEqual(hashlib.sha256(SCHEMA.read_bytes()).hexdigest(),
-                         VALIDATED_SCHEMA_SHA256)
-        self.assertEqual(server.get('server_validation_schema_sha256'),
-                         VALIDATED_SCHEMA_SHA256)
-        self.assertEqual(server.get('server_constraint_enforcement'), 'DECLARATIVE_ONLY')
-        self.assertIs(server.get('builder_schema_validation_required'), True)
-        self.assertIs(server.get('builder_integer_validation_required'), True)
-        self.assertEqual(server.get('edge_identity'), 'FROM_PREDICATE_TO_TUPLE')
-        self.assertEqual(server.get('edge_property_update'), 'LAST_WRITE_WINS')
+                         SCHEMA_SHA256)
+        self.assertEqual(runtime.get('schema_sha256'), SCHEMA_SHA256)
+        self.assertEqual(runtime.get('constraint_enforcement'), 'DECLARATIVE_ONLY')
+        for flag in ('builder_schema_validation_required', 'builder_unit_type_validation_required',
+                     'builder_integer_validation_required'):
+            self.assertIs(runtime.get(flag), True)
+        self.assertEqual(runtime.get('integer_input'), 'NATIVE_INT_EXCLUDING_BOOL')
+        self.assertEqual(runtime.get('integer_storage'), 'NATIVE_INTEGER')
+        self.assertEqual(runtime.get('property_read_decoding'), 'JSON_DECODE_NON_ID_PROPERTIES')
+        self.assertEqual(runtime.get('json_text_read_decoding'), 'ADDITIONAL_SEMANTIC_JSON_DECODE')
+        self.assertEqual(runtime.get('json_text_write_encoding'), 'ONCE_BEFORE_WRITER')
+        self.assertEqual(runtime.get('node_write_order'), 'NODES_BEFORE_EDGES')
+        self.assertEqual(runtime.get('edge_identity'), 'FROM_PREDICATE_TO_TUPLE')
+        self.assertEqual(runtime.get('edge_property_update'), 'LAST_WRITE_WINS')
+        self.assertEqual(runtime.get('edge_provenance_aggregation'),
+                         'DETERMINISTIC_CANONICAL_JSON_BEFORE_WRITE')
+        self.assertEqual(runtime.get('edge_property_write'), 'COMPLETE_PROPERTIES_AFTER_AGGREGATION')
+        self.assertEqual(runtime.get('text_payload_support'), 'CURRENT_DATASET_MAXIMUM_TEXT_SIZE')
 
 
 if __name__ == '__main__':

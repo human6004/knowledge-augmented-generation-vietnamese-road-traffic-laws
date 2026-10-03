@@ -57,7 +57,11 @@ và mọi record evidence/provenance đã duyệt. Không tạo node Evidence.
 Khóa cạnh ứng dụng là SHA-256 canonical JSON của type nguồn fully qualified,
 ID nguồn, predicate vật lý, type đích fully qualified, ID đích. Evidence nằm
 ngoài identity; nhiều record cùng cạnh được gộp xác định, không ghi đè.
-Identity server và quy tắc cập nhật cạnh theo [schema.md](schema.md).
+Khóa cục bộ này phục vụ tái lập, logging, dedup cục bộ và tổng hợp evidence.
+Identity server là **(node nguồn, predicate vật lý, node đích)**; khóa ứng dụng
+không điều khiển uniqueness server. Server cập nhật thuộc tính cạnh theo
+**LAST_WRITE_WINS**: Builder gộp evidence/provenance trước, rồi ghi đầy đủ thuộc
+tính cạnh. Codec và quy tắc ghi theo [schema.md](schema.md).
 
 ## Phạm vi graph production
 
@@ -74,4 +78,4 @@ giữ ngoài graph; không tạo placeholder. ID trùng, join penalty sai, endpo
 thiếu, lệch doc hoặc parent cycle phải fail closed; không sửa snapshot bằng suy đoán.
 
 Mô hình không kết luận pháp luật hiện hành ngoài snapshot. Chunking, suy luận
-thời gian và độ chính xác neo biển/QCVN thuộc các giai đoạn sau.
+thời gian và độ chính xác neo biển/QCVN nằm ngoài phạm vi schema miền.

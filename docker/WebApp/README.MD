@@ -12,7 +12,7 @@
 
 ## Chạy bằng Docker
 
-Bạn tự chạy các lệnh dưới đây từ thư mục gốc. Không cần khởi động KAG trong giai đoạn này.
+Chạy các lệnh dưới đây từ thư mục gốc WebApp. Các chức năng học, thi và quản trị chạy độc lập với KAG.
 
 ```powershell
 # Chỉ chạy nếu chưa có .env; script không ghi đè file hiện hữu.
@@ -32,7 +32,7 @@ Sau khi nhập, vào **Ngân hàng câu hỏi**, đối chiếu đáp án, câu 
 
 Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của chúng; không sửa ngân hàng dữ liệu. Kiểm tra PostgreSQL/Redis/MinIO, phân quyền, thu hồi JWT; `-WithExam` kiểm tra đề B, sở hữu bài, ẩn đáp án, ảnh MinIO, chấm 30/30, nộp lại và lưu tiến độ. Chỉ chạy một lượt tại một thời điểm, tránh giới hạn đăng nhập.
 
-Đã có cấu hình để bạn chạy Docker; build image và kiểm thử xuyên suốt trên hạ tầng thật chưa được thực hiện trong phiên này theo yêu cầu của bạn. `mvn verify` dùng H2 và mock các dịch vụ ngoài.
+Docker Compose cung cấp môi trường ứng dụng và hạ tầng. `mvn verify` dùng H2 và mock các dịch vụ ngoài; `scripts/verify-stack.ps1` kiểm tra API và dịch vụ trong stack đang chạy.
 
 ## Dữ liệu và nghiệp vụ
 

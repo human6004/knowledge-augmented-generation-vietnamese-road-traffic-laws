@@ -1072,7 +1072,7 @@
   "property_codec_contract": {
     "boolean_encoding": "lowercase Text 'true' or 'false'; null/missing omitted",
     "json_text_encoding": "json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')); lists are ordered",
-    "integer_encoding": "exact int excluding bool; schema Integer; writer emits decimal string; server type coercion pending",
+    "integer_encoding": "exact native int (type(value) is int), excluding bool; schema Integer; writer emits decimal string; native integer after server property JSON decoding",
     "optional_encoding": "omit null/missing from graph payload; never send literal 'null' for unknown values; source provenance retains source representation",
     "empty_string_encoding": "retain present empty string",
     "name_encoding": "technical name=id; ten/title source strings preserved",
@@ -1091,7 +1091,7 @@
       "false"
     ],
     "penalty_encoding": "All penalty properties omitted when no penalty record exists; null is omitted, never replaced by zero or false.",
-    "codec_implementation": "Deferred to builder; definitions only."
+    "codec_implementation": "Builder owns property encoding and decoding."
   },
   "unit_type_values": [
     "Dieu",
@@ -1424,7 +1424,7 @@
     "required_safe_edge_ledger_sha256": "1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4",
     "ledger_artifact_role": "approved_locked_r2_xref_classification_ledger",
     "ledger_artifact_name": "xref_a3g2_final_ledger.jsonl",
-    "runtime_path_source": "Later runtime configuration; no absolute path dependency.",
+    "runtime_path_source": "Runtime configuration; no absolute path dependency.",
     "join_contract": "EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON",
     "fingerprint_input": "Complete 13-field original xref record, including from_so_hieu; preserve missing/null/empty and string bytes.",
     "fingerprint_canonical_json": "json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')",
@@ -1499,24 +1499,30 @@
     "type_qualification": "VietRoadTraffic.<EntityType>",
     "evidence_in_identity": false,
     "merge_provenance_deterministically": true,
-    "server_idempotency_verified": false,
-    "production_ingestion_enabled": false,
-    "status": "Recorded only; server identity/upsert/dedup/evidence update validation required before use."
-  },
-  "server_confirmations": {
-    "required_before_ingestion": [
-      "Schema sync, built-in Thing id/name and NotNull/enum enforcement",
-      "Codec round-trip, Integer coercion, omitted/empty values and storage/index limits",
-      "Edge identity/upsert/dedup and deterministic evidence/provenance update"
+    "uses": [
+      "reproducibility",
+      "logging",
+      "local_deduplication",
+      "evidence_aggregation"
     ],
-    "server_schema_synced": true,
-    "server_codec_verified": true,
-    "server_edge_idempotency_verified": true,
-    "server_validation_schema_sha256": "5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc",
-    "server_constraint_enforcement": "DECLARATIVE_ONLY",
+    "controls_server_uniqueness": false
+  },
+  "runtime_contract": {
+    "schema_sha256": "5daf711eb55db06bdc33d98ce354cf01f5ada9e659f25c0063d226f8500ec2fc",
+    "constraint_enforcement": "DECLARATIVE_ONLY",
+    "builder_schema_validation_required": true,
+    "builder_unit_type_validation_required": true,
+    "builder_integer_validation_required": true,
+    "integer_input": "NATIVE_INT_EXCLUDING_BOOL",
+    "integer_storage": "NATIVE_INTEGER",
+    "property_read_decoding": "JSON_DECODE_NON_ID_PROPERTIES",
+    "json_text_read_decoding": "ADDITIONAL_SEMANTIC_JSON_DECODE",
+    "json_text_write_encoding": "ONCE_BEFORE_WRITER",
+    "node_write_order": "NODES_BEFORE_EDGES",
     "edge_identity": "FROM_PREDICATE_TO_TUPLE",
     "edge_property_update": "LAST_WRITE_WINS",
-    "builder_schema_validation_required": true,
-    "builder_integer_validation_required": true
+    "edge_provenance_aggregation": "DETERMINISTIC_CANONICAL_JSON_BEFORE_WRITE",
+    "edge_property_write": "COMPLETE_PROPERTIES_AFTER_AGGREGATION",
+    "text_payload_support": "CURRENT_DATASET_MAXIMUM_TEXT_SIZE"
   }
 }

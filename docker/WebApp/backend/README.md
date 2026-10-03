@@ -38,7 +38,7 @@ cd backend
 mvn verify
 ```
 
-Test dùng H2 chế độ PostgreSQL và mock Redis/MinIO/KAG. Không thay thế kiểm thử hạ tầng Docker thật. Theo yêu cầu của người dùng, chỉ chuẩn bị file/lệnh, chưa chạy Docker hoặc kiểm thử trên PostgreSQL/Redis/MinIO thật trong phiên này. MinIO được build từ [bản nguồn chính thức có bản vá 2025-10-15](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z); upstream đã archive. Cấu hình này phục vụ phát triển local, cần chọn hệ thống S3 được duy trì trước khi triển khai production.
+Test dùng H2 chế độ PostgreSQL và mock Redis/MinIO/KAG. Kiểm thử hạ tầng Docker dùng `scripts/verify-stack.ps1` trên stack đang chạy. MinIO được build từ [bản nguồn chính thức có bản vá 2025-10-15](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z); upstream đã archive. Cấu hình này phục vụ phát triển local, cần chọn hệ thống S3 được duy trì trước khi triển khai production.
 
 ## API
 
@@ -68,7 +68,7 @@ Biển báo: nhận trực tiếp `sign_id`, `ma_bien`, `nhom`, `ten`, `mo_ta`, 
 
 Văn bản: `externalId`/`doc_id`, `title`, `so_hieu`, `source`, ngày hiệu lực/hết hiệu lực; upload PDF riêng. Tệp/ảnh do MinIO lưu, DB chỉ giữ khóa và MIME. Client nhập JSON không được tự đặt khóa tài nguyên. Ảnh PNG/JPEG tối đa 5 MB, 4096×4096; PDF tối đa 20 MB; ZIP 20 MB nén, 50 MB giải nén, 1000 mục. Ảnh ZIP biển báo ghép theo `ma_bien`, ví dụ `DP.127.png`; ZIP câu hỏi theo `externalId`, ví dụ `Q301.png`. Nếu cùng mã có nhiều biến thể/phiên bản, trả `unmatched` để gắn ảnh theo ID thay vì đoán. SVG/WebP cần xử lý bổ sung; không nhận vào backend hiện tại.
 
-`docs/imports/questions-draft.json` chứa bản trích PDF, luôn cần duyệt. Script `scripts/prepare_question_bank.py` kiểm tra đủ 600 số câu và 2–4 đáp án, lấy đáp án từ gạch chân, giữ trang nguồn; 60 câu điểm liệt được đối chiếu nguồn Chính phủ và 318 ảnh đã tách thành ZIP khoảng 16.9 MB. Các câu 204/301/302/352 có đối chiếu thủ công; xem `docs/imports/question-audit.json`. Tất cả vẫn `reviewed=false`, chờ kiểm duyệt, không xuất bản tự động. `scripts/extract_questions.py` chuyển đến cùng pipeline để tránh dùng parser cũ. FE đã dùng API thật, không lấy dữ liệu demo thay thế khi lỗi.
+`docs/imports/questions-draft.json` chứa bản trích PDF, luôn cần duyệt. Script `scripts/prepare_question_bank.py` kiểm tra đủ 600 số câu và 2–4 đáp án, lấy đáp án từ gạch chân và giữ trang nguồn. Bộ mẫu có 60 câu điểm liệt với nguồn Chính phủ và 318 ảnh trong ZIP khoảng 16.9 MB; provenance của các câu 204/301/302/352 nằm tại `docs/imports/question-audit.json`. Mọi câu có `reviewed=false` cho đến khi được kiểm duyệt; pipeline không xuất bản tự động. `scripts/extract_questions.py` dùng cùng pipeline. FE dùng API thật, không lấy dữ liệu demo thay thế khi lỗi.
 
 ## Hợp đồng KAG Python
 
