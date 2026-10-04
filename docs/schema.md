@@ -15,6 +15,29 @@ nhưng không thuộc contract miền của dự án hoặc mapping logical/phys
 cho toàn bộ property, codec, quan hệ, identity và inclusion policy.
 Ngữ nghĩa miền: [domain_model.md](domain_model.md).
 
+## Index nội dung
+
+C1.1 khai báo `index: Vector` cho `LegalDocument.title`, `LegalUnit.text`,
+`TrafficSign.ten` và `TrafficSign.moTa`. Parser pinned chuyển metadata này
+thành `IndexTypeEnum.Vector`; không thêm property miền. Counts vẫn là
+75 logical / 69 declared node properties / 24 relation properties.
+BatchVectorizer tạo riêng `_title_vector`, `_text_vector`, `_ten_vector`,
+`_mo_ta_vector`; không tự kết hợp các vector thành một retrieval field.
+Không thêm Text/Sparse index vì C1.1 chỉ quyết định dense content targets.
+
+Identity `name=id` giữ nguyên. C4 truyền `disable_generation`:
+`LegalDocument.name`, `LegalUnit.name`, `TrafficSign.name`, `Entity.name`.
+Mục cuối chặn fallback `Entity` của upstream; dùng short labels trước vectorizer.
+Không tạo `_name_vector` giả để né embedding. Không vector hóa provenance,
+ID, ngày tháng hoặc giá trị penalty. `None`/chuỗi rỗng không tạo vector;
+156/887 tên biển rỗng vẫn có `moTa` để truy hồi. Contract không sửa dữ liệu.
+
+`LegalUnit.text` dài tối đa 757.423 ký tự. C4 phải kiểm giới hạn đầu vào của
+model được chọn sau này trước khi ghi, không tự cắt text. Metadata không
+chứng minh model/server đã được cấu hình hoặc vector đã tồn tại. C1.1 không
+chọn provider/model, dimension hoặc gọi embedding. Chi tiết probe và
+thống kê nằm trong báo cáo ngoại vi `builder-preflight/c1_1/`.
+
 ## Tên và quan hệ
 
 Tên logical/source snake_case ánh xạ sang lowerCamelCase theo `schema_contract.json`;
@@ -40,8 +63,11 @@ Không khai báo inverse hoặc node Penalty/Evidence/QCVN riêng.
 
 - `TEXT`, `OPTIONAL_TEXT` → `Text`; `INTEGER`, `OPTIONAL_INTEGER` → `Integer`.
   Builder phải nhận int thật (`type(value) is int`), từ chối bool, string và
-  mọi giá trị không nguyên. Writer biểu diễn int bằng chuỗi thập phân;
-  sau JSON decode thuộc tính server, giá trị giữ kiểu integer, kể cả 0.
+  mọi giá trị không nguyên. Project-local `NativeIntegerKGWriter(KGWriter)`
+  giữ các property Integer đã validate, gọi normalization upstream rồi phục hồi
+  native int trước `GraphClient` serialization. Upstream KGWriter mặc định đổi
+  int thành string; không dùng hành vi đó cho Integer của dự án. Không parse
+  Text giống số. Sau JSON decode thuộc tính server, giữ kiểu integer, kể cả 0.
 - `BOOLEAN_ENCODING` → `Text`, chỉ `"true"`/`"false"`; không native Boolean.
 - `JSON_TEXT` → `Text`: `json.dumps(value, ensure_ascii=False, sort_keys=True,
   separators=(",", ":"))`. List giữ thứ tự. Không `Text[]` hoặc MultiValue.
@@ -113,7 +139,7 @@ Schema tương thích với runtime OpenSPG/KAG đã pin. `runtime_contract` tro
 contract máy đọc gắn yêu cầu runtime với SHA-256 của schema:
 
 ```text
-0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b
+ec05cc76303b99c43f7d2d8ed662459daeafe69fa750b7ebbdbf975fb794c23c
 ```
 
 OpenSPG cung cấp `id/name` qua `Thing`. Constraints schema là khai báo

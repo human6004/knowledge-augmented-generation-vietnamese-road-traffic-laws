@@ -20,7 +20,7 @@ UPSTREAM = ROOT / 'vendor/KAG'
 SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
-SCHEMA_SHA256 = '0e2288920cea2c39b0a3fd223470c3cecf79f8810ecd845dee377f85ee03622b'
+SCHEMA_SHA256 = 'ec05cc76303b99c43f7d2d8ed662459daeafe69fa750b7ebbdbf975fb794c23c'
 NODE_COUNTS = {'LegalDocument': 29, 'LegalUnit': 32, 'TrafficSign': 14}
 DECLARED_COUNTS = {'LegalDocument': 27, 'LegalUnit': 30, 'TrafficSign': 12}
 PREDICATES = {
@@ -267,10 +267,41 @@ class SchemaContractTest(unittest.TestCase):
         self.assertIs(key.get('controls_server_uniqueness'), False)
         self.assertEqual(codec['integer_encoding'],
                          'exact native int (type(value) is int), excluding bool; schema Integer; '
-                         'writer emits decimal string; native integer after server property JSON decoding')
+                         'project writer preserves native int through GraphClient serialization; '
+                         'native integer after server property JSON decoding')
         self.assertEqual(codec['codec_implementation'], 'Builder owns property encoding and decoding.')
         self.assertEqual(self.contract['xref_contract']['runtime_path_source'],
                          'Runtime configuration; no absolute path dependency.')
+
+    def test_content_vector_metadata_and_native_integer_writer_contract(self):
+        expected = {
+            'LegalDocument': {'title': 'Vector'},
+            'LegalUnit': {'text': 'Vector'},
+            'TrafficSign': {'ten': 'Vector', 'moTa': 'Vector'},
+        }
+        actual = {}
+        for name in NODE_COUNTS:
+            properties = self.parsed.types['VietRoadTraffic.' + name].properties
+            indexed = {key: prop.index_type for key, prop in properties.items()
+                       if prop.index_type is not None}
+            actual[name] = indexed
+            self.assertEqual(indexed,
+                             {key: self.base.IndexTypeEnum.Vector for key in expected[name]})
+            for relation in self.parsed.types['VietRoadTraffic.' + name].relations.values():
+                self.assertTrue(all(prop.index_type is None
+                                    for prop in relation.sub_properties.values()))
+        self.assertEqual(sum(len(props) for props in actual.values()), 4)
+        runtime = self.contract['runtime_contract']
+        self.assertEqual(runtime.get('vector_index_targets'), expected)
+        self.assertEqual(runtime.get('vectorizer_disable_generation'),
+                         ['LegalDocument.name', 'LegalUnit.name',
+                          'TrafficSign.name', 'Entity.name'])
+        self.assertEqual(runtime.get('integer_writer_transport'),
+                         'PROJECT_NATIVE_INTEGER_KGWRITER')
+        serialized = SCHEMA.read_text(encoding='utf-8') + json.dumps(self.contract)
+        for forbidden in ('schema_version', 'dataset_version', 'datasetVersion',
+                          'LOCKED R2', 'pinned_kag_commit'):
+            self.assertNotIn(forbidden, serialized)
 
     def test_runtime_requirements_bound_to_official_schema(self):
         self.assertIn('runtime_contract', self.contract)
