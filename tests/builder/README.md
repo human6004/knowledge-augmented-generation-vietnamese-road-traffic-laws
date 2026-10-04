@@ -20,6 +20,11 @@ Các module project-layer dùng stdlib; import trực tiếp `kag.builder.codec`
 - `aggregate_relations(rows, contract)` trả dict `{tuple, application_edge_key,
   properties}` với physical properties. Tuple gồm `(from_type, from_id, predicate,
   to_type, to_id)`; types fully qualified. Evidence nằm ngoài identity.
+- C3 `build_graph_plan(validated_inputs, contract)` dùng lại ba API mapping trên,
+  kiểm tra endpoint/key/provenance/type, rồi sắp node và edge theo UTF-8 bytes.
+  `plan_hash(plan)` hash streaming byte-equivalent với canonical JSON; `write_dry_run`
+  ghi `manifest.json`, `nodes.jsonl`, `edges.jsonl`, `plan.sha256` bằng UTF-8/LF.
+  `vector_input_length_stats` chỉ đo độ dài content, không gọi tokenizer/model.
 
 Containers frozen; dicts/specs immutable-by-convention, caller không sửa inputs
 sau validation. Output provenance có bản sao riêng. Không runner full-source,
