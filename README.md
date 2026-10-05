@@ -34,7 +34,7 @@ cạnh. Xem [mô hình miền](docs/domain_model.md), [schema kỹ thuật](docs
 
 ## Pipeline dự kiến
 
-Luồng dự kiến, chưa vận hành:
+Builder đã kiểm chứng trên sample C4.3a; phần retrieval/solver còn triển khai:
 
 ```text
 data → kag/schema → kag/builder → vendor/KAG → graph/index
@@ -54,10 +54,11 @@ git submodule update --init vendor/KAG
 
 ## Trạng thái triển khai
 
-Schema, contract máy đọc và kiểm thử schema offline có sẵn.
-Builder, Retriever và Solver Python chưa triển khai; graph production chưa
-được dựng, production ingestion và benchmark chưa chạy; benchmark runner chưa
-triển khai. WebApp có frontend/backend riêng; tích hợp KAG phụ thuộc core Python.
+Schema, contract và Builder C1–C4 đã PASS; sample C4.3a đã kiểm chứng.
+Runtime Python 3.10.16, bootstrap import, dependency và image digest đã khóa
+tại D0.2; xem [setup runtime](docs/runtime.md). Retriever, Solver và benchmark
+runner còn triển khai. Graph production và production ingestion chưa chạy.
+WebApp có frontend/backend riêng; tích hợp KAG phụ thuộc core Python.
 
 Contract yêu cầu Builder kiểm tra trường bắt buộc, `unitType` và Integer,
 thực hiện codec đọc/ghi, ghi node trước cạnh, gộp evidence/provenance xác định
