@@ -83,6 +83,14 @@ chain_vectorizer:
 # Explicit schema-indexed content only:
 # LegalDocument.title, LegalUnit.text, TrafficSign.ten, TrafficSign.moTa.
 # These targets remain in the schema contract; no schema change here.
+# Project-local ResilientVectorizer consumes this block; upstream KAG ignores it.
+# Only exhausted LegalUnit.text uses embedding-only chunks. Source text is immutable.
+embedding_fallback:
+  enabled: true
+  max_chunk_chars: 8000
+  overlap_chars: 500
+  min_chunk_chars: 1000
+  max_split_depth: 3
 #------------builder configuration end----------------#
 
 #------------solver configuration start----------------#
