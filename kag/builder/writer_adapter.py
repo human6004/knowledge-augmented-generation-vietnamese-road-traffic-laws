@@ -10,6 +10,8 @@ from typing import Any
 
 from kag.builder.codec import BuilderContractError, canonical_json, decode_properties
 from kag.builder.mapping import application_edge_key
+from kag.builder.production_scope import (ProductionSettings, ProductionScope,
+    SAMPLE_PROJECT_ID, validate_production_scope, _PRODUCTION_PROOF)
 from kag.builder.model.sub_graph import Edge, Node, SubGraph
 from kag.builder.component.writer.kg_writer import AlterOperationEnum, KGWriter
 from knext.graph.client import GraphClient
@@ -33,7 +35,7 @@ class _ContractContext:
 _SMOKE_PROJECT_PROOF = object()
 _MANIFEST_PROJECT_PROOF = object()
 _C43A_POLICY = {
-    'project_id': 2, 'project_name': 'VietRoadTrafficC43A10Pct',
+    'project_id': SAMPLE_PROJECT_ID, 'project_name': 'VietRoadTrafficC43A10Pct',
     'namespace': 'VietRoadTraffic', 'partition': 5, 'nodes': 7495, 'edges': 8180,
     'nodes_sha256': 'fe61563daad7cf4f331b4f8c44a327365e07fe187436cc939b21c603ec6c25ff',
     'edges_sha256': 'c5587eb118b3ba3f9a51b17539e773c4624447bc404de3a2a639842886661874',
@@ -75,13 +77,29 @@ class WriterConfig:
     namespace: str
     contract: Mapping[str, Any]
     synthetic_prefix: str = 'C4_1_SMOKE_'
-    scope: str = 'C4_1_SMOKE'
+    scope: str = 'DENY'
     manifest_scope: _ManifestScope | None = None
+    production_scope: ProductionScope | None = None
 
     def __post_init__(self) -> None:
-        _validate_local_host(self.host_addr)
-        proof = _SMOKE_PROJECT_PROOF if self.scope == 'C4_1_SMOKE' else _MANIFEST_PROJECT_PROOF
-        if (self.scope not in ('C4_1_SMOKE', 'C4_3A_MANIFEST_SAMPLE')
+        if not isinstance(self.project, _VerifiedSmokeProject):
+            raise WriterAdapterError('project must come from verified OpenSPG project discovery')
+        if self.scope == 'PRODUCTION':
+            if not isinstance(self.production_scope, ProductionScope) or self.manifest_scope is not None:
+                raise WriterAdapterError('production requires verified C3 scope, never a sample manifest')
+            self.production_scope.verify_files(self.contract)
+            settings = self.production_scope.settings
+            if (self.host_addr, self.project_id, self.project_name, self.namespace) != (
+                    settings.host_addr, settings.expected_project_id, settings.project_name, settings.namespace):
+                raise WriterAdapterError('production configuration differs from verified target')
+        else:
+            _validate_local_host(self.host_addr)
+            if self.production_scope is not None:
+                raise WriterAdapterError('sample scope cannot carry production proof')
+        proof = {'C4_1_SMOKE': _SMOKE_PROJECT_PROOF,
+                 'C4_3A_MANIFEST_SAMPLE': _MANIFEST_PROJECT_PROOF,
+                 'PRODUCTION': _PRODUCTION_PROOF}.get(self.scope)
+        if (proof is None
                 or not isinstance(self.project, _VerifiedSmokeProject)
                 or self.project._proof is not proof):
             raise WriterAdapterError('project must come from verified OpenSPG smoke-project discovery')
@@ -101,7 +119,7 @@ class WriterConfig:
         if self.scope == 'C4_1_SMOKE':
             if self.manifest_scope is not None:
                 raise WriterAdapterError('C4.1 smoke scope cannot carry a real sample manifest')
-        else:
+        elif self.scope == 'C4_3A_MANIFEST_SAMPLE':
             if ((self.project_id, self.project_name, self.namespace) !=
                     (_C43A_POLICY['project_id'], _C43A_POLICY['project_name'], _C43A_POLICY['namespace'])
                     or not isinstance(self.manifest_scope, _ManifestScope)):
@@ -214,6 +232,42 @@ def discover_manifest_project(project_client: Any, host_addr: str, contract: Map
     project = _VerifiedSmokeProject(*values, host_addr, _MANIFEST_PROJECT_PROOF)
     return WriterConfig(host_addr, project, contract['namespace'], contract,
                         scope='C4_3A_MANIFEST_SAMPLE', manifest_scope=scope)
+
+
+def discover_production_project(project_client: Any, settings: ProductionSettings,
+                                contract: Mapping[str, Any], manifest_path: str | Path,
+                                *, project_root: str | Path | None = None) -> WriterConfig:
+    """Validate offline first, resolve exact name+namespace, then independently verify ID."""
+    scope = validate_production_scope(settings, contract, manifest_path, project_root=project_root)
+    if getattr(project_client, '_host_addr', None) != settings.host_addr:
+        raise WriterAdapterError('production project client belongs to a different OpenSPG host')
+    def fields(record):
+        return tuple(record.get(k) if isinstance(record, Mapping) else getattr(record, k, None)
+                     for k in ('id', 'name', 'namespace'))
+    try:
+        # ProjectClient.get picks the first match; get_all collapses namespaces.
+        records = project_client._rest_client.project_get()
+        matches = [fields(r) for r in records
+                   if fields(r)[1:] == (settings.project_name, settings.namespace)]
+        if len(matches) != 1:
+            raise WriterAdapterError('production discovery requires exactly one name+namespace match')
+        actual_id, name, namespace = matches[0]
+        if (type(actual_id) not in (int, str)
+                or str(actual_id) != str(settings.expected_project_id)):
+            raise WriterAdapterError('resolved production project ID differs from explicit expected ID')
+        verified = fields(project_client.get(id=settings.expected_project_id))
+        if (type(verified[0]) not in (int, str)
+                or str(verified[0]) != str(settings.expected_project_id)
+                or verified[1:] != (name, namespace)):
+            raise WriterAdapterError('returned production project ID/name/namespace verification failed')
+    except WriterAdapterError:
+        raise
+    except Exception:
+        raise WriterAdapterError('production project discovery failed') from None
+    project = _VerifiedSmokeProject(settings.expected_project_id, name, namespace,
+                                     settings.host_addr, _PRODUCTION_PROOF)
+    return WriterConfig(settings.host_addr, project, settings.namespace, contract,
+                        scope='PRODUCTION', production_scope=scope)
 
 
 def _context(contract: Mapping[str, Any] | WriterConfig, prefix: str | None = None):
@@ -329,6 +383,8 @@ class NativeIntegerKGWriter(KGWriter):
     def __init__(self, config: WriterConfig, graph_client: Any = None):
         if not isinstance(config, WriterConfig):
             raise WriterAdapterError('an explicit WriterConfig is required')
+        if config.scope == 'PRODUCTION':
+            config.__post_init__()
         # KGWriter.__init__ resolves implicit global KAG config. Keep these exact
         # upstream attributes explicit so the same pinned _invoke/normalizer runs.
         self.config = config
@@ -401,6 +457,9 @@ class NativeIntegerKGWriter(KGWriter):
         if input.nodes and input.edges:
             raise WriterAdapterError('writer requires explicit node-only or edge-only stages')
         if input.edges and not deleting:
+            if (self.config.scope == 'PRODUCTION'
+                    and self._verified_node_keys != self.config.production_scope.node_keys):
+                raise WriterAdapterError('production edges require full C3 node readback barrier')
             if (self.config.scope == 'C4_3A_MANIFEST_SAMPLE'
                     and self._verified_node_keys != self.config.manifest_scope.node_keys):
                 raise WriterAdapterError('C4.3a edges require full manifest node readback barrier')
@@ -428,6 +487,20 @@ class NativeIntegerKGWriter(KGWriter):
 
 
 def _check_writer_scope(graph: SubGraph, config: WriterConfig, *, deleting: bool = False) -> None:
+    config.__post_init__()
+    if config.scope == 'PRODUCTION':
+        if deleting:
+            raise WriterAdapterError('production scope does not authorize deletion')
+        nodes = [{'type': n.label, 'id': n.id, 'name': n.name, 'properties': n.properties}
+                 for n in graph.nodes]
+        edges = [{'tuple': (e.from_type, e.from_id, e.label, e.to_type, e.to_id),
+                  'application_edge_key': e.id, 'properties': e.properties} for e in graph.edges]
+        config.production_scope.validate_specs(nodes, edges, require_vectors=True)
+        for spec in nodes:
+            _validate_node(spec, config)
+        for spec in edges:
+            _validate_edge(spec, config)
+        return
     if config.scope == 'C4_3A_MANIFEST_SAMPLE':
         config.manifest_scope.verify_file()
         if deleting:
@@ -482,7 +555,7 @@ def _plan_specs(plan_or_specs: Any) -> tuple[list[Mapping[str, Any]], list[Mappi
 def _check_writer_config(writer: Any, config: WriterConfig) -> None:
     other = getattr(writer, 'config', None)
     fields = ('host_addr', 'project_id', 'project_name', 'namespace', 'synthetic_prefix',
-              'scope', 'manifest_scope')
+              'scope', 'manifest_scope', 'production_scope')
     if (not isinstance(other, WriterConfig)
             or any(getattr(other, field) != getattr(config, field) for field in fields)
             or other.contract != config.contract):
@@ -619,9 +692,12 @@ def write_nodes_then_edges(plan_or_specs: Any, config: WriterConfig, read_client
     """Write all node batches, prove full node readback, then write edge-only batches."""
     if not isinstance(config, WriterConfig):
         raise WriterAdapterError('an explicit WriterConfig is required')
+    config.__post_init__()
     nodes, edges = _plan_specs(plan_or_specs)
     if config.scope == 'C4_1_SMOKE':
         _assert_synthetic_scope(nodes, edges, config.synthetic_prefix)
+    elif config.scope == 'PRODUCTION':
+        config.production_scope.validate_specs(nodes, edges, require_vectors=True, complete=True)
     else:
         config.manifest_scope.verify_file()
         keys = [(node['type'], node['id']) for node in nodes]

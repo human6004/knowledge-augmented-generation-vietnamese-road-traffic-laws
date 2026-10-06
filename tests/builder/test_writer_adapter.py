@@ -200,7 +200,7 @@ def _config(contract=CONTRACT, project_id=17, project_name='C4_1_SMOKE_OFFLINE_T
     project = ADAPTER.discover_smoke_project(FakeProjectClient(record), project_id,
                                              project_name, 'http://127.0.0.1:28887', contract)
     return ADAPTER.WriterConfig('http://127.0.0.1:28887', project,
-                                contract['namespace'], contract)
+                                contract['namespace'], contract, scope='C4_1_SMOKE')
 
 
 def _writer(contract=CONTRACT, client=None, project_id=17):

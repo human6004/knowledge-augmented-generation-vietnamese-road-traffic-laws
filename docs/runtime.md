@@ -105,5 +105,6 @@ không còn override `OPENSPG_*_IMAGE` hoặc default `latest`.
 MinIO giữ Dockerfile pin nguồn hiện có. Pin không yêu cầu recreate stack
 đang chạy. D0.2 không chạy Compose up/down hoặc thao tác volume.
 
-Bước tiếp theo: D0.3 trong nhóm khóa môi trường theo roadmap sample-first;
-production scope chỉ được code/test fail-closed, chưa được ghi production.
+D0.2 đã bao gồm pin image và version input của D0.3; không làm lại D0.3.
+Production scope D0.4 chỉ code/test fail-closed, chưa được ghi production;
+xem [contract writer scope](production-writer-scope.md).
