@@ -151,11 +151,8 @@ class ProductionScope:
             raise ProductionScopeError('production staged plan must equal the complete C3 golden plan')
 
 
-def validate_production_scope(settings, contract, manifest_path, *, project_root=None):
-    """Verify actual C3 bytes/semantic hash/schema/all inputs; no SDK or network calls."""
-    if not isinstance(settings, ProductionSettings):
-        raise ProductionScopeError('explicit production settings are required')
-    settings.validate()
+def validate_c3_manifest(contract, manifest_path, *, project_root=None):
+    """Verify C3 data only; returns no project/scope authorization or writer proof."""
     root = Path(project_root if project_root is not None else ROOT).resolve()
     path = Path(manifest_path).resolve()
     try:
@@ -209,11 +206,25 @@ def validate_production_scope(settings, contract, manifest_path, *, project_root
                 or len(node_hashes) != sum(manifest['node_counts'].values())
                 or len(edge_hashes) != sum(manifest['edge_unique_counts'].values())):
             raise ProductionScopeError('C3 manifest counts/uniqueness mismatch')
-        scope = ProductionScope(settings, tuple(files), MappingProxyType(node_hashes),
-            MappingProxyType(edge_hashes), _spec_hash(contract), _PRODUCTION_PROOF)
-        scope.verify_files(contract)
-        return scope
+        for file_path, expected in files:
+            if _checksum(file_path) != expected:
+                raise ProductionScopeError(f'{file_path.name}: C3 checksum mismatch')
+        return dict(records, manifest=manifest, file_checksums=tuple(files),
+                    node_hashes=MappingProxyType(node_hashes), edge_hashes=MappingProxyType(edge_hashes),
+                    contract_hash=_spec_hash(contract))
     except ProductionScopeError:
         raise
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         raise ProductionScopeError('invalid or unreadable production C3 manifest/input') from None
+
+
+def validate_production_scope(settings, contract, manifest_path, *, project_root=None):
+    """Grant production proof only after explicit settings and verified C3 data."""
+    if not isinstance(settings, ProductionSettings):
+        raise ProductionScopeError('explicit production settings are required')
+    settings.validate()
+    data = validate_c3_manifest(contract, manifest_path, project_root=project_root)
+    scope = ProductionScope(settings, data['file_checksums'], data['node_hashes'],
+                            data['edge_hashes'], data['contract_hash'], _PRODUCTION_PROOF)
+    scope.verify_files(contract)
+    return scope
