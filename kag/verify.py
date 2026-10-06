@@ -46,6 +46,25 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def _storage_record(record, *, edge=False):
+    """Remove OpenSPG's documented outer JSON storage layer, exactly once.
+
+    id is storage identity; vectors/native scalars remain native. Schema/codec
+    checks still reject numeric Text, double encoding, unknown properties and flags.
+    """
+    try:
+        result = dict(record)
+        result['properties'] = {key: json.loads(value) if isinstance(value, str)
+            and key != 'id' and not key.endswith('_vector') else value
+            for key, value in record['properties'].items()}
+        if edge:
+            result['from'] = _storage_record(record['from'])
+            result['to'] = _storage_record(record['to'])
+        return result
+    except (ValueError, KeyError, TypeError):
+        raise RunBlocked('INTEGRITY') from None
+
+
 class Neo4jReadClient:
     def __init__(self, http_endpoint, database, *, username, password, timeout):
         try:
@@ -90,9 +109,11 @@ class Neo4jReadClient:
                     record['from'] = record.pop('from_node')
                     record['to'] = record.pop('to_node')
                 rows.append(record)
-            return rows
         except Exception:
             raise RuntimeError(MESSAGES['TRANSPORT']) from None
+        if name in ('nodes', 'batch_nodes', 'edges', 'batch_edges'):
+            return [_storage_record(row, edge=name in ('edges', 'batch_edges')) for row in rows]
+        return rows
 
     def database_identity(self):
         rows = self._query('databases', {'database': self.database})

@@ -94,6 +94,9 @@ NativeIntegerKGWriter; full node verification mở barrier trước bất kỳ e
 Verify không sửa graph hoặc tạo index: exact identities/payload/3072 finite vectors,
 duplicate/extra/missing, native Integer, endpoints, provenance và bốn content
 VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi trong kiểm tra.
+Neo4j HTTP boundary bỏ đúng một outer JSON layer của OpenSPG storage; id/vectors
+giữ nguyên. Integer phải là native int sau layer này, Text số hoặc double encoding
+vẫn BLOCK. Không tuyên bố JSON Text storage là native Neo4j Integer.
 
 ## Resume, trạng thái và lock
 

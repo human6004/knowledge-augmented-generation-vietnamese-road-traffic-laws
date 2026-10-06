@@ -344,6 +344,37 @@ class Neo4jHttpTests(unittest.TestCase):
         with patch.object(client._opener, 'open', side_effect=TimeoutError('SECRET_NEVER_LOG')):
             with self.assertRaises(RuntimeError) as error: list(client.iter_nodes('VietRoadTraffic', 1))
         self.assertNotIn('SECRET_NEVER_LOG', str(error.exception))
+
+    def test_openspg_storage_json_envelope_is_decoded_once_before_schema_checks(self):
+        api = self.api(); client = self.client()
+        nodes, edges, _ = fixture()
+        raw = [graph_node(node, i) for i, node in enumerate(nodes)]
+        for record in raw:
+            record['properties'] = {key: value if key == 'id' or key.endswith('_vector') else canonical_json(value)
+                                    for key, value in record['properties'].items()}
+        with patch.object(client._opener, 'open', return_value=self.response(raw)):
+            self.assertEqual(api.verify_batch(client, nodes, kind='nodes', contract=CONTRACT)['confirmed'], 3)
+        raw[1]['properties']['order'] = canonical_json('7')  # decoded Text cannot satisfy native Integer
+        with patch.object(client._opener, 'open', return_value=self.response(raw)):
+            with self.assertRaises(api.RunBlocked): api.verify_batch(client, nodes, kind='nodes', contract=CONTRACT)
+        raw[1]['properties']['order'] = '7'
+        raw[0]['properties']['name'] = canonical_json(canonical_json(nodes[0]['name']))
+        with patch.object(client._opener, 'open', return_value=self.response(raw)):
+            with self.assertRaises(api.RunBlocked): api.verify_batch(client, nodes, kind='nodes', contract=CONTRACT)
+
+    def test_edge_properties_and_compact_endpoint_names_use_same_storage_boundary(self):
+        api = self.api(); client = self.client()
+        nodes, edges, _ = fixture()
+        edge = GraphReader(nodes, edges).edges[0]
+        record = {'physical_id': edge['physical_id'], 'predicate': edge['predicate'],
+                  'properties': {key: canonical_json(value) for key, value in edge['properties'].items()}}
+        for side, column in (('from', 'from_node'), ('to', 'to_node')):
+            node = edge[side]
+            record[column] = dict(node, property_keys=list(node['properties']),
+                properties={'id': node['properties']['id'], 'name': canonical_json(node['properties']['name']),
+                            'stub': None, 'degraded': None})
+        with patch.object(client._opener, 'open', return_value=self.response([record])):
+            self.assertEqual(api.verify_batch(client, edges, kind='edges', contract=CONTRACT)['confirmed'], 1)
         response = io.BytesIO(b'{"errors":[{"message":"SECRET_NEVER_LOG"}],"results":[]}')
         with patch.object(client._opener, 'open', return_value=response):
             with self.assertRaises(RuntimeError) as error: client.indexes()
