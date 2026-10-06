@@ -108,3 +108,5 @@ MinIO giữ Dockerfile pin nguồn hiện có. Pin không yêu cầu recreate st
 D0.2 đã bao gồm pin image và version input của D0.3; không làm lại D0.3.
 Production scope D0.4 chỉ code/test fail-closed, chưa được ghi production;
 xem [contract writer scope](production-writer-scope.md).
+
+CLI builder/verify chính thức: `python -B -m kag`; xem [runner và resume](runner.md).

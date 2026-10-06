@@ -221,6 +221,8 @@ def preflight(config, *, project_client, reader):
             'vendor_commit': 'fdab15b3929d2ee40dfcdd388f90233096a6afc9', 'common_lock': mount}
         return {'writer_config': writer_config, 'contract': contract, 'identity': identity, 'database_id': database_id,
                 'node_hashes': node_hashes, 'edge_hashes': edge_hashes, 'file_checksums': tuple(checksums)}
+    except (TimeoutError, ConnectionError):
+        raise RuntimeError('Graph transport unavailable.') from None
     except (c3.ProductionScopeError, OSError, KeyError, ValueError, TypeError) as error:
         if isinstance(error, RunBlocked): raise
         raise RunBlocked('SCOPE') from None
