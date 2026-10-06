@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from typing import Any
 
 from kag.builder.codec import BuilderContractError, canonical_json, decode_properties
+from kag.backend_identity import BackendIdentitySession, BackendIdentityProof, BackendIdentityError, client_route
 from kag.builder.mapping import application_edge_key
 from kag.builder.production_scope import (ProductionSettings, ProductionScope,
     SAMPLE_PROJECT_ID, validate_production_scope, _PRODUCTION_PROOF)
@@ -88,6 +89,8 @@ class WriterConfig:
     scope: str = 'DENY'
     manifest_scope: _ManifestScope | None = None
     production_scope: ProductionScope | None = None
+    backend_session: BackendIdentitySession | None = field(default=None, repr=False, compare=False)
+    backend_proof: BackendIdentityProof | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.project, _VerifiedSmokeProject):
@@ -133,6 +136,9 @@ class WriterConfig:
                     or not isinstance(self.manifest_scope, _ManifestScope)):
                 raise WriterAdapterError('C4.3a requires its exact verified project and manifest scope')
             self.manifest_scope.verify_file()
+        if self.scope in ('PRODUCTION', 'C4_3A_MANIFEST_SAMPLE'):
+            _check_backend(self.backend_session, self.backend_proof,
+                           self.host_addr, self.project_id, self.project_name, self.namespace)
 
     @property
     def project_id(self) -> int:
@@ -192,7 +198,7 @@ def _validate_prefix(prefix: str) -> None:
 
 def discover_manifest_project(project_client: Any, host_addr: str, contract: Mapping[str, Any],
                               manifest_path: str | Path, node_specs: Sequence[Mapping[str, Any]],
-                              edge_specs: Sequence[Mapping[str, Any]]) -> WriterConfig:
+                              edge_specs: Sequence[Mapping[str, Any]], *, backend_session=None) -> WriterConfig:
     """Grant only the pinned C4.3a project and the exact fixed manifest identities."""
     _validate_local_host(host_addr)
     if (getattr(project_client, '_host_addr', None) != host_addr
@@ -244,13 +250,15 @@ def discover_manifest_project(project_client: Any, host_addr: str, contract: Map
     scope = _ManifestScope(path, hashlib.sha256(raw).hexdigest(), allowed_nodes,
                            frozenset(edge_tuples), _MANIFEST_PROJECT_PROOF)
     project = _VerifiedSmokeProject(*values, host_addr, _MANIFEST_PROJECT_PROOF)
+    backend_proof = _prove_backend(backend_session, host_addr, *values)
     return WriterConfig(host_addr, project, contract['namespace'], contract,
-                        scope='C4_3A_MANIFEST_SAMPLE', manifest_scope=scope)
+                        scope='C4_3A_MANIFEST_SAMPLE', manifest_scope=scope,
+                        backend_session=backend_session, backend_proof=backend_proof)
 
 
 def discover_production_project(project_client: Any, settings: ProductionSettings,
                                 contract: Mapping[str, Any], manifest_path: str | Path,
-                                *, project_root: str | Path | None = None) -> WriterConfig:
+                                *, project_root: str | Path | None = None, backend_session=None) -> WriterConfig:
     """Validate offline first, resolve exact name+namespace, then independently verify ID."""
     scope = validate_production_scope(settings, contract, manifest_path, project_root=project_root)
     if getattr(project_client, '_host_addr', None) != settings.host_addr:
@@ -286,8 +294,33 @@ def discover_production_project(project_client: Any, settings: ProductionSetting
         raise WriterAdapterError('production project discovery failed') from None
     project = _VerifiedSmokeProject(settings.expected_project_id, name, namespace,
                                      settings.host_addr, _PRODUCTION_PROOF)
+    backend_proof = _prove_backend(backend_session, settings.host_addr,
+                                  settings.expected_project_id, name, namespace)
     return WriterConfig(settings.host_addr, project, settings.namespace, contract,
-                        scope='PRODUCTION', production_scope=scope)
+                        scope='PRODUCTION', production_scope=scope,
+                        backend_session=backend_session, backend_proof=backend_proof)
+
+
+def _check_backend(session, proof, host, project_id, name, namespace):
+    if not isinstance(session, BackendIdentitySession) or not isinstance(proof, BackendIdentityProof):
+        raise WriterAdapterError('verified backend identity session is required')
+    try:
+        session.validate(proof)
+        if (proof.openspg_endpoint, proof.project_id, proof.project_name, proof.namespace) != (
+                host, project_id, name, namespace):
+            raise BackendIdentityError()
+    except BackendIdentityError:
+        raise WriterAdapterError('backend identity does not bind the writer target') from None
+
+
+def _prove_backend(session, host, project_id, name, namespace):
+    if not isinstance(session, BackendIdentitySession):
+        raise WriterAdapterError('verified backend identity session is required')
+    try: proof = session.prove()
+    except BackendIdentityError:
+        raise WriterAdapterError('backend identity discovery refused') from None
+    _check_backend(session, proof, host, project_id, name, namespace)
+    return proof
 
 
 def _context(contract: Mapping[str, Any] | WriterConfig, prefix: str | None = None):
@@ -403,16 +436,18 @@ class NativeIntegerKGWriter(KGWriter):
     def __init__(self, config: WriterConfig, graph_client: Any = None):
         if not isinstance(config, WriterConfig):
             raise WriterAdapterError('an explicit WriterConfig is required')
-        if config.scope == 'PRODUCTION':
-            config.__post_init__()
         # KGWriter.__init__ resolves implicit global KAG config. Keep these exact
         # upstream attributes explicit so the same pinned _invoke/normalizer runs.
-        self.config = config
+        config.__post_init__()
+        self.config = self._identity_config = config
+        self._backend_binding = config.backend_session, config.backend_proof
         self.kag_project_config = config
         self.project_id = config.project_id
         self.client = graph_client if graph_client is not None else GraphClient(
             host_addr=config.host_addr, project_id=config.project_id)
         _check_client_target(self.client, config, 'GraphClient')
+        self._identity_client = self.client
+        self._client_route = client_route(self.client, config.host_addr)
         self.delete = False
         self._verified_node_keys: set[tuple[str, str]] = set()
 
@@ -471,6 +506,16 @@ class NativeIntegerKGWriter(KGWriter):
     def _invoke(self, input: SubGraph, alter_operation=AlterOperationEnum.Upsert,
                 lead_to_builder: bool = False, **kwargs):
         """One scope gate also covers inherited invoke/ainvoke entry points."""
+        if (self.config is not self._identity_config or self.client is not self._identity_client
+                or self.kag_project_config is not self._identity_config
+                or type(self.project_id) is not int or self.project_id != self.config.project_id):
+            raise WriterAdapterError('writer configuration or client changed after discovery')
+        if (self.config.backend_session is not self._backend_binding[0]
+                or self.config.backend_proof is not self._backend_binding[1]):
+            raise WriterAdapterError('writer backend binding changed after discovery')
+        route = client_route(self.client, self.config.host_addr)
+        if any(a is not b for a, b in zip(route, self._client_route)):
+            raise WriterAdapterError('writer REST transport changed after discovery')
         _check_client_target(self.client, self.config, 'GraphClient')
         deleting = self.delete or getattr(alter_operation, 'value', alter_operation) == 'DELETE'
         _check_writer_scope(input, self.config, deleting=deleting)
@@ -580,11 +625,17 @@ def _check_writer_config(writer: Any, config: WriterConfig) -> None:
             or any(getattr(other, field) != getattr(config, field) for field in fields)
             or other.contract != config.contract):
         raise WriterAdapterError('writer target differs from the verified smoke-project configuration')
+    if other.backend_session is not config.backend_session or other.backend_proof is not config.backend_proof:
+        raise WriterAdapterError('writer backend binding differs from discovery')
+    other.__post_init__()
 
 
 def _check_client_target(client: Any, config: WriterConfig, role: str) -> None:
     if client is None:
         raise WriterAdapterError(f'{role} client is missing')
+    try: client_route(client, config.host_addr)
+    except BackendIdentityError:
+        raise WriterAdapterError(f'{role} REST route differs from verified target') from None
     configured = isinstance(getattr(client, 'config', None), WriterConfig)
     if configured:
         _check_writer_config(client, config)

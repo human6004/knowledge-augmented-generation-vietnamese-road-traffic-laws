@@ -72,7 +72,11 @@ def validate_run_directory(run_root, run_id, *, repo_root=ROOT, read_only_paths=
 
 
 class GraphLock:
-    def __init__(self, lock_root, database_id, owner):
+    def __init__(self, lock_root, database_id, owner, *, backend_proof=None, backend_session=None):
+        self._backend_proof, self._backend_session = backend_proof, backend_session
+        if (backend_proof is not None or backend_session is not None
+                or owner.get('scope') in ('PRODUCTION', 'C4_3A_MANIFEST_SAMPLE')):
+            self._validate_backend(database_id)
         if not isinstance(database_id, str) or not database_id.strip():
             raise RunBlocked('LOCK')
         root = Path(lock_root).resolve()
@@ -86,7 +90,21 @@ class GraphLock:
                          'owner': {k: owner[k] for k in allowed if k in owner}}
         self.acquired = False
 
+    def _validate_backend(self, database_id):
+        from kag.backend_identity import BackendIdentitySession, BackendIdentityProof
+        try:
+            if (not isinstance(self._backend_session, BackendIdentitySession)
+                    or not isinstance(self._backend_proof, BackendIdentityProof)):
+                raise ValueError
+            self._backend_session.validate(self._backend_proof)
+            if database_id != self._backend_proof.physical_database_id:
+                raise ValueError
+        except ValueError:
+            raise RunBlocked('LOCK') from None
+
     def acquire(self):
+        if self._backend_proof is not None:
+            self._validate_backend(self.metadata['database_id'])
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

@@ -28,6 +28,9 @@ class Projects:
     def __init__(self, endpoint, records):
         self._host_addr = endpoint
         self.records = records
+        for record in self.records:
+            record.setdefault('config', {'graph_store':{'uri':'neo4j://neo:7687',
+                'database':'VietRoadTraffic','user':'fixture','password':'fixture-secret'}})
         self._rest_client = self
         self.reads = 0
 
@@ -46,6 +49,10 @@ class Database:
 
     def database_identity(self):
         return self.identity
+
+    def database_metadata(self):
+        return {'name':'vietroadtraffic','databaseID':self.identity,
+                'serverID':'fixture-server','currentStatus':'online'}
 
 
 class RunnerPreflightTests(unittest.TestCase):
@@ -129,6 +136,11 @@ class RunnerPreflightTests(unittest.TestCase):
         self.pins = pins
         self.projects = Projects(self.config['endpoints']['openspg'], [{'id': '2',
             'name': self.config['project_name'], 'namespace': 'VietRoadTraffic'}])
+        from kag.backend_identity import DockerBackendTransport
+        metadata = Database().database_metadata()
+        binding = patch.object(DockerBackendTransport, 'read',
+            side_effect=lambda transport_store, verifier: (dict(metadata), ('fixture-runtime',)))
+        binding.start(); self.addCleanup(binding.stop)
         for target in (patch.object(scope, 'C3_IDENTITY', pins), patch.object(scope, 'ROOT', self.root),
                        patch.object(scope, 'ARTIFACT_HASHES', (('fixture.txt', inputs[0]['sha256']),)),
                        patch.object(self.adapter, '_C43A_POLICY', policy)):
@@ -148,6 +160,12 @@ class RunnerPreflightTests(unittest.TestCase):
         self.assertEqual(list(verified['nodes']), self.originals)
         self.assertNotIn('settings', verified)
         self.assertNotIn('_proof', verified)
+
+    def test_preflight_returns_shared_backend_proof(self):
+        verified = self.preflight()
+        self.assertIs(verified['backend_proof'], verified['writer_config'].backend_proof)
+        self.assertEqual(verified['identity']['backend_identity']['physical_database_id'],
+                         verified['database_id'])
 
     def test_c3_streams_jsonl_into_disk_sequences_and_hash_mappings(self):
         original = Path.read_bytes
@@ -298,7 +316,9 @@ class RunnerPreflightTests(unittest.TestCase):
         config.update(scope='PRODUCTION', project_id=37, project_name='VietRoadTrafficProduction',
                       write_mode='WRITE', confirmation='CONFIRM_PRODUCTION:VietRoadTrafficProduction:VietRoadTraffic:37:'
                       + self.pins['plan_sha256'])
-        self.projects.records = [{'id': '37', 'name': config['project_name'], 'namespace': config['namespace']}]
+        self.projects.records = [{'id': '37', 'name': config['project_name'], 'namespace': config['namespace'],
+            'config':{'graph_store':{'uri':'neo4j://neo:7687','database':'VietRoadTraffic',
+                'user':'fixture','password':'fixture-secret'}}}]
         return config
 
     def test_production_resolves_name_namespace_then_binds_expected_id(self):
@@ -373,6 +393,7 @@ class RunnerExecutionTests(unittest.TestCase):
             self.config['input_sha256'][field] = checksum(Path(self.config['paths'][field]))
         self.reader = GraphReader(self.nodes, self.edges)
         self.reader.database_identity = lambda: 'physical-fixture-db'
+        self.reader.database_metadata = Database().database_metadata
         self.calls = []
 
     def execute(self, run_id='fixture-run', **kwargs):
@@ -391,9 +412,12 @@ class RunnerExecutionTests(unittest.TestCase):
         # Exercise internal writer orchestration; public unproven WRITE remains BLOCKED.
         api = self.api()
         readonly = copy.deepcopy(self.config); readonly['write_mode'] = 'NO_OP'
-        verified = api.preflight(readonly, project_client=self.projects, reader=self.reader)
-        verified['identity'].update(write_mode='WRITE', config_hash=scope._spec_hash(self.config))
-        boundary = patch.object(api, 'preflight', return_value=verified)
+        original = api.preflight
+        def fresh_proof(*args, **kwargs):
+            verified = original(readonly, project_client=self.projects, reader=self.reader)
+            verified['identity'].update(write_mode='WRITE', config_hash=scope._spec_hash(self.config))
+            return verified
+        boundary = patch.object(api, 'preflight', side_effect=fresh_proof)
         boundary.start(); self.addCleanup(boundary.stop)
 
     def test_nine_stages_stream_existing_vectors_without_side_effect_factories(self):

@@ -85,14 +85,22 @@ class ProductionScopeTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.manifest), encoding='utf-8')
 
     def discover(self, settings=None, client=None, contract=None):
-        return ADAPTER.discover_production_project(client or Projects(), settings or self.settings,
-            contract or CONTRACT, self.path, project_root=self.root)
+        client, settings = client or Projects(), settings or self.settings
+        # Trusted offline transport fixture; never live identity evidence.
+        session = sample._backend_session(client, settings.expected_project_id, settings.project_name)
+        return ADAPTER.discover_production_project(client, settings,
+            contract or CONTRACT, self.path, project_root=self.root, backend_session=session)
 
     def test_exact_c3_validation_resolves_and_verifies_native_project_id(self):
         config = self.discover()
         self.assertEqual((config.scope, config.project_id, config.project_name),
                          ('PRODUCTION', 37, 'VietRoadTrafficProduction'))
         self.assertIs(type(config.project_id), int)
+
+    def test_discovery_requires_backend_session_after_offline_validation(self):
+        with self.assertRaises(ValueError):
+            ADAPTER.discover_production_project(Projects(), self.settings, CONTRACT,
+                                               self.path, project_root=self.root)
 
     def test_wrong_nodes_hash_blocks(self):
         self.manifest['nodes_jsonl_sha256'] = '0' * 64

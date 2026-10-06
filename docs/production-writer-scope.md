@@ -50,7 +50,10 @@ ID `2` reserved cho sample và bị chặn ngay gate offline, kể cả khi serv
 tên project đó thành production. Production phải chọn ID khác qua discovery.
 
 Production proof được gắn vào `WriterConfig`. `NativeIntegerKGWriter._invoke`
-kiểm scope cho direct write và inherited `invoke/ainvoke`; staged write kiểm
+đồng thời yêu cầu [backend session/proof D0.10](backend-identity.md), revalidate
+live identity trước dispatch. Identity PROVEN không mở production WRITE;
+D1 phải re-prove project/runtime production thật và xét các gate còn lại.
+Guard kiểm scope cho direct write và inherited `invoke/ainvoke`; staged write kiểm
 toàn bộ plan trước node đầu tiên. Payload node/edge phải khớp C3, chỉ được thêm
 vector đúng target schema với 3072 số hữu hạn. Content không rỗng phải có vector
 trước write. Edge cần full C3 node readback barrier, không chỉ endpoint batch.

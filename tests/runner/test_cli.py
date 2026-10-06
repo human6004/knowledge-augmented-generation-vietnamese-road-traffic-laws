@@ -77,7 +77,7 @@ from knext.project import client as project
 from kag import verify
 case = RunnerExecutionTests(); case.setUp()
 mode = sys.argv[1]
-if mode == 'ERROR': case.reader.database_identity = lambda: (_ for _ in ()).throw(TimeoutError('RAW_SECRET'))
+if mode == 'ERROR': case.reader.database_metadata = lambda: (_ for _ in ()).throw(TimeoutError('RAW_SECRET'))
 if mode == 'BLOCKED': case.config['input_sha256']['provenance'] = '0' * 64
 path = case.root / 'config.json'; path.write_text(canonical_json(case.config), encoding='utf-8')
 os.environ.update(TEST_NEO4J_USER='fixture', TEST_NEO4J_PASSWORD='SYNTHETIC_SECRET')

@@ -201,22 +201,29 @@ def _sample_sources(data, manifest):
     return nodes, edges
 
 
-def preflight(config, *, project_client, reader):
+def preflight(config, *, project_client, reader, backend_transport=None):
     config = _config(config)
     mount = _paths(config)
     source_index = None
+    backend_session = None
     try:
         checksums = _files(config)
         from kag.bootstrap import initialize
         initialize()
         from kag.builder.writer_adapter import discover_manifest_project, discover_production_project
+        from kag.backend_identity import BackendIdentitySession, DockerBackendTransport
+        backend_session = BackendIdentitySession(project_client, reader,
+            backend_transport if backend_transport is not None else DockerBackendTransport(config['endpoints']['openspg']),
+            project_id=config['project_id'], project_name=config['project_name'], namespace=config['namespace'],
+            openspg_endpoint=config['endpoints']['openspg'])
         contract = json.loads((ROOT / 'kag/schema/schema_contract.json').read_bytes())
         if config['scope'] == 'PRODUCTION':
             settings = c3.ProductionSettings(scope=config['scope'], runtime_location=config['runtime_location'],
                 host_addr=config['endpoints']['openspg'], neo4j_uri=config['endpoints']['neo4j_uri'],
                 project_name=config['project_name'], namespace=config['namespace'], expected_project_id=config['project_id'],
                 vector_dimensions=config['vector_dimensions'], confirmation=config['confirmation'])
-            writer_config = discover_production_project(project_client, settings, contract, config['paths']['c3_manifest'])
+            writer_config = discover_production_project(project_client, settings, contract,
+                config['paths']['c3_manifest'], backend_session=backend_session)
             proof = writer_config.production_scope
             node_hashes, edge_hashes = proof.node_hashes, proof.edge_hashes
             source_index = node_hashes.index
@@ -227,14 +234,14 @@ def preflight(config, *, project_client, reader):
             manifest = json.loads(Path(config['paths']['sample_manifest']).read_bytes())
             nodes, edges = _sample_sources(data, manifest)
             writer_config = discover_manifest_project(project_client, config['endpoints']['openspg'], contract,
-                config['paths']['sample_manifest'], nodes, edges)
+                config['paths']['sample_manifest'], nodes, edges, backend_session=backend_session)
             node_hashes = {(n['type'], n['id']): data['node_hashes'][(n['type'], n['id'])] for n in nodes}
             edge_hashes = {tuple(e['tuple']): data['edge_hashes'][tuple(e['tuple'])] for e in edges}
             checksums.extend(data['file_checksums'])
-        # The pinned server SDK exposes no physical backend identity for GraphClient.
-        # A reader's independent databaseID cannot authorize dispatch through OpenSPG.
+        # Identity is necessary, but never opens the production execution gate.
         if config['write_mode'] == 'WRITE': raise RunBlocked('SCOPE')
-        database_id = reader.database_identity()
+        backend_proof = writer_config.backend_proof
+        database_id = backend_proof.physical_database_id
         if not isinstance(database_id, str) or not database_id.strip():
             raise RunBlocked('LOCK')
         identity = {'scope': config['scope'], 'project_id': writer_config.project_id,
@@ -244,13 +251,18 @@ def preflight(config, *, project_client, reader):
             'write_mode': config['write_mode'], 'vector_policy': config['vector_policy'],
             'config_hash': c3._spec_hash(config), 'input_hashes': dict(config['input_sha256']),
             'c3': dict(c3.C3_IDENTITY), 'python': '3.10.16',
-            'vendor_commit': 'fdab15b3929d2ee40dfcdd388f90233096a6afc9', 'common_lock': mount}
+            'vendor_commit': 'fdab15b3929d2ee40dfcdd388f90233096a6afc9', 'common_lock': mount,
+            'backend_identity': backend_proof.to_receipt()}
         return {'writer_config': writer_config, 'contract': contract, 'identity': identity, 'database_id': database_id,
                 'node_hashes': node_hashes, 'edge_hashes': edge_hashes, 'file_checksums': tuple(checksums),
-                'source_index': source_index}
+                'source_index': source_index, 'backend_session': backend_session, 'backend_proof': backend_proof}
     except (TimeoutError, ConnectionError, RuntimeError):
+        if backend_session is not None: backend_session.close()
+        if source_index is not None: source_index.close()
         raise RuntimeError('Graph transport unavailable.') from None
     except (c3.ProductionScopeError, OSError, KeyError, ValueError, TypeError) as error:
+        if backend_session is not None: backend_session.close()
+        if source_index is not None: source_index.close()
         if isinstance(error, RunBlocked): raise
         raise RunBlocked('SCOPE') from None
 
@@ -722,8 +734,10 @@ def _execute_source(config, directory, run_id, resume, stop, verify_only):
         if lock is not None and lock.acquired: lock.release()
 
 
-def _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory, stop, verify_only=False):
+def _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory, stop,
+             verify_only=False, backend_transport=None):
     state, lock, directory, identity = None, None, None, None
+    verified = None
     try:
         config = _config(config)
         directory = validate_run_directory(config['paths']['run_root'], run_id,
@@ -734,10 +748,11 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
                                  for name in ('nodes.jsonl', 'edges.jsonl', 'plan.sha256')])
             return _execute_source(config, directory, run_id, resume, stop, verify_only)
         project_client, reader = _clients(config, project_client, reader)
-        verified = preflight(config, project_client=project_client, reader=reader)
+        verified = preflight(config, project_client=project_client, reader=reader, backend_transport=backend_transport)
         identity = dict(verified['identity'], run_id=run_id)
         lock = GraphLock(config['paths']['lock_root'], verified['database_id'], dict(identity,
-            openspg_endpoint=config['endpoints']['openspg'], neo4j_endpoint=config['endpoints']['neo4j_http']))
+            openspg_endpoint=config['endpoints']['openspg'], neo4j_endpoint=config['endpoints']['neo4j_http']),
+            backend_proof=verified['backend_proof'], backend_session=verified['backend_session'])
         lock.acquire()
         state = RunState(directory, identity, resume=resume)
         state.start_heartbeat(config['heartbeat_seconds'])
@@ -823,12 +838,17 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
     finally:
         if state is not None: state.close()
         if lock is not None and lock.acquired: lock.release()
+        if verified is not None:
+            verified['backend_session'].close()
+            if verified['source_index'] is not None: verified['source_index'].close()
 
 
 def run(config, *, run_id, resume=False, project_client=None, reader=None, vectorizer_factory=None,
-        writer_factory=None, stop_after_batch=None):
-    return _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory, stop_after_batch)
+        writer_factory=None, stop_after_batch=None, backend_transport=None):
+    return _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory,
+                    stop_after_batch, backend_transport=backend_transport)
 
 
-def verify_run(config, *, run_id, reader=None, project_client=None):
-    return _execute(config, run_id, True, project_client, reader, None, None, None, verify_only=True)
+def verify_run(config, *, run_id, reader=None, project_client=None, backend_transport=None):
+    return _execute(config, run_id, True, project_client, reader, None, None, None,
+                    verify_only=True, backend_transport=backend_transport)

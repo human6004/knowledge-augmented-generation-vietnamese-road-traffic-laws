@@ -44,7 +44,7 @@ Full production preflight giữ lazy disk mappings, không copy thành corpus di
 
 Source batching giữ O(batch) payload; RSS gồm fixed Python/SDK/SQLite overhead.
 Full source memory proof không chứng minh full production vector memory.
-Production WRITE vẫn BLOCK do physical backend identity gate hiện có.
+Production WRITE vẫn BLOCK độc lập với backend identity proof D0.10.
 
 ## Config
 
@@ -68,9 +68,10 @@ phải điền policy và SHA-256 thực trước chạy. Unknown fields bị t�
 - `confirmation`: null cho sample; production dùng confirmation D0.4 exact.
   Production vẫn resolve name + namespace rồi kiểm ID độc lập và bind C3/schema/
   input bytes; xem [production scope](production-writer-scope.md).
-  Runner hiện BLOCK mọi `WRITE`: SDK OpenSPG đã pin chưa chứng minh physical
-  databaseID của backend writer trùng reader. Matching host/port/config không
-  thay bằng chứng ấy. Chỉ mở dispatch khi có proof thực; D0.4 vẫn bắt buộc.
+  Runner hiện BLOCK mọi `WRITE`, kể cả khi backend identity đã PROVEN.
+  Preflight yêu cầu [backend identity session](backend-identity.md) cùng writer và
+  GraphLock; matching host/port/config không đủ. D1 phải re-prove production live
+  và xét execution gate riêng. D0.4 vẫn bắt buộc; không có config flag mở WRITE.
 - `paths`: absolute `c3_manifest`, `sample_manifest`, `vector_artifact`,
   `provenance`, `chunk_manifest`, `source_checkpoint`, `run_root`, `lock_root`.
   Provider có thể dùng null cho replay inputs; production sample_manifest có thể null.
@@ -126,8 +127,8 @@ Provider dùng BatchVectorizer/OpenAIVectorizeModel đã pin, bỏ name generati
 
 Export fsync + atomic publish JSONL hoàn chỉnh/hash receipt trước graph stages.
 NO_OP exact readback mỗi batch, không tạo graph writer. Dispatch nội bộ dùng scoped
-NativeIntegerKGWriter với full node barrier; public WRITE hiện BLOCK do thiếu
-physical backend proof như gate ở trên.
+NativeIntegerKGWriter với full node barrier và live backend guard; public WRITE
+vẫn BLOCK theo execution gate ở trên.
 Verify không sửa graph hoặc tạo index: exact identities/payload/3072 finite vectors,
 duplicate/extra/missing, native Integer, endpoints, provenance và bốn content
 VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi trong kiểm tra.

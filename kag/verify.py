@@ -36,6 +36,8 @@ QUERIES = {
                     + EDGE_RETURN + ' ORDER BY physical_id LIMIT $limit'),
     'databases': ('SHOW DATABASES YIELD name,databaseID,currentStatus WHERE name=$database '
                   'RETURN name,databaseID,currentStatus'),
+    'database_metadata': ('SHOW DATABASES YIELD name,databaseID,serverID,currentStatus '
+        'RETURN name,databaseID,serverID,currentStatus,toLower($database) AS requested'),
     'indexes': ('SHOW INDEXES YIELD name,type,state,labelsOrTypes,properties,options '
                 'RETURN name,type,state,labelsOrTypes,properties,options'),
 }
@@ -86,7 +88,7 @@ class Neo4jReadClient:
     def _query(self, name, parameters=None, *, database=None):
         if name not in QUERIES:
             raise RunBlocked('CONFIG')
-        target = 'system' if name == 'databases' else self.database
+        target = 'system' if name in ('databases', 'database_metadata') else self.database
         if database is not None and database != target:
             raise RunBlocked('CONFIG')
         payload = {'statements': [{'statement': QUERIES[name], 'parameters': parameters or {}}]}
@@ -122,6 +124,20 @@ class Neo4jReadClient:
                 or not isinstance(rows[0].get('databaseID'), str) or not rows[0]['databaseID'].strip()):
             raise RunBlocked('LOCK')
         return rows[0]['databaseID']
+
+    def database_metadata(self):
+        """Resolve only a unique ONLINE catalog entry and unique physical ID."""
+        rows = self._query('database_metadata', {'database': self.database})
+        matches = [r for r in rows if r.get('name') == self.database.lower()]
+        if len(matches) != 1:
+            raise RunBlocked('LOCK')
+        row = matches[0]
+        if (row.get('currentStatus') != 'online'
+                or any(not isinstance(row.get(k), str) or not row[k].strip()
+                       for k in ('name', 'databaseID', 'serverID'))
+                or sum(r.get('databaseID') == row['databaseID'] for r in rows) != 1):
+            raise RunBlocked('LOCK')
+        return {key: row[key] for key in ('name', 'databaseID', 'serverID', 'currentStatus')}
 
     def _scan(self, kind, namespace, batch_size):
         _batch_size(batch_size)

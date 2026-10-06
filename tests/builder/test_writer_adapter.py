@@ -190,9 +190,27 @@ class FakeProjectClient:
     def __init__(self, record, host_addr='http://127.0.0.1:28887'):
         self.record = record
         self._host_addr = host_addr
+        self._rest_client = self
+
+    def project_get(self):
+        return [self.record]
 
     def get(self, **conditions):
         return self.record if str(conditions.get('id')) == str(self.record.get('id')) else None
+
+
+def _backend_session(client, project_id, name):
+    from types import SimpleNamespace
+    metadata = {'name':'vietroadtraffic','databaseID':'physical-fixture-db',
+                'serverID':'fixture-server','currentStatus':'online'}
+    records = client.project_get()
+    for record in records:
+        record.setdefault('config', {'graph_store':{'uri':'neo4j://neo:7687',
+            'database':'VietRoadTraffic','user':'fixture','password':'fixture-secret'}})
+    reader = SimpleNamespace(database_metadata=lambda: dict(metadata))
+    transport = SimpleNamespace(read=lambda store, verifier: (dict(metadata), ('fixture-runtime',)))
+    return ADAPTER.BackendIdentitySession(client, reader, transport, project_id=project_id,
+        project_name=name, namespace='VietRoadTraffic', openspg_endpoint=client._host_addr)
 
 
 def _config(contract=CONTRACT, project_id=17, project_name='C4_1_SMOKE_OFFLINE_TEST'):
@@ -581,8 +599,10 @@ class ManifestWriterScopeTest(unittest.TestCase):
         with TemporaryDirectory() as folder, patch.dict(ADAPTER._C43A_POLICY, self.POLICY):
             path = Path(folder) / 'sample_manifest.json'
             path.write_text(json.dumps(manifest), encoding='utf-8')
-            config = ADAPTER.discover_manifest_project(FakeProjectClient(record),
-                'http://127.0.0.1:28887', CONTRACT, path, nodes, edges)
+            client = FakeProjectClient(record)
+            session = _backend_session(client, 2, 'VietRoadTrafficC43A10Pct')
+            config = ADAPTER.discover_manifest_project(client,
+                'http://127.0.0.1:28887', CONTRACT, path, nodes, edges, backend_session=session)
             yield config, nodes, edges, path
 
     def test_exact_project_manifest_writes_real_nodes_with_native_integer(self):
@@ -665,9 +685,7 @@ class ManifestWriterScopeTest(unittest.TestCase):
         with self.fixture() as (config, nodes, _, path):
             path.write_text('{}',encoding='utf-8')
             client = RecordingGraphClient(config)
-            writer = ADAPTER.NativeIntegerKGWriter(config,client)
-            graph = ADAPTER.to_subgraphs(nodes,2,'nodes',config)[0]
-            with self.assertRaises(ADAPTER.WriterAdapterError): writer.write_subgraph(graph,'nodes')
+            with self.assertRaises(ADAPTER.WriterAdapterError): ADAPTER.NativeIntegerKGWriter(config,client)
             self.assertEqual(client.calls, [])
 
     def test_scopes_cannot_be_confused_or_used_for_real_data_delete(self):
