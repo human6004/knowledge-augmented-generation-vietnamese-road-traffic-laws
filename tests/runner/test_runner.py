@@ -14,7 +14,7 @@ from kag.builder.codec import canonical_json
 from kag.builder.graph_plan import plan_hash
 from kag.builder import production_scope as scope
 from kag.run_state import GraphLock, RunBlocked
-from test_verify import CONTRACT, MODEL, fixture
+from test_verify import CONTRACT, MODEL, fixture, GraphReader
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -267,6 +267,213 @@ class RunnerPreflightTests(unittest.TestCase):
         self.assertEqual(config['scope'], 'DENY')
         self.assertEqual(config['write_mode'], 'DENY')
         self.assertNotIn('api_key', canonical_json(config))
+
+
+class RunnerExecutionTests(unittest.TestCase):
+    setUpClass = RunnerPreflightTests.__dict__['setUpClass']
+    api = RunnerPreflightTests.api
+    production = RunnerPreflightTests.production
+
+    def setUp(self):
+        RunnerPreflightTests.setUp(self)
+        from kag.builder.resilient_vectorizer import ResilientVectorizer
+        for job in self.jobs:
+            job.update(attempts=[], classification=None)
+        (self.root / 'provenance.json').write_text(canonical_json({'model_identity': MODEL, 'dimension': 3072,
+                                                                'jobs': self.jobs}), encoding='utf-8')
+        engine = ResilientVectorizer(None, model_identity=MODEL, dimension=3072,
+            checkpoint_path=self.root / 'old-checkpoint.sqlite3', embedding_fallback=self.config['fallback_config'])
+        try:
+            engine.import_successes(self.originals, self.nodes, artifact_model_identity=MODEL,
+                                    artifact_dimension=3072, artifact_jobs=self.jobs)
+            engine.run(self.originals).require_complete()
+        finally:
+            engine.close()
+        for field in ('provenance', 'source_checkpoint'):
+            self.config['input_sha256'][field] = checksum(Path(self.config['paths'][field]))
+        self.reader = GraphReader(self.nodes, self.edges)
+        self.reader.database_identity = lambda: 'physical-fixture-db'
+        self.calls = []
+
+    def execute(self, run_id='fixture-run', **kwargs):
+        api = self.api()
+        self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
+        def forbidden(*args, **kw):
+            self.calls.append('side-effect-factory')
+            raise AssertionError('NO_OP/replay constructed provider or graph writer')
+        return api.run(self.config, run_id=run_id, reader=self.reader, project_client=self.projects,
+                       vectorizer_factory=forbidden, writer_factory=forbidden, **kwargs)
+
+    def record(self, filename='receipt.json', run_id='fixture-run'):
+        return json.loads((self.root / 'runs' / run_id / filename).read_bytes())
+
+    def test_nine_stages_stream_existing_vectors_without_side_effect_factories(self):
+        self.assertEqual(self.execute(), 0)
+        from kag.run_state import STAGES
+        receipt = self.record()
+        self.assertEqual(list(receipt['stages']), sorted(STAGES))
+        events = [json.loads(line) for line in (self.root / 'runs/fixture-run/events.jsonl').read_text().splitlines()]
+        stages = list(dict.fromkeys(e['stage'] for e in events))
+        self.assertEqual(stages, list(STAGES))
+        release = receipt['stages']['release']
+        self.assertEqual(release['kind'], 'SAMPLE/NO_OP')
+        self.assertEqual((release['embedding_calls'], release['graph_writes']), (0, 0))
+        self.assertEqual(self.calls, [])
+        self.assertLessEqual(self.reader.max_batch, self.config['batch_size'])
+        self.assertEqual(receipt['stages']['vectorize']['provenance']['CHUNK_AGGREGATED'], 1)
+
+    def test_interrupted_batches_resume_without_repeating_vectorization(self):
+        from kag.builder.resilient_vectorizer import ResilientVectorizer
+        for stage in ('vectorize', 'export-artifact', 'write-nodes', 'write-edges'):
+            with self.subTest(stage=stage):
+                run_id = 'interrupt-' + stage
+                self.assertEqual(self.execute(run_id, stop_after_batch=(stage, 1)), 1)
+                self.assertEqual(self.record('status.json', run_id)['error_code'], 'INTERRUPTED')
+                calls = []
+                original = ResilientVectorizer.run
+                def bounded(engine, nodes, **kwargs):
+                    calls.append(len(nodes)); self.assertLessEqual(len(nodes), 2)
+                    return original(engine, nodes, **kwargs)
+                with patch.object(ResilientVectorizer, 'run', bounded):
+                    self.assertEqual(self.execute(run_id, resume=True), 0)
+                self.assertEqual(len(calls), 1 if stage == 'vectorize' else 0)
+                self.assertEqual(self.record('status.json', run_id)['state'], 'PASS')
+                self.assertGreater(self.record(run_id=run_id)['stages']['release']['skipped_batches'], 0)
+
+    def test_missing_cached_vector_blocks_without_provider_or_graph_write(self):
+        nodes = copy.deepcopy(self.nodes); nodes[0]['properties'].pop('_title_vector')
+        path = self.root / 'vectors.jsonl'
+        path.write_text(''.join(canonical_json(n) + '\n' for n in nodes), encoding='utf-8')
+        self.config['input_sha256']['vector_artifact'] = checksum(path)
+        self.assertEqual(self.execute(), 2)
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('write-nodes', self.record()['stages'])
+
+    def test_missing_historical_checkpoint_job_blocks(self):
+        with sqlite3.connect(self.root / 'old-checkpoint.sqlite3') as db: db.execute('DELETE FROM jobs')
+        self.config['input_sha256']['source_checkpoint'] = checksum(self.root / 'old-checkpoint.sqlite3')
+        self.assertEqual(self.execute(), 2)
+        self.assertEqual(self.calls, [])
+
+    def test_chunk_sidecar_and_fallback_config_mismatch_block(self):
+        self.config['fallback_config']['max_chunk_chars'] = 7000
+        self.assertEqual(self.execute(), 2)
+        self.assertEqual(self.calls, [])
+
+    def test_resume_rejects_changed_batch_config_and_durable_output(self):
+        self.assertEqual(self.execute(stop_after_batch=('write-nodes', 1)), 1)
+        original = self.config['batch_size']; self.config['batch_size'] = 1
+        self.assertEqual(self.execute(resume=True), 2)
+        self.config['batch_size'] = original
+        path = self.root / 'runs/fixture-run/vectorized_nodes.jsonl'
+        path.write_bytes(path.read_bytes()[:-1])
+        self.assertEqual(self.execute(resume=True), 2)
+        self.assertEqual(self.calls, [])
+
+    def test_full_node_readback_failure_prevents_every_edge_stage(self):
+        from kag import verify
+        original = verify.verify_graph
+        def barrier(reader, **kwargs):
+            if kwargs.get('nodes_only'): raise RunBlocked('NODES')
+            return original(reader, **kwargs)
+        with patch.object(verify, 'verify_graph', barrier):
+            self.assertEqual(self.execute(), 2)
+        self.assertNotIn('write-edges', self.record()['stages'])
+
+    def test_verify_command_shares_expected_artifact_and_read_only_verifier(self):
+        self.assertEqual(self.execute(), 0)
+        api = self.api()
+        self.assertTrue(callable(getattr(api, 'verify_run', None)), 'shared verify entrypoint missing')
+        self.assertEqual(api.verify_run(self.config, run_id='fixture-run', reader=self.reader,
+                                      project_client=self.projects), 0)
+        self.reader.nodes[0]['properties']['title'] = 'changed'
+        self.assertEqual(api.verify_run(self.config, run_id='fixture-run', reader=self.reader,
+                                      project_client=self.projects), 2)
+
+    def test_production_real_writer_barrier_and_ambiguous_ack_resume(self):
+        self.config = self.production()
+        api = self.api()
+        self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
+        writes, writers = [], []
+        class Graph:
+            _host_addr = self.config['endpoints']['openspg']
+            _project_id = 37
+            def write_graph(client, **kwargs):
+                writes.append(kwargs['sub_graph'])
+                if len(writes) == 1: raise TimeoutError('NEVER_LOG_RAW_PROVIDER_BODY')
+        def factory(config):
+            writer = self.adapter.NativeIntegerKGWriter(config, graph_client=Graph())
+            writers.append(writer)
+            return writer
+        options = dict(run_id='production-fixture', reader=self.reader, project_client=self.projects,
+                       writer_factory=factory)
+        self.assertEqual(api.run(self.config, **options), 1)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(api.run(self.config, resume=True, **options), 0)
+        self.assertEqual(len(writes), 3)  # uncertain first node batch read back, remaining node and edge sent once
+        self.assertTrue(writes[-1]['resultEdges'])
+        self.assertEqual(writers[-1]._verified_node_keys, {(n['type'], n['id']) for n in self.nodes})
+        self.assertNotIn('NEVER_LOG_RAW_PROVIDER_BODY', canonical_json(self.record('status.json', 'production-fixture')))
+
+    def test_graph_ack_before_confirmation_recovers_without_resend(self):
+        self.config = self.production()
+        api = self.api()
+        self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
+        from kag.run_state import RunState
+        writes = []
+        class Graph:
+            _host_addr = self.config['endpoints']['openspg']
+            _project_id = 37
+            def write_graph(client, **kwargs): writes.append(kwargs['sub_graph'])
+        factory = lambda config: self.adapter.NativeIntegerKGWriter(config, graph_client=Graph())
+        original = RunState.confirm_batch
+        def crash(state, stage, key, result):
+            if stage == 'write-nodes': raise RuntimeError('synthetic crash before ledger confirmation')
+            return original(state, stage, key, result)
+        options = dict(run_id='ack-fixture', reader=self.reader, project_client=self.projects, writer_factory=factory)
+        with patch.object(RunState, 'confirm_batch', crash): self.assertEqual(api.run(self.config, **options), 1)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(api.run(self.config, resume=True, **options), 0)
+        self.assertEqual(len(writes), 3)
+
+    def test_blocked_preflight_keeps_factories_unused_and_lock_can_be_reused(self):
+        self.config['input_sha256']['provenance'] = '0' * 64
+        self.assertEqual(self.execute(), 2)
+        self.assertEqual(self.calls, [])
+        lock = GraphLock('/run/kag-locks', 'physical-fixture-db', {'run_id': 'other'})
+        lock.acquire(); lock.release()
+
+    def test_invalid_provider_fallback_blocks_before_model_factory(self):
+        self.config = self.production()
+        self.config.update(vector_policy='provider', embedding_model={'type': 'openai',
+            'base_url': 'https://embedding.invalid/v1', 'model': 'example-model', 'timeout': 60})
+        self.config['fallback_config']['max_chunk_chars'] = 0
+        calls = []
+        result = self.api().run(self.config, run_id='invalid-provider', reader=self.reader, project_client=self.projects,
+            vectorizer_factory=lambda *args: calls.append('provider'))
+        self.assertEqual((result, calls), (2, []))
+
+    def test_default_provider_uses_pinned_adapter_and_bounded_content_targets(self):
+        self.config = self.production()
+        self.config.update(write_mode='NO_OP', vector_policy='provider', embedding_model={'type': 'openai',
+            'base_url': 'https://embedding.invalid/v1', 'model': 'example-model', 'timeout': 60})
+        from kag.common.vectorize_model import openai_model
+        requests = []
+        def create(**kwargs):
+            requests.append(kwargs['input'])
+            return SimpleNamespace(data=[SimpleNamespace(embedding=[0.01] * 3072) for _ in kwargs['input']])
+        client = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+        client.with_options = lambda **kwargs: client
+        with patch.dict('os.environ', {'TEST_EMBEDDING_KEY': 'synthetic-fixture-key'}), \
+                patch.object(openai_model, 'OpenAI', return_value=client), \
+                patch.object(openai_model, 'AsyncOpenAI', return_value=SimpleNamespace()):
+            self.assertEqual(self.api().run(self.config, run_id='provider-fixture', reader=self.reader,
+                project_client=self.projects), 0)
+        self.assertTrue(requests)
+        self.assertTrue(all(len(batch) <= self.config['batch_size'] * 2 for batch in requests))
+        receipt = self.record(run_id='provider-fixture')
+        self.assertGreater(receipt['stages']['release']['embedding_calls'], 0)
+        self.assertEqual(receipt['stages']['release']['graph_writes'], 0)
 
 
 if __name__ == '__main__':

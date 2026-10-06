@@ -5,11 +5,14 @@ import math
 from pathlib import Path
 import re
 import sqlite3
+import os
+import uuid
+from collections import Counter, defaultdict
 from urllib.parse import urlsplit
 
 from kag.builder import production_scope as c3
 from kag.builder.codec import canonical_json
-from kag.run_state import ROOT, STAGES, RunBlocked
+from kag.run_state import ROOT, STAGES, RunBlocked, RunState, GraphLock, atomic_json, validate_run_directory
 
 
 COMMON_LOCK_ROOT = Path('/run/kag-locks')
@@ -100,6 +103,10 @@ def _config(value):
             raise RunBlocked('CONFIG')
         if not isinstance(config['fallback_config'], dict):
             raise RunBlocked('CONFIG')
+        from kag.builder.resilient_vectorizer import ResilientVectorizer
+        validator = ResilientVectorizer(None, model_identity=config['model_identity'], dimension=3072,
+                                       embedding_fallback=config['fallback_config'])
+        validator.close()
         return config
     except (c3.ProductionScopeError, KeyError, TypeError, ValueError, AttributeError) as error:
         if isinstance(error, RunBlocked): raise
@@ -300,10 +307,374 @@ def iter_source_batches(db_path, kind, batch_size):
         raise RunBlocked('CONFIG')
     db = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)
     try:
-        rows = db.execute('SELECT payload FROM runner_sources WHERE kind=? ORDER BY ordinal', (kind,))
+        cursor = -1
         while True:
-            batch = rows.fetchmany(batch_size)
+            # Finish the read transaction before yielding: RunState writes this same ledger.
+            batch = db.execute('SELECT ordinal,payload FROM runner_sources WHERE kind=? AND ordinal>? '
+                               'ORDER BY ordinal LIMIT ?', (kind, cursor, batch_size)).fetchall()
             if not batch: return
-            yield [json.loads(row[0]) for row in batch]
+            cursor = batch[-1][0]
+            yield [json.loads(row[1]) for row in batch]
     finally:
         db.close()
+
+
+def _clients(config, project_client, reader):
+    from kag.bootstrap import initialize
+    initialize()
+    if project_client is None:
+        from knext.project.client import ProjectClient
+        project_client = ProjectClient(host_addr=config['endpoints']['openspg'])
+    if reader is None:
+        from kag.verify import Neo4jReadClient
+        names = config['credential_env']
+        username, password = os.environ.get(names['neo4j_username']), os.environ.get(names['neo4j_password'])
+        if not username or not password: raise RunBlocked('CONFIG')
+        reader = Neo4jReadClient(config['endpoints']['neo4j_http'], config['database'],
+                                 username=username, password=password, timeout=60)
+    return project_client, reader
+
+
+def _provider(config, verified):
+    from kag.common.vectorize_model.openai_model import OpenAIVectorizeModel
+    from kag.builder.component.vectorizer.batch_vectorizer import BatchVectorizer
+    from kag.builder.resilient_vectorizer import TARGETS
+    key = os.environ.get(config['credential_env']['embedding_key'])
+    if not key: raise RunBlocked('CONFIG')
+    model = dict(config['embedding_model']); model.pop('type')
+    adapter = OpenAIVectorizeModel(**model, api_key=key, vector_dimensions=3072)
+    # Upstream constructor reads global KAG config. Supply its exact attributes explicitly,
+    # as the existing scoped writer does; retain upstream generator/adapter behavior.
+    batch = BatchVectorizer.__new__(BatchVectorizer)
+    batch.kag_project_config = verified['writer_config']
+    batch.project_id = verified['writer_config'].project_id
+    batch.vectorize_model, batch.sparse_vectorize_model = adapter, None
+    batch.batch_size = config['batch_size']
+    batch.disable_generation = [local + '.name' for local in (*TARGETS, 'Entity')]
+    batch.vec_meta = (defaultdict(list, {local: [field for _, field in targets]
+                                       for local, targets in TARGETS.items()}), {})
+    return batch
+
+
+def _publish_jsonl(path, records):
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    count, digest = 0, hashlib.sha256()
+    try:
+        with temporary.open('xb') as stream:
+            for record in records:
+                line = (canonical_json(record) + '\n').encode()
+                stream.write(line); digest.update(line); count += 1
+            stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {'file': path.name, 'sha256': digest.hexdigest(), 'count': count}
+
+
+def _check_output(state, result):
+    path = state._owned_file(result['file'])
+    if not path.is_file() or c3._checksum(path) != result['sha256']:
+        raise RunBlocked('INTEGRITY')
+    return path
+
+
+def _replay_index(config, state, verified):
+    from kag.verify import index_expected
+    path = state._owned_file('replay.sqlite3')
+    db = sqlite3.connect(path)
+    try:
+        db.execute('CREATE TABLE IF NOT EXISTS replay_nodes (key TEXT PRIMARY KEY,payload TEXT)')
+        db.execute('CREATE TABLE IF NOT EXISTS replay_jobs (key TEXT PRIMARY KEY,payload TEXT)')
+        provenance = json.loads(Path(config['paths']['provenance']).read_bytes())
+        chunks = json.loads(Path(config['paths']['chunk_manifest']).read_bytes())
+        if provenance['model_identity'] != config['model_identity'] or provenance['dimension'] != 3072:
+            raise RunBlocked('PROVENANCE')
+        aggregates = [job['fallback'] for job in provenance['jobs'] if job.get('embedding_method') == 'CHUNK_AGGREGATED']
+        if (chunks['source_count'] != len(aggregates) or
+                sorted(canonical_json(s) for s in chunks['sources']) != sorted(canonical_json(s) for s in aggregates)):
+            raise RunBlocked('PROVENANCE')
+        with db:
+            db.execute('DELETE FROM replay_nodes'); db.execute('DELETE FROM replay_jobs')
+            for spec in _jsonl(config['paths']['vector_artifact']):
+                key = (spec['type'], spec['id'])
+                original = dict(spec, properties={k: v for k, v in spec['properties'].items() if not k.startswith('_')})
+                if verified['node_hashes'].get(key) != c3._spec_hash(original): raise RunBlocked('PLAN')
+                db.execute('INSERT INTO replay_nodes VALUES (?,?)', (canonical_json(key), canonical_json(spec)))
+            if db.execute('SELECT COUNT(*) FROM replay_nodes').fetchone()[0] != len(verified['node_hashes']):
+                raise RunBlocked('VECTORS')
+            for job in provenance['jobs']:
+                if job.get('embedding_method') == 'CHUNK_AGGREGATED' and job['fallback_config'] != config['fallback_config']:
+                    raise RunBlocked('PROVENANCE')
+                key = [job['node_type'], job['node_id'], job['property']]
+                db.execute('INSERT INTO replay_jobs VALUES (?,?)', (canonical_json(key), canonical_json(job)))
+        def nodes():
+            for (payload,) in db.execute('SELECT payload FROM replay_nodes ORDER BY key'): yield json.loads(payload)
+        index_expected(path, nodes(), (e for b in iter_source_batches(state.run_dir / 'ledger.sqlite3',
+            'edges', config['batch_size']) for e in b), contract=verified['contract'], provenance=iter(provenance['jobs']))
+    except (KeyError, sqlite3.DatabaseError, ValueError, TypeError) as error:
+        if isinstance(error, RunBlocked): raise
+        raise RunBlocked('PROVENANCE') from None
+    finally:
+        db.close()
+    return path
+
+
+def _cached_batch(config, path, originals):
+    from kag.builder.resilient_vectorizer import TARGETS
+    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
+    old = sqlite3.connect(Path(config['paths']['source_checkpoint']).resolve().as_uri() + '?mode=ro', uri=True)
+    nodes, jobs = [], []
+    try:
+        for original in originals:
+            row = db.execute('SELECT payload FROM replay_nodes WHERE key=?',
+                             (canonical_json([original['type'], original['id']]),)).fetchone()
+            if row is None: raise RunBlocked('VECTORS')
+            node = json.loads(row[0]); nodes.append(node)
+            for prop, field in TARGETS[original['type'].rsplit('.', 1)[-1]]:
+                key = canonical_json([original['type'], original['id'], prop])
+                row = db.execute('SELECT payload FROM replay_jobs WHERE key=?', (key,)).fetchone()
+                cached = old.execute('SELECT state FROM jobs WHERE identity=?', (key,)).fetchone()
+                if row is None or cached is None: raise RunBlocked('VECTORS')
+                job, entry = json.loads(row[0]), json.loads(cached[0])
+                fields = ('node_type', 'node_id', 'property', 'source_sha256', 'model_identity', 'dimension',
+                          'status', 'embedding_method')
+                if (any(entry.get(k) != job[k] for k in fields)
+                        or entry.get('vector') != node['properties'].get(field)
+                        or any(entry.get(k) != job.get(k) for k in ('fallback', 'fallback_config', 'direct_failure'))):
+                    raise RunBlocked('PROVENANCE')
+                jobs.append(job)
+    except (sqlite3.DatabaseError, KeyError, TypeError, ValueError) as error:
+        if isinstance(error, RunBlocked): raise
+        raise RunBlocked('VECTORS') from None
+    finally:
+        db.close(); old.close()
+    return nodes, jobs
+
+
+class _Interrupted(Exception):
+    pass
+
+
+def _batch_rows(state, stage):
+    return [(key, json.loads(result)) for key, result in state.db.execute(
+        "SELECT key,result FROM run_batches WHERE stage=? AND state='CONFIRMED' ORDER BY CAST(key AS INTEGER)", (stage,))]
+
+
+def _confirmed_progress(state, stage):
+    return sum(result['count'] for _, result in _batch_rows(state, stage))
+
+
+def _stop(stop, stage, ordinal):
+    if stop == (stage, ordinal + 1): raise _Interrupted()
+
+
+def _vectorize(config, state, verified, replay_path, factory, stop):
+    from kag.builder.resilient_vectorizer import ResilientVectorizer, IncompleteVectorization
+    total = len(verified['node_hashes'])
+    if not state.completed_stage('vectorize'):
+        state.update('vectorize', 'RUNNING', _confirmed_progress(state, 'vectorize'), total)
+    engine = None
+    try:
+        for ordinal, originals in enumerate(iter_source_batches(state.run_dir / 'ledger.sqlite3', 'nodes', config['batch_size'])):
+            digest = c3._spec_hash(originals)
+            prior = state.begin_batch('vectorize', str(ordinal), digest)
+            if prior['state'] == 'CONFIRMED':
+                _check_output(state, prior['result']['nodes']); _check_output(state, prior['result']['jobs'])
+                continue
+            if engine is None:
+                batch = None if replay_path else (factory or _provider)(config, verified)
+                engine = ResilientVectorizer(batch, model_identity=config['model_identity'], dimension=3072,
+                    checkpoint_path=state._owned_file('vectors.sqlite3'), embedding_fallback=config['fallback_config'])
+            jobs = None
+            if replay_path:
+                cached, jobs = _cached_batch(config, replay_path, originals)
+                engine.import_successes(originals, cached, artifact_model_identity=config['model_identity'],
+                                        artifact_dimension=3072, artifact_jobs=jobs)
+            try:
+                result = engine.run(originals); result.require_complete()
+            except IncompleteVectorization:
+                raise RunBlocked('VECTORS') from None
+            output = _publish_jsonl(state._owned_file(f'vectors-{ordinal}.jsonl'), result.iter_nodes())
+            sidecar = _publish_jsonl(state._owned_file(f'jobs-{ordinal}.jsonl'), iter(jobs if jobs is not None else result.jobs))
+            records = jobs if jobs is not None else result.jobs
+            methods = Counter(j['embedding_method'] for j in records if j['status'] == 'SUCCESS')
+            state.confirm_batch('vectorize', str(ordinal), dict(count=len(originals), nodes=output, jobs=sidecar,
+                embedding_calls=result.provider_requests, candidates=len(records),
+                nonempty=result.counts['successful'], skipped_empty=result.counts['skipped_empty'], provenance=dict(methods)))
+            state.update('vectorize', 'RUNNING', _confirmed_progress(state, 'vectorize'), total)
+            _stop(stop, 'vectorize', ordinal)
+        methods, counts = Counter(), Counter()
+        for _, result in _batch_rows(state, 'vectorize'):
+            methods.update(result['provenance'])
+            counts.update({k: result[k] for k in ('count', 'embedding_calls', 'candidates', 'nonempty', 'skipped_empty')})
+        receipt = dict(counts, provenance=dict(methods), dimension=3072)
+        if not state.completed_stage('vectorize'): state.finish_stage('vectorize', receipt)
+        elif state.completed_stage('vectorize') != receipt: raise RunBlocked('INTEGRITY')
+    finally:
+        if engine is not None: engine.close()
+
+
+def _export(config, state, stop):
+    stage = 'export-artifact'
+    previous = state.completed_stage(stage)
+    if previous:
+        for result in previous.values(): _check_output(state, result)
+        return previous
+    rows = _batch_rows(state, 'vectorize')
+    state.update(stage, 'RUNNING', _confirmed_progress(state, stage), len(rows))
+    for ordinal, (_, result) in enumerate(rows):
+        prior = state.begin_batch(stage, str(ordinal), c3._spec_hash(result))
+        _check_output(state, result['nodes']); _check_output(state, result['jobs'])
+        if prior['state'] != 'CONFIRMED':
+            state.confirm_batch(stage, str(ordinal), {'count': 1})
+            state.update(stage, 'RUNNING', _confirmed_progress(state, stage), len(rows))
+            _stop(stop, stage, ordinal)
+    def records(kind):
+        for _, result in rows: yield from _jsonl(_check_output(state, result[kind]))
+    output = {'nodes': _publish_jsonl(state._owned_file('vectorized_nodes.jsonl'), records('nodes')),
+              'jobs': _publish_jsonl(state._owned_file('provenance.jsonl'), records('jobs'))}
+    if output['nodes']['count'] != state.completed_stage('vectorize')['count']: raise RunBlocked('INTEGRITY')
+    state.finish_stage(stage, output)
+    return output
+
+
+def _node_batches(state, output, batch_size):
+    batch = []
+    for node in _jsonl(_check_output(state, output['nodes'])):
+        batch.append(node)
+        if len(batch) == batch_size:
+            yield batch; batch = []
+    if batch: yield batch
+
+
+def _graph_batches(config, state, verified, reader, writer, kind, output, stop):
+    from kag.builder.writer_adapter import to_subgraphs
+    from kag.verify import verify_batch
+    stage = 'write-' + kind
+    total = len(verified['node_hashes' if kind == 'nodes' else 'edge_hashes'])
+    if not state.completed_stage(stage): state.update(stage, 'RUNNING', _confirmed_progress(state, stage), total)
+    batches = (_node_batches(state, output, config['batch_size']) if kind == 'nodes' else
+               iter_source_batches(state.run_dir / 'ledger.sqlite3', kind, config['batch_size']))
+    for ordinal, specs in enumerate(batches):
+        key, digest = str(ordinal), c3._spec_hash(specs)
+        existed = state.db.execute('SELECT state FROM run_batches WHERE stage=? AND key=?', (stage, key)).fetchone()
+        prior = state.begin_batch(stage, key, digest)
+        if prior['state'] == 'CONFIRMED': continue
+        writes = 0
+        if config['write_mode'] == 'WRITE' and existed is None:
+            verified['writer_config'].__post_init__()
+            for graph in to_subgraphs(specs, config['batch_size'], kind, verified['writer_config']):
+                writer.write_subgraph(graph, kind); writes += 1
+        # Any prior INTENT is uncertain: readback only; never blind resend.
+        result = verify_batch(reader, specs, kind=kind, contract=verified['contract'])
+        state.confirm_batch(stage, key, dict(result, count=len(specs), graph_writes=writes))
+        state.update(stage, 'RUNNING', _confirmed_progress(state, stage), total)
+        _stop(stop, stage, ordinal)
+    result = {'count': total, 'graph_writes': sum(r['graph_writes'] for _, r in _batch_rows(state, stage))}
+    if not state.completed_stage(stage): state.finish_stage(stage, result)
+    elif state.completed_stage(stage) != result: raise RunBlocked('INTEGRITY')
+
+
+def _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory, stop, verify_only=False):
+    state, lock, directory, identity = None, None, None, None
+    try:
+        config = _config(config)
+        directory = validate_run_directory(config['paths']['run_root'], run_id,
+            read_only_paths=[v for k, v in config['paths'].items() if v and k not in ('run_root', 'lock_root')])
+        project_client, reader = _clients(config, project_client, reader)
+        verified = preflight(config, project_client=project_client, reader=reader)
+        identity = dict(verified['identity'], run_id=run_id)
+        lock = GraphLock(config['paths']['lock_root'], verified['database_id'], dict(identity,
+            openspg_endpoint=config['endpoints']['openspg'], neo4j_endpoint=config['endpoints']['neo4j_http']))
+        lock.acquire()
+        state = RunState(directory, identity, resume=resume)
+        state.start_heartbeat(config['heartbeat_seconds'])
+        skipped = state.db.execute("SELECT COUNT(*) FROM run_batches WHERE state='CONFIRMED'").fetchone()[0]
+        if not state.completed_stage('preflight'):
+            state.update('preflight', 'RUNNING', 0, 1); state.update('preflight', 'RUNNING', 1, 1)
+            state.finish_stage('preflight', {'identity_hash': c3._spec_hash(identity)})
+        plan = plan_sources(config, db_path=state.run_dir / 'ledger.sqlite3', verified=verified)
+        if not state.completed_stage('plan'):
+            state.update('plan', 'RUNNING', plan['nodes'] + plan['edges'], plan['nodes'] + plan['edges'])
+            state.finish_stage('plan', plan)
+        from kag.verify import index_expected, verify_graph
+        if verify_only:
+            output = state.completed_stage('export-artifact')
+            if output is None: raise RunBlocked('INTEGRITY')
+            for result in output.values(): _check_output(state, result)
+        else:
+            replay = _replay_index(config, state, verified) if config['vector_policy'] == 'replay-existing' else None
+            _vectorize(config, state, verified, replay, vectorizer_factory, stop)
+            output = _export(config, state, stop)
+        expected = index_expected(state.run_dir / 'ledger.sqlite3', _jsonl(_check_output(state, output['nodes'])),
+            (e for b in iter_source_batches(state.run_dir / 'ledger.sqlite3', 'edges', config['batch_size']) for e in b),
+            contract=verified['contract'], provenance=_jsonl(_check_output(state, output['jobs'])))
+        if verify_only:
+            result = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+                                  batch_size=config['batch_size'])
+            atomic_json(state._owned_file('verification.json'), result)
+            state.update('verify', 'PASS', 1, 1)
+            return 0
+        writer = None
+        if config['write_mode'] == 'WRITE':
+            from kag.builder.writer_adapter import NativeIntegerKGWriter
+            writer = (writer_factory or NativeIntegerKGWriter)(verified['writer_config'])
+        _graph_batches(config, state, verified, reader, writer, 'nodes', output, stop)
+        # Recheck the full barrier on resume before any remaining edge dispatch.
+        barrier = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+                               batch_size=config['batch_size'], nodes_only=True)
+        if not state.completed_stage('verify-nodes'):
+            state.update('verify-nodes', 'RUNNING', barrier['nodes']['total'], plan['nodes'])
+            state.finish_stage('verify-nodes', barrier)
+        elif state.completed_stage('verify-nodes') != barrier: raise RunBlocked('INTEGRITY')
+        if writer:
+            for batch in iter_source_batches(state.run_dir / 'ledger.sqlite3', 'nodes', config['batch_size']):
+                writer._mark_nodes_verified(batch)
+        _graph_batches(config, state, verified, reader, writer, 'edges', output, stop)
+        result = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+                              batch_size=config['batch_size'])
+        if not state.completed_stage('verify'):
+            state.update('verify', 'RUNNING', 1, 1); state.finish_stage('verify', result)
+        elif state.completed_stage('verify') != result: raise RunBlocked('INTEGRITY')
+        _revalidate(verified)
+        if not state.completed_stage('release'):
+            vectors = state.completed_stage('vectorize')
+            release = {'kind': 'SAMPLE/NO_OP' if config['scope'] == 'C4_3A_MANIFEST_SAMPLE' else config['scope'] + '/' + config['write_mode'],
+                'embedding_calls': vectors['embedding_calls'], 'graph_writes': sum(
+                    state.completed_stage('write-' + kind)['graph_writes'] for kind in ('nodes', 'edges')),
+                'skipped_batches': skipped, 'expected': expected, 'fingerprint': result['fingerprint'],
+                'artifacts': output, 'vectors': vectors}
+            state.update('release', 'RUNNING', 1, 1); state.finish_stage('release', release)
+        else:
+            state.update('release', 'PASS', 1, 1)
+            state._receipt()
+        return 0
+    except Exception as error:
+        code = 'INTERRUPTED' if isinstance(error, _Interrupted) else error.code if isinstance(error, RunBlocked) else 'RUNTIME'
+        blocked = isinstance(error, RunBlocked)
+        # Preflight/lock refusals still receive a sanitized status when a safe fresh path exists.
+        if state is None and directory is not None and not directory.exists():
+            try:
+                state = RunState(directory, identity or {'run_id': run_id, 'scope': config['scope']})
+            except Exception:
+                pass
+        if state is not None:
+            try:
+                state.update(state.status['stage'], 'BLOCKED' if blocked else 'ERROR',
+                             state.status['done'], state.status['total'], error_code=code)
+                state._receipt()
+            except Exception:
+                pass
+        return 2 if blocked else 1
+    finally:
+        if state is not None: state.close()
+        if lock is not None and lock.acquired: lock.release()
+
+
+def run(config, *, run_id, resume=False, project_client=None, reader=None, vectorizer_factory=None,
+        writer_factory=None, stop_after_batch=None):
+    return _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory, stop_after_batch)
+
+
+def verify_run(config, *, run_id, reader=None, project_client=None):
+    return _execute(config, run_id, True, project_client, reader, None, None, None, verify_only=True)
