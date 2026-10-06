@@ -475,6 +475,15 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertGreater(receipt['stages']['release']['embedding_calls'], 0)
         self.assertEqual(receipt['stages']['release']['graph_writes'], 0)
 
+    def test_expected_index_spill_cannot_lock_source_or_replay_reader(self):
+        connect = sqlite3.connect
+        def small_cache(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.execute('PRAGMA cache_size=1')
+            return db
+        with patch('sqlite3.connect', small_cache):
+            self.assertEqual(self.execute(), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

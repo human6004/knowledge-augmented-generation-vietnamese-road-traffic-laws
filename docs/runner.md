@@ -97,7 +97,7 @@ VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi trong ki�
 
 ## Resume, trạng thái và lock
 
-Run ở `/runs/<run-id>` gồm `ledger.sqlite3`, checkpoint, JSONL batch/export,
+Run ở `/runs/<run-id>` gồm `ledger.sqlite3`, `expected.sqlite3`, checkpoint, JSONL batch/export,
 `status.json`, `events.jsonl`, `batches.jsonl`, `receipt.json`.
 Status/receipt ghi atomic; timestamps UTC. Heartbeat tiếp tục khi batch lâu.
 Events/batches append-only, sequence + previous_hash + record_hash, SQLite outbox

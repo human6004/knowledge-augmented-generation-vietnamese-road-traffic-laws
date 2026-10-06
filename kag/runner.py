@@ -411,7 +411,7 @@ def _replay_index(config, state, verified):
                 db.execute('INSERT INTO replay_jobs VALUES (?,?)', (canonical_json(key), canonical_json(job)))
         def nodes():
             for (payload,) in db.execute('SELECT payload FROM replay_nodes ORDER BY key'): yield json.loads(payload)
-        index_expected(path, nodes(), (e for b in iter_source_batches(state.run_dir / 'ledger.sqlite3',
+        index_expected(state._owned_file('expected.sqlite3'), nodes(), (e for b in iter_source_batches(state.run_dir / 'ledger.sqlite3',
             'edges', config['batch_size']) for e in b), contract=verified['contract'], provenance=iter(provenance['jobs']))
     except (KeyError, sqlite3.DatabaseError, ValueError, TypeError) as error:
         if isinstance(error, RunBlocked): raise
@@ -608,11 +608,12 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
             replay = _replay_index(config, state, verified) if config['vector_policy'] == 'replay-existing' else None
             _vectorize(config, state, verified, replay, vectorizer_factory, stop)
             output = _export(config, state, stop)
-        expected = index_expected(state.run_dir / 'ledger.sqlite3', _jsonl(_check_output(state, output['nodes'])),
+        expected_path = state._owned_file('expected.sqlite3')
+        expected = index_expected(expected_path, _jsonl(_check_output(state, output['nodes'])),
             (e for b in iter_source_batches(state.run_dir / 'ledger.sqlite3', 'edges', config['batch_size']) for e in b),
             contract=verified['contract'], provenance=_jsonl(_check_output(state, output['jobs'])))
         if verify_only:
-            result = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+            result = verify_graph(reader, db_path=expected_path, contract=verified['contract'],
                                   batch_size=config['batch_size'])
             atomic_json(state._owned_file('verification.json'), result)
             state.update('verify', 'PASS', 1, 1)
@@ -623,7 +624,7 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
             writer = (writer_factory or NativeIntegerKGWriter)(verified['writer_config'])
         _graph_batches(config, state, verified, reader, writer, 'nodes', output, stop)
         # Recheck the full barrier on resume before any remaining edge dispatch.
-        barrier = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+        barrier = verify_graph(reader, db_path=expected_path, contract=verified['contract'],
                                batch_size=config['batch_size'], nodes_only=True)
         if not state.completed_stage('verify-nodes'):
             state.update('verify-nodes', 'RUNNING', barrier['nodes']['total'], plan['nodes'])
@@ -633,7 +634,7 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
             for batch in iter_source_batches(state.run_dir / 'ledger.sqlite3', 'nodes', config['batch_size']):
                 writer._mark_nodes_verified(batch)
         _graph_batches(config, state, verified, reader, writer, 'edges', output, stop)
-        result = verify_graph(reader, db_path=state.run_dir / 'ledger.sqlite3', contract=verified['contract'],
+        result = verify_graph(reader, db_path=expected_path, contract=verified['contract'],
                               batch_size=config['batch_size'])
         if not state.completed_stage('verify'):
             state.update('verify', 'RUNNING', 1, 1); state.finish_stage('verify', result)
