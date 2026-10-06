@@ -208,6 +208,9 @@ def preflight(config, *, project_client, reader):
             node_hashes = {(n['type'], n['id']): data['node_hashes'][(n['type'], n['id'])] for n in nodes}
             edge_hashes = {tuple(e['tuple']): data['edge_hashes'][tuple(e['tuple'])] for e in edges}
             checksums.extend(data['file_checksums'])
+        # The pinned server SDK exposes no physical backend identity for GraphClient.
+        # A reader's independent databaseID cannot authorize dispatch through OpenSPG.
+        if config['write_mode'] == 'WRITE': raise RunBlocked('SCOPE')
         database_id = reader.database_identity()
         if not isinstance(database_id, str) or not database_id.strip():
             raise RunBlocked('LOCK')
@@ -221,7 +224,7 @@ def preflight(config, *, project_client, reader):
             'vendor_commit': 'fdab15b3929d2ee40dfcdd388f90233096a6afc9', 'common_lock': mount}
         return {'writer_config': writer_config, 'contract': contract, 'identity': identity, 'database_id': database_id,
                 'node_hashes': node_hashes, 'edge_hashes': edge_hashes, 'file_checksums': tuple(checksums)}
-    except (TimeoutError, ConnectionError):
+    except (TimeoutError, ConnectionError, RuntimeError):
         raise RuntimeError('Graph transport unavailable.') from None
     except (c3.ProductionScopeError, OSError, KeyError, ValueError, TypeError) as error:
         if isinstance(error, RunBlocked): raise
@@ -487,6 +490,11 @@ def _vectorize(config, state, verified, replay_path, factory, stop):
                 batch = None if replay_path else (factory or _provider)(config, verified)
                 engine = ResilientVectorizer(batch, model_identity=config['model_identity'], dimension=3072,
                     checkpoint_path=state._owned_file('vectors.sqlite3'), embedding_fallback=config['fallback_config'])
+                adapter_call = engine._adapter_call
+                def counted_call(texts, timeout):
+                    state.record_attempt('vectorize', str(ordinal), 'embedding_calls')
+                    return adapter_call(texts, timeout)
+                engine._adapter_call = counted_call
             jobs = None
             if replay_path:
                 cached, jobs = _cached_batch(config, replay_path, originals)
@@ -500,8 +508,9 @@ def _vectorize(config, state, verified, replay_path, factory, stop):
             sidecar = _publish_jsonl(state._owned_file(f'jobs-{ordinal}.jsonl'), iter(jobs if jobs is not None else result.jobs))
             records = jobs if jobs is not None else result.jobs
             methods = Counter(j['embedding_method'] for j in records if j['status'] == 'SUCCESS')
+            attempts = state.begin_batch('vectorize', str(ordinal), digest)['result'] or {}
             state.confirm_batch('vectorize', str(ordinal), dict(count=len(originals), nodes=output, jobs=sidecar,
-                embedding_calls=result.provider_requests, candidates=len(records),
+                embedding_calls=attempts.get('embedding_calls', 0), candidates=len(records),
                 nonempty=result.counts['successful'], skipped_empty=result.counts['skipped_empty'], provenance=dict(methods)))
             state.update('vectorize', 'RUNNING', _confirmed_progress(state, 'vectorize'), total)
             _stop(stop, 'vectorize', ordinal)
@@ -562,11 +571,12 @@ def _graph_batches(config, state, verified, reader, writer, kind, output, stop):
         existed = state.db.execute('SELECT state FROM run_batches WHERE stage=? AND key=?', (stage, key)).fetchone()
         prior = state.begin_batch(stage, key, digest)
         if prior['state'] == 'CONFIRMED': continue
-        writes = 0
+        writes = (prior['result'] or {}).get('graph_writes', 0)
         if config['write_mode'] == 'WRITE' and existed is None:
             verified['writer_config'].__post_init__()
             for graph in to_subgraphs(specs, config['batch_size'], kind, verified['writer_config']):
-                writer.write_subgraph(graph, kind); writes += 1
+                writes = state.record_attempt(stage, key, 'graph_writes')
+                writer.write_subgraph(graph, kind)
         # Any prior INTENT is uncertain: readback only; never blind resend.
         result = verify_batch(reader, specs, kind=kind, contract=verified['contract'])
         state.confirm_batch(stage, key, dict(result, count=len(specs), graph_writes=writes))
@@ -617,6 +627,7 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
                                   batch_size=config['batch_size'])
             atomic_json(state._owned_file('verification.json'), result)
             state.update('verify', 'PASS', 1, 1)
+            state._receipt()
             return 0
         writer = None
         if config['write_mode'] == 'WRITE':

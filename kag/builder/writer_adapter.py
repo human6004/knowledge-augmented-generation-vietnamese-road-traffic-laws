@@ -15,10 +15,18 @@ from kag.builder.production_scope import (ProductionSettings, ProductionScope,
 from kag.builder.model.sub_graph import Edge, Node, SubGraph
 from kag.builder.component.writer.kg_writer import AlterOperationEnum, KGWriter
 from knext.graph.client import GraphClient
+from knext.common.rest.exceptions import ApiException
+from urllib3.exceptions import HTTPError
 
 
 class WriterAdapterError(ValueError):
     """A graph spec or target is outside the C4.1 writer contract."""
+
+
+class WriterTransportError(RuntimeError):
+    """Sanitized discovery transport failure; no writer authorization granted."""
+    def __init__(self):
+        super().__init__('Graph transport unavailable.')
 
 
 class NodeReadbackError(WriterAdapterError):
@@ -223,6 +231,12 @@ def discover_manifest_project(project_client: Any, host_addr: str, contract: Map
         if any(len(t) != 5 or (t[0], t[1]) not in allowed_nodes or (t[3], t[4]) not in allowed_nodes
                for t in edge_tuples):
             raise WriterAdapterError('manifest edge endpoint is outside selected nodes')
+    except (TimeoutError, ConnectionError, HTTPError):
+        raise WriterTransportError() from None
+    except ApiException as error:
+        if error.status == 0 or error.status == 429 or error.status >= 500:
+            raise WriterTransportError() from None
+        raise WriterAdapterError('C4.3a project discovery refused') from None
     except WriterAdapterError:
         raise
     except Exception:
@@ -260,6 +274,12 @@ def discover_production_project(project_client: Any, settings: ProductionSetting
                 or str(verified[0]) != str(settings.expected_project_id)
                 or verified[1:] != (name, namespace)):
             raise WriterAdapterError('returned production project ID/name/namespace verification failed')
+    except (TimeoutError, ConnectionError, HTTPError):
+        raise WriterTransportError() from None
+    except ApiException as error:
+        if error.status == 0 or error.status == 429 or error.status >= 500:
+            raise WriterTransportError() from None
+        raise WriterAdapterError('production project discovery refused') from None
     except WriterAdapterError:
         raise
     except Exception:

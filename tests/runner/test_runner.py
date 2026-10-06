@@ -214,6 +214,23 @@ class RunnerPreflightTests(unittest.TestCase):
                 self.projects.records = old
         with self.assertRaises(RunBlocked): self.preflight(reader=Database(None))
 
+    def test_openspg_transport_is_error_for_sample_and_production_discovery(self):
+        from knext.common.rest.exceptions import ApiException
+        from urllib3.exceptions import ReadTimeoutError
+        api = self.api()
+        for production in (False, True):
+            config = self.production() if production else self.config
+            if production: config['write_mode'] = 'NO_OP'
+            method = 'project_get' if production else 'get'
+            for error in (TimeoutError('NEVER_LOG_TRANSPORT_SECRET'), ConnectionError('NEVER_LOG_TRANSPORT_SECRET'),
+                          ReadTimeoutError(None, '/private', 'NEVER_LOG_TRANSPORT_SECRET'),
+                          ApiException(status=503, reason='NEVER_LOG_TRANSPORT_SECRET')):
+                with self.subTest(production=production, error=type(error).__name__), \
+                        patch.object(self.projects, method, side_effect=error):
+                    with self.assertRaises(RuntimeError) as failure:
+                        api.preflight(config, project_client=self.projects, reader=Database())
+                    self.assertNotIn('NEVER_LOG_TRANSPORT_SECRET', str(failure.exception))
+
     def production(self):
         config = copy.deepcopy(self.config)
         config.update(scope='PRODUCTION', project_id=37, project_name='VietRoadTrafficProduction',
@@ -223,7 +240,8 @@ class RunnerPreflightTests(unittest.TestCase):
         return config
 
     def test_production_resolves_name_namespace_then_binds_expected_id(self):
-        verified = self.preflight(self.production())
+        config = self.production(); config['write_mode'] = 'NO_OP'
+        verified = self.preflight(config)
         self.assertEqual(verified['writer_config'].project_id, 37)
         self.assertEqual(verified['writer_config'].scope, 'PRODUCTION')
         self.assertGreaterEqual(self.projects.reads, 2)
@@ -307,6 +325,15 @@ class RunnerExecutionTests(unittest.TestCase):
     def record(self, filename='receipt.json', run_id='fixture-run'):
         return json.loads((self.root / 'runs' / run_id / filename).read_bytes())
 
+    def synthetic_dispatch_scope(self):
+        # Exercise internal writer orchestration; public unproven WRITE remains BLOCKED.
+        api = self.api()
+        readonly = copy.deepcopy(self.config); readonly['write_mode'] = 'NO_OP'
+        verified = api.preflight(readonly, project_client=self.projects, reader=self.reader)
+        verified['identity'].update(write_mode='WRITE', config_hash=scope._spec_hash(self.config))
+        boundary = patch.object(api, 'preflight', return_value=verified)
+        boundary.start(); self.addCleanup(boundary.stop)
+
     def test_nine_stages_stream_existing_vectors_without_side_effect_factories(self):
         self.assertEqual(self.execute(), 0)
         from kag.run_state import STAGES
@@ -386,12 +413,17 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertTrue(callable(getattr(api, 'verify_run', None)), 'shared verify entrypoint missing')
         self.assertEqual(api.verify_run(self.config, run_id='fixture-run', reader=self.reader,
                                       project_client=self.projects), 0)
+        receipt = self.record()
+        for log in ('events', 'batches'):
+            records = [json.loads(line) for line in (self.root / 'runs/fixture-run' / (log + '.jsonl')).read_text().splitlines()]
+            self.assertEqual(receipt['audit'][log], {'sequence': records[-1]['sequence'], 'hash': records[-1]['record_hash']})
         self.reader.nodes[0]['properties']['title'] = 'changed'
         self.assertEqual(api.verify_run(self.config, run_id='fixture-run', reader=self.reader,
                                       project_client=self.projects), 2)
 
     def test_production_real_writer_barrier_and_ambiguous_ack_resume(self):
         self.config = self.production()
+        self.synthetic_dispatch_scope()
         api = self.api()
         self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
         writes, writers = [], []
@@ -411,12 +443,14 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         self.assertEqual(api.run(self.config, resume=True, **options), 0)
         self.assertEqual(len(writes), 3)  # uncertain first node batch read back, remaining node and edge sent once
+        self.assertEqual(self.record(run_id='production-fixture')['stages']['release']['graph_writes'], len(writes))
         self.assertTrue(writes[-1]['resultEdges'])
         self.assertEqual(writers[-1]._verified_node_keys, {(n['type'], n['id']) for n in self.nodes})
         self.assertNotIn('NEVER_LOG_RAW_PROVIDER_BODY', canonical_json(self.record('status.json', 'production-fixture')))
 
     def test_graph_ack_before_confirmation_recovers_without_resend(self):
         self.config = self.production()
+        self.synthetic_dispatch_scope()
         api = self.api()
         self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
         from kag.run_state import RunState
@@ -435,6 +469,23 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         self.assertEqual(api.run(self.config, resume=True, **options), 0)
         self.assertEqual(len(writes), 3)
+        self.assertEqual(self.record(run_id='ack-fixture')['stages']['release']['graph_writes'], len(writes))
+
+    def test_unproven_production_backend_blocks_before_provider_writer_or_lock(self):
+        self.config = self.production()
+        for provider in (False, True):
+            with self.subTest(provider=provider):
+                config = copy.deepcopy(self.config)
+                if provider:
+                    config.update(vector_policy='provider', embedding_model={'type': 'openai',
+                        'base_url': 'https://embedding.invalid/v1', 'model': 'example-model', 'timeout': 60})
+                calls = []
+                with patch('kag.runner.GraphLock.acquire', side_effect=lambda *args: calls.append('lock')):
+                    code = self.api().run(config, run_id='unproven-backend-' + str(provider),
+                        project_client=self.projects, reader=self.reader,
+                        vectorizer_factory=lambda *args: calls.append('provider'),
+                        writer_factory=lambda *args: calls.append('writer'))
+                self.assertEqual((code, calls), (2, []))
 
     def test_blocked_preflight_keeps_factories_unused_and_lock_can_be_reused(self):
         self.config['input_sha256']['provenance'] = '0' * 64
@@ -474,6 +525,33 @@ class RunnerExecutionTests(unittest.TestCase):
         receipt = self.record(run_id='provider-fixture')
         self.assertGreater(receipt['stages']['release']['embedding_calls'], 0)
         self.assertEqual(receipt['stages']['release']['graph_writes'], 0)
+
+    def test_provider_attempts_survive_checkpoint_before_batch_confirmation(self):
+        from kag.run_state import RunState
+        from kag.common.vectorize_model import openai_model
+        self.config = self.production()
+        self.config.update(write_mode='NO_OP', vector_policy='provider', embedding_model={'type': 'openai',
+            'base_url': 'https://embedding.invalid/v1', 'model': 'example-model', 'timeout': 60})
+        requests = []
+        def create(**kwargs):
+            requests.append(kwargs['input'])
+            return SimpleNamespace(data=[SimpleNamespace(embedding=[0.01] * 3072) for _ in kwargs['input']])
+        client = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+        client.with_options = lambda **kwargs: client
+        confirm = RunState.confirm_batch
+        def crash(state, stage, key, result):
+            if stage == 'vectorize': raise RuntimeError('crash-after-provider-checkpoint')
+            return confirm(state, stage, key, result)
+        options = dict(run_id='provider-crash', reader=self.reader, project_client=self.projects)
+        with patch.dict('os.environ', {'TEST_EMBEDDING_KEY': 'synthetic-fixture-key'}), \
+                patch.object(openai_model, 'OpenAI', return_value=client), \
+                patch.object(openai_model, 'AsyncOpenAI', return_value=SimpleNamespace()):
+            with patch.object(RunState, 'confirm_batch', crash):
+                self.assertEqual(self.api().run(self.config, **options), 1)
+            before = len(requests)
+            self.assertGreater(before, 0)
+            self.assertEqual(self.api().run(self.config, resume=True, **options), 0)
+        self.assertEqual(self.record(run_id='provider-crash')['stages']['release']['embedding_calls'], len(requests))
 
     def test_expected_index_spill_cannot_lock_source_or_replay_reader(self):
         connect = sqlite3.connect

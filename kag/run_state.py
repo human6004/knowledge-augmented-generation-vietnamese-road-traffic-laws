@@ -117,6 +117,7 @@ class RunState:
         self._status_lock = threading.Lock()
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = None
+        self._heartbeat_failed = threading.Event()
         self.db = None
         ledger = self._owned_file('ledger.sqlite3')
         if resume != ledger.is_file() or (not resume and self.run_dir.exists() and any(self.run_dir.iterdir())):
@@ -233,6 +234,7 @@ class RunState:
                 self._ack_outbox(log, sequence)
 
     def update(self, stage, state, done, total, *, error_code=None):
+        if state in ('RUNNING', 'PASS'): self._check_heartbeat()
         if (stage not in STAGES or state not in ('RUNNING', 'PASS', 'ERROR', 'BLOCKED')
                 or type(done) is not int or type(total) is not int or not 0 <= done <= total):
             raise RunBlocked('CONFIG')
@@ -252,6 +254,7 @@ class RunState:
             self.status = status
 
     def begin_batch(self, stage, key, source_hash):
+        self._check_heartbeat()
         if stage not in STAGES or not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', source_hash):
             raise RunBlocked('CONFIG')
         row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
@@ -266,7 +269,26 @@ class RunState:
         self._flush_outbox()
         return {'state': 'INTENT', 'result': None}
 
+    def record_attempt(self, stage, key, counter):
+        """Durable dispatch intent; remote completion can remain uncertain."""
+        self._check_heartbeat()
+        if (stage, counter) not in (('vectorize', 'embedding_calls'), ('write-nodes', 'graph_writes'),
+                                     ('write-edges', 'graph_writes')):
+            raise RunBlocked('CONFIG')
+        row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
+                              (stage, key)).fetchone()
+        if row is None or row[1] != 'INTENT': raise RunBlocked('INTEGRITY')
+        result = json.loads(row[2]) if row[2] else {}
+        result[counter] = result.get(counter, 0) + 1
+        with self.db:
+            self.db.execute('UPDATE run_batches SET result=? WHERE stage=? AND key=?',
+                            (canonical_json(result), stage, key))
+            self._enqueue('batches', dict(stage=stage, key=key, source_hash=row[0], state='INTENT', result=result))
+        self._flush_outbox()
+        return result[counter]
+
     def confirm_batch(self, stage, key, result):
+        self._check_heartbeat()
         row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
                               (stage, key)).fetchone()
         encoded = canonical_json(result)
@@ -287,6 +309,7 @@ class RunState:
         return json.loads(row[0]) if row else None
 
     def finish_stage(self, stage, result):
+        self._check_heartbeat()
         if stage not in STAGES:
             raise RunBlocked('CONFIG')
         previous = self.completed_stage(stage)
@@ -294,7 +317,8 @@ class RunState:
             raise RunBlocked('INTEGRITY')
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO run_stages VALUES (?,?)', (stage, canonical_json(result)))
-        self.update(stage, 'PASS', self.status['done'], self.status['total'])
+            # update commits stage result, ledger status and PASS outbox together.
+            self.update(stage, 'PASS', self.status['done'], self.status['total'])
         self._receipt()
 
     def _receipt(self):
@@ -308,11 +332,19 @@ class RunState:
             raise RunBlocked('CONFIG')
         def heartbeat():
             while not self._heartbeat_stop.wait(interval):
-                with self._status_lock:
-                    self.status['heartbeat'] = _utc()
-                    atomic_json(self._owned_file('status.json'), self.status)
+                try:
+                    with self._status_lock:
+                        self.status['heartbeat'] = _utc()
+                        atomic_json(self._owned_file('status.json'), self.status)
+                except Exception:
+                    self._heartbeat_failed.set()
+                    return
         self._heartbeat_thread = threading.Thread(target=heartbeat, name='kag-heartbeat', daemon=True)
         self._heartbeat_thread.start()
+
+    def _check_heartbeat(self):
+        if self._heartbeat_failed.is_set():
+            raise RuntimeError('Runner heartbeat unavailable.')
 
     def close(self):
         self._heartbeat_stop.set()

@@ -4,6 +4,7 @@ import importlib
 import json
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -92,6 +93,36 @@ class RunStateTests(unittest.TestCase):
         with self.assertRaises(self.api().RunBlocked):
             state.finish_stage('skip-everything', {'pass': True})
         self.assertIsNone(state.completed_stage('skip-everything'))
+
+    def test_stage_pass_and_audit_status_commit_together(self):
+        state = self.state()
+        with patch.object(state, 'update', side_effect=RuntimeError('crash-before-PASS')):
+            with self.assertRaises(RuntimeError):
+                state.finish_stage('plan', {'count': 2})
+        state.close()
+        resumed = self.state(resume=True)
+        self.assertIsNone(resumed.completed_stage('plan'))
+        self.assertNotEqual(resumed.status['state'], 'PASS')
+
+    def test_heartbeat_publication_failure_prevents_pass_and_new_batch(self):
+        state = self.state()
+        api = self.api()
+        publish = api.atomic_json
+        failed = threading.Event()
+        def broken(path, value):
+            if threading.current_thread().name == 'kag-heartbeat':
+                failed.set()
+                raise OSError('NEVER_LOG_HEARTBEAT_SECRET')
+            return publish(path, value)
+        with patch('kag.run_state.atomic_json', broken), patch('threading.excepthook'):
+            state.start_heartbeat(0.005)
+            self.assertTrue(failed.wait(1))
+            state._heartbeat_thread.join(timeout=1)
+        with self.assertRaises(RuntimeError): state.finish_stage('plan', {'count': 2})
+        with self.assertRaises(RuntimeError): state.begin_batch('plan', 'one', 'a' * 64)
+        self.assertIsNone(state.completed_stage('plan'))
+        state.update('plan', 'ERROR', 0, 1, error_code='RUNTIME')
+        self.assertNotIn('NEVER_LOG_HEARTBEAT_SECRET', (self.directory / 'status.json').read_text())
 
     def test_resume_refuses_ledger_symlink_before_mutating_target(self):
         api = self.api()

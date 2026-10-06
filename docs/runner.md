@@ -37,6 +37,9 @@ phải điền policy và SHA-256 thực trước chạy. Unknown fields bị t�
 - `confirmation`: null cho sample; production dùng confirmation D0.4 exact.
   Production vẫn resolve name + namespace rồi kiểm ID độc lập và bind C3/schema/
   input bytes; xem [production scope](production-writer-scope.md).
+  Runner hiện BLOCK mọi `WRITE`: SDK OpenSPG đã pin chưa chứng minh physical
+  databaseID của backend writer trùng reader. Matching host/port/config không
+  thay bằng chứng ấy. Chỉ mở dispatch khi có proof thực; D0.4 vẫn bắt buộc.
 - `paths`: absolute `c3_manifest`, `sample_manifest`, `vector_artifact`,
   `provenance`, `chunk_manifest`, `source_checkpoint`, `run_root`, `lock_root`.
   Provider có thể dùng null cho replay inputs; production sample_manifest có thể null.
@@ -84,13 +87,16 @@ write-edges đếm edges; verify/release đếm một gate. Counters không cộ
 Source-only C3 validation giữ behavior D0.4. Vector JSONL đọc từng record vào disk
 index; ResilientVectorizer chỉ nhận một source batch. Run-owned checkpoint và
 batch files giữ vectors ngoài repo. Không list toàn corpus vectorized.
+Memory vector bounded O(batch); cached/export objects có thể cùng tồn tại ở
+batch boundary. Chưa cam kết peak live vector objects đúng một batch.
 Replay kiểm source/model/dimension, provenance/chunk sidecar và checkpoint cũ
 read-only trước import; missing job/vector BLOCK, không gọi provider fallback.
 Provider dùng BatchVectorizer/OpenAIVectorizeModel đã pin, bỏ name generation.
 
 Export fsync + atomic publish JSONL hoàn chỉnh/hash receipt trước graph stages.
-NO_OP exact readback mỗi batch, không tạo graph writer. WRITE dùng scoped
-NativeIntegerKGWriter; full node verification mở barrier trước bất kỳ edge write.
+NO_OP exact readback mỗi batch, không tạo graph writer. Dispatch nội bộ dùng scoped
+NativeIntegerKGWriter với full node barrier; public WRITE hiện BLOCK do thiếu
+physical backend proof như gate ở trên.
 Verify không sửa graph hoặc tạo index: exact identities/payload/3072 finite vectors,
 duplicate/extra/missing, native Integer, endpoints, provenance và bốn content
 VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi trong kiểm tra.
@@ -105,6 +111,9 @@ nonzero vẫn so exact, không tolerance hoặc quantization.
 Run ở `/runs/<run-id>` gồm `ledger.sqlite3`, `expected.sqlite3`, checkpoint, JSONL batch/export,
 `status.json`, `events.jsonl`, `batches.jsonl`, `receipt.json`.
 Status/receipt ghi atomic; timestamps UTC. Heartbeat tiếp tục khi batch lâu.
+Lỗi publish heartbeat được báo main tại boundary kế tiếp, không im lặng PASS.
+Stage result/PASS status/PASS outbox commit cùng transaction. Lệnh verify cập
+nhật receipt để audit anchors khớp tail logs.
 Events/batches append-only, sequence + previous_hash + record_hash, SQLite outbox
 đối chiếu khi resume. Sai/torn tail BLOCK, không truncate log.
 
@@ -113,6 +122,11 @@ không gọi lại vectorizer/writer; output hash còn phải đúng. Completed 
 durable artifacts; node barrier/full verify đọc lại để tránh release graph đã đổi.
 INTENT của graph write chưa confirmed chỉ readback: exact existing state thì
 confirm, thiếu/khác/không chắc thì BLOCK; không blind resend sau timeout.
+`graph_writes`/`embedding_calls` đếm durable dispatch intents trước gọi adapter,
+giữ nguyên khi crash/resume. Remote completion có thể chưa chắc sau timeout;
+crash giữa persist intent và dispatch có thể đếm dư một, không biến call cũ thành 0.
+Không coi counters này là số ACK/remote mutations chính xác. NO_OP/replay zero
+được chứng minh thêm bằng guard không gọi writer/provider.
 
 Lock theo server physical databaseID, không theo endpoint alias/project counter.
 Deployment single machine hiện tại chỉ nhận `/run/kag-locks`, bind exact
