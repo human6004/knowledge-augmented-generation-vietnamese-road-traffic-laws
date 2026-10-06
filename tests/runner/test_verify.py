@@ -203,6 +203,16 @@ class VerifyTests(unittest.TestCase):
                 if kind == 'empty-source': self.reader.nodes[2]['properties']['_ten_vector'] = [0.01] * 3072
                 with self.assertRaises(api.RunBlocked): self.verify()
 
+    def test_signed_zero_serialization_is_semantic_equal_without_numeric_tolerance(self):
+        self.nodes[1]['properties']['_text_vector'][0] = -0.0
+        self.index()
+        self.reader = GraphReader(self.nodes, self.edges)
+        self.reader.nodes[1]['properties']['_text_vector'][0] = 0.0
+        result = self.verify()
+        self.assertEqual(result['vectors']['nonempty'], 3)
+        self.reader.nodes[1]['properties']['_text_vector'][0] = 1e-20
+        with self.assertRaises(self.api().RunBlocked): self.verify()
+
     def test_all_four_online_content_indexes_are_required(self):
         api = self.api()
         self.index()

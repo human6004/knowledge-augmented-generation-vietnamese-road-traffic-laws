@@ -97,6 +97,8 @@ VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi trong ki�
 Neo4j HTTP boundary bỏ đúng một outer JSON layer của OpenSPG storage; id/vectors
 giữ nguyên. Integer phải là native int sau layer này, Text số hoặc double encoding
 vẫn BLOCK. Không tuyên bố JSON Text storage là native Neo4j Integer.
+Vector fingerprint canonical hóa riêng signed zero (`-0.0`/`0.0`); mọi component
+nonzero vẫn so exact, không tolerance hoặc quantization.
 
 ## Resume, trạng thái và lock
 

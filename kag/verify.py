@@ -200,7 +200,9 @@ def _node(record, contract):
         if text:
             if not _valid_vector(props.get(field), 3072):
                 raise RunBlocked('VECTORS')
-            vectors[field] = props[field]
+            # Neo4j JSON emits +0.0 for -0.0; both are the same numeric vector component.
+            # No tolerance or rounding applies to any nonzero component.
+            vectors[field] = [0.0 if value == 0 else value for value in props[field]]
         elif field in props:
             raise RunBlocked('VECTORS')
     key = canonical_json([type_name, identity])
