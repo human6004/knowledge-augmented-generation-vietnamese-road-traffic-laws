@@ -145,9 +145,71 @@ class RunnerPreflightTests(unittest.TestCase):
         helper = getattr(scope, 'validate_c3_manifest', None)
         self.assertTrue(callable(helper), 'shared data-only C3 validator missing')
         verified = helper(CONTRACT, self.root / 'manifest.json')
-        self.assertEqual(verified['nodes'], self.originals)
+        self.assertEqual(list(verified['nodes']), self.originals)
         self.assertNotIn('settings', verified)
         self.assertNotIn('_proof', verified)
+
+    def test_c3_streams_jsonl_into_disk_sequences_and_hash_mappings(self):
+        original = Path.read_bytes
+        def no_whole_jsonl(path):
+            if path.name in ('nodes.jsonl', 'edges.jsonl'):
+                raise AssertionError('whole corpus read_bytes is forbidden')
+            return original(path)
+        with patch.object(Path, 'read_bytes', no_whole_jsonl):
+            data = scope.validate_c3_manifest(CONTRACT, self.root / 'manifest.json',
+                                              db_path=self.root / 'validation.sqlite3')
+        for kind in ('nodes', 'edges'):
+            self.assertNotIsInstance(data[kind], (list, tuple))
+            self.assertNotIsInstance(data[kind[:-1] + '_hashes'], dict)
+        self.assertEqual(list(data['nodes']), self.originals)
+        self.assertEqual(list(data['edges']), self.edges)
+        self.assertTrue((self.root / 'validation.sqlite3').is_file())
+
+    def test_streaming_plan_hash_equals_old_canonical_semantic_bytes(self):
+        plan = SimpleNamespace(nodes=iter(self.originals), edges=iter(self.edges),
+            input_manifest=[{'name': 'fixture.txt', 'sha256': checksum(self.root / 'fixture.txt')}],
+            schema_sha256=self.pins['schema_sha256'], contract_sha256=self.pins['contract_sha256'])
+        old_payload = dict(nodes=self.originals, edges=self.edges, inputs=list(plan.input_manifest),
+            schema_sha256=plan.schema_sha256, contract_sha256=plan.contract_sha256)
+        old_hash = hashlib.sha256(canonical_json(old_payload).encode()).hexdigest()
+        from kag.builder import graph_plan
+        with patch.object(graph_plan, '_hash_payload', side_effect=AssertionError('no corpus lists')):
+            self.assertEqual(graph_plan.plan_hash(plan), old_hash)
+
+    def test_disk_hash_proof_is_read_only_after_validation(self):
+        data = scope.validate_c3_manifest(CONTRACT, self.root / 'manifest.json')
+        with self.assertRaises(sqlite3.OperationalError):
+            data['index'].db.execute("UPDATE c3_sources SET source_hash=?", ('0'*64,))
+
+    def test_external_disk_hash_proof_tamper_blocks_production_revalidation(self):
+        config = self.production(); config['write_mode'] = 'NO_OP'
+        proof = self.preflight(config)['writer_config'].production_scope
+        with sqlite3.connect(proof.node_hashes.index.path) as db:
+            db.execute("UPDATE c3_sources SET source_hash=?", ('0'*64,))
+        with self.assertRaises(ValueError): proof.verify_files(CONTRACT)
+
+    def test_disk_validation_rejects_duplicates_and_orphan_after_hash_rebinding(self):
+        for kind in ('duplicate-node', 'duplicate-edge', 'orphan'):
+            nodes, edges = copy.deepcopy(self.originals), copy.deepcopy(self.edges)
+            if kind == 'duplicate-node': nodes.append(copy.deepcopy(nodes[0]))
+            if kind == 'duplicate-edge': edges.append(copy.deepcopy(edges[0]))
+            if kind == 'orphan': edges[0]['tuple'][4] = 'missing-endpoint'
+            for name, records in (('nodes', nodes), ('edges', edges)):
+                (self.root / (name + '.jsonl')).write_text(''.join(canonical_json(r)+'\n' for r in records), encoding='utf-8')
+                self.pins[name + '_jsonl_sha256'] = checksum(self.root / (name + '.jsonl'))
+            self.pins['plan_sha256'] = plan_hash(SimpleNamespace(nodes=nodes, edges=edges,
+                input_manifest=[{'name': 'fixture.txt', 'sha256': checksum(self.root / 'fixture.txt')}],
+                schema_sha256=self.pins['schema_sha256'], contract_sha256=self.pins['contract_sha256']))
+            manifest = json.loads((self.root / 'manifest.json').read_bytes())
+            manifest.update(self.pins)
+            manifest['node_counts'] = {'LegalDocument': sum(n['type'].endswith('.LegalDocument') for n in nodes),
+                'LegalUnit': sum(n['type'].endswith('.LegalUnit') for n in nodes),
+                'TrafficSign': sum(n['type'].endswith('.TrafficSign') for n in nodes)}
+            manifest['edge_unique_counts'] = {'hasUnit': len(edges)}
+            (self.root / 'manifest.json').write_text(canonical_json(manifest), encoding='utf-8')
+            (self.root / 'plan.sha256').write_text(self.pins['plan_sha256']+'\n', encoding='ascii')
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                scope.validate_c3_manifest(CONTRACT, self.root / 'manifest.json')
 
     def test_sample_preflight_binds_real_sdk_scope_and_persisted_source_batches(self):
         api = self.api()

@@ -1,11 +1,14 @@
 """Offline production preflight. Call before constructing any vectorizer/writer."""
 from collections.abc import Mapping
+from collections import Counter
 from dataclasses import dataclass, field
 import hashlib
 import ipaddress
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from types import MappingProxyType, SimpleNamespace
+from types import SimpleNamespace
+import sqlite3
+import tempfile
 from urllib.parse import urlsplit
 
 from .codec import canonical_json
@@ -151,10 +154,75 @@ class ProductionScope:
             raise ProductionScopeError('production staged plan must equal the complete C3 golden plan')
 
 
-def validate_c3_manifest(contract, manifest_path, *, project_root=None):
+class _C3Index:
+    """Run-owned (or temporary) SQLite storage; cache and counters stay bounded."""
+    def __init__(self, db_path):
+        self.temporary = tempfile.TemporaryDirectory(prefix='kag-c3-') if db_path is None else None
+        self.path = Path(db_path) if db_path is not None else Path(self.temporary.name) / 'sources.sqlite3'
+        if self.path.is_symlink() or self.path.resolve().is_relative_to(Path(__file__).resolve().parents[2]):
+            raise ProductionScopeError('C3 index must be outside the repository')
+        self.db = sqlite3.connect(self.path)
+        self.db.execute('PRAGMA cache_size=-2048')
+        self.db.execute('PRAGMA temp_store=FILE')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS c3_sources (
+            kind TEXT, ordinal INTEGER, key TEXT, source_hash TEXT, payload TEXT,
+            from_key TEXT, to_key TEXT, PRIMARY KEY(kind,key), UNIQUE(kind,ordinal))''')
+        self.counts = {}
+
+    def seal(self):
+        self.db.close()
+        self.db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True)
+        self.db.execute('PRAGMA cache_size=-2048')
+        self.db.execute('PRAGMA temp_store=FILE')
+
+    def close(self):
+        if getattr(self, 'db', None) is not None:
+            self.db.close()
+            self.db = None
+        if self.temporary is not None:
+            self.temporary.cleanup()
+
+    def __del__(self):
+        try: self.close()
+        except Exception: pass
+
+
+class _DiskRecords:
+    def __init__(self, index, kind):
+        self.index, self.kind = index, kind
+
+    def __len__(self):
+        return self.index.counts[self.kind]
+
+    def __iter__(self):
+        for (payload,) in self.index.db.execute(
+                'SELECT payload FROM c3_sources WHERE kind=? ORDER BY ordinal', (self.kind,)):
+            yield json.loads(payload)
+
+
+class _DiskHashes(Mapping):
+    def __init__(self, index, kind):
+        self.index, self.kind = index, kind
+
+    def __len__(self):
+        return self.index.counts[self.kind]
+
+    def __iter__(self):
+        for (key,) in self.index.db.execute('SELECT key FROM c3_sources WHERE kind=?', (self.kind,)):
+            yield tuple(json.loads(key))
+
+    def __getitem__(self, key):
+        row = self.index.db.execute('SELECT source_hash FROM c3_sources WHERE kind=? AND key=?',
+                                    (self.kind, canonical_json(key))).fetchone()
+        if row is None: raise KeyError(key)
+        return row[0]
+
+
+def validate_c3_manifest(contract, manifest_path, *, project_root=None, db_path=None):
     """Verify C3 data only; returns no project/scope authorization or writer proof."""
     root = Path(project_root if project_root is not None else ROOT).resolve()
     path = Path(manifest_path).resolve()
+    index = None
     try:
         raw = path.read_bytes()
         manifest = json.loads(raw)
@@ -186,13 +254,51 @@ def validate_c3_manifest(contract, manifest_path, *, project_root=None):
             files.append((resolved, row['sha256']))
         if any(hashes.get(name) != expected for name, expected in ARTIFACT_HASHES):
             raise ProductionScopeError('required runtime input checksum is absent or differs')
-        records = {}
-        for name, key in (('nodes', 'nodes_jsonl_sha256'), ('edges', 'edges_jsonl_sha256')):
-            record_path = path.parent / (name + '.jsonl')
-            files.append((record_path, C3_IDENTITY[key]))
-            if _checksum(record_path) != C3_IDENTITY[key]:
-                raise ProductionScopeError(f'actual C3 {key} checksum mismatch')
-            records[name] = [json.loads(line) for line in record_path.read_bytes().split(b'\n') if line]
+        if db_path is not None:
+            target = Path(db_path).resolve()
+            protected = [source for source, _ in files] + [path.parent / name
+                for name in ('nodes.jsonl', 'edges.jsonl', 'plan.sha256')]
+            if target in [source.resolve() for source in protected]:
+                raise ProductionScopeError('C3 index overlaps protected inputs')
+        index = _C3Index(db_path)
+        with index.db:
+            index.db.execute('DELETE FROM c3_sources')
+            for name, key in (('nodes', 'nodes_jsonl_sha256'), ('edges', 'edges_jsonl_sha256')):
+                record_path = path.parent / (name + '.jsonl')
+                files.append((record_path, C3_IDENTITY[key]))
+                if _checksum(record_path) != C3_IDENTITY[key]:
+                    raise ProductionScopeError(f'actual C3 {key} checksum mismatch')
+                counts, total = Counter(), 0
+                with record_path.open('rb') as stream:
+                    for line in stream:
+                        if line == b'\n': continue
+                        spec = json.loads(line)
+                        identity = (spec['type'], spec['id']) if name == 'nodes' else tuple(spec['tuple'])
+                        if (any(not isinstance(part, str) or not part for part in identity)
+                                or len(identity) != (2 if name == 'nodes' else 5)):
+                            raise ProductionScopeError('invalid C3 source identity')
+                        if name == 'nodes':
+                            counts[spec['type'].rsplit('.', 1)[-1]] += 1
+                            endpoints = (None, None)
+                        else:
+                            counts[identity[2]] += 1
+                            endpoints = (canonical_json(identity[:2]), canonical_json(identity[3:]))
+                        index.db.execute('INSERT INTO c3_sources VALUES (?,?,?,?,?,?,?)',
+                            (name, total, canonical_json(identity), _spec_hash(spec), canonical_json(spec), *endpoints))
+                        total += 1
+                        del spec
+                expected_counts = manifest['node_counts' if name == 'nodes' else 'edge_unique_counts']
+                if (any(type(count) is not int or count < 0 for count in expected_counts.values())
+                        or total != sum(expected_counts.values())
+                        or any(counts[kind] != count for kind, count in expected_counts.items())):
+                    raise ProductionScopeError('C3 manifest counts/uniqueness mismatch')
+                index.counts[name] = total
+            orphan = index.db.execute('''SELECT 1 FROM c3_sources e
+                LEFT JOIN c3_sources f ON f.kind='nodes' AND f.key=e.from_key
+                LEFT JOIN c3_sources t ON t.kind='nodes' AND t.key=e.to_key
+                WHERE e.kind='edges' AND (f.key IS NULL OR t.key IS NULL) LIMIT 1''').fetchone()
+            if orphan: raise ProductionScopeError('C3 edge endpoint missing')
+        records = {name: _DiskRecords(index, name) for name in ('nodes', 'edges')}
         plan_path = path.parent / 'plan.sha256'
         expected_plan_bytes = (C3_IDENTITY['plan_sha256'] + '\n').encode('ascii')
         files.append((plan_path, hashlib.sha256(expected_plan_bytes).hexdigest()))
@@ -200,21 +306,20 @@ def validate_c3_manifest(contract, manifest_path, *, project_root=None):
             schema_sha256=manifest['schema_sha256'], contract_sha256=manifest['contract_sha256'])
         if plan_hash(plan) != C3_IDENTITY['plan_sha256']:
             raise ProductionScopeError('recomputed semantic C3 plan hash mismatch')
-        node_hashes = {(n['type'], n['id']): _spec_hash(n) for n in records['nodes']}
-        edge_hashes = {tuple(e['tuple']): _spec_hash(e) for e in records['edges']}
-        if (len(node_hashes) != len(records['nodes']) or len(edge_hashes) != len(records['edges'])
-                or len(node_hashes) != sum(manifest['node_counts'].values())
-                or len(edge_hashes) != sum(manifest['edge_unique_counts'].values())):
-            raise ProductionScopeError('C3 manifest counts/uniqueness mismatch')
+        node_hashes, edge_hashes = _DiskHashes(index, 'nodes'), _DiskHashes(index, 'edges')
         for file_path, expected in files:
             if _checksum(file_path) != expected:
                 raise ProductionScopeError(f'{file_path.name}: C3 checksum mismatch')
-        return dict(records, manifest=manifest, file_checksums=tuple(files),
-                    node_hashes=MappingProxyType(node_hashes), edge_hashes=MappingProxyType(edge_hashes),
+        index.seal()
+        files.append((index.path.resolve(), _checksum(index.path)))
+        return dict(records, manifest=manifest, file_checksums=tuple(files), index=index,
+                    node_hashes=node_hashes, edge_hashes=edge_hashes,
                     contract_hash=_spec_hash(contract))
     except ProductionScopeError:
+        if index is not None: index.close()
         raise
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, sqlite3.DatabaseError):
+        if index is not None: index.close()
         raise ProductionScopeError('invalid or unreadable production C3 manifest/input') from None
 
 

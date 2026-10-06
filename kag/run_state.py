@@ -15,6 +15,7 @@ from kag.builder.codec import canonical_json
 
 STAGES = ('preflight', 'plan', 'vectorize', 'export-artifact', 'write-nodes',
           'verify-nodes', 'write-edges', 'verify', 'release')
+SOURCE_STAGES = ('source-nodes', 'source-edges', 'source-verify', 'source-complete')
 ROOT = Path(__file__).resolve().parents[1]
 ZERO = '0' * 64
 MESSAGES = {'CONFIG': 'Invalid runner configuration.', 'SCOPE': 'Scope verification refused.',
@@ -114,6 +115,8 @@ class RunState:
         if self.run_dir.is_relative_to(ROOT) or ROOT.is_relative_to(self.run_dir):
             raise RunBlocked('CONFIG')
         self.identity = json.loads(canonical_json(identity))
+        self.stages = (('preflight', 'plan') + SOURCE_STAGES
+                       if self.identity.get('scope') == 'SOURCE_ONLY_DRY_RUN' else STAGES)
         self._status_lock = threading.Lock()
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = None
@@ -199,7 +202,53 @@ class RunState:
             if missing_ack:
                 raise RunBlocked('INTEGRITY')
             anchors[log] = (sequence, previous)
+        if self.identity.get('scope') == 'SOURCE_ONLY_DRY_RUN':
+            self._validate_source_ledger()
         return anchors
+
+    def _validate_source_ledger(self):
+        """Reconcile source ledger against durable outbox, including unflushed intents."""
+        was_in_transaction = self.db.in_transaction
+        if (self.status['stage'] not in self.stages or any(stage not in self.stages for (stage,) in
+                self.db.execute('SELECT stage FROM run_stages'))):
+            raise RunBlocked('INTEGRITY')
+        self.db.execute('PRAGMA temp_store=FILE')
+        self.db.execute('''CREATE TEMP TABLE IF NOT EXISTS source_audit_batches (
+            stage TEXT, key TEXT, source_hash TEXT, state TEXT, result TEXT, PRIMARY KEY(stage,key))''')
+        self.db.execute('DELETE FROM source_audit_batches')
+        sequence, previous = 0, ZERO
+        for ordinal, payload in self.db.execute(
+                "SELECT sequence,payload FROM run_outbox WHERE log='batches' ORDER BY sequence"):
+            try:
+                record = json.loads(payload)
+                claimed = record.pop('record_hash')
+                sequence += 1
+                if (ordinal != sequence or record['sequence'] != sequence or record['previous_hash'] != previous
+                        or record['identity'] != _hash(self.identity) or claimed != _hash(record)
+                        or record['stage'] not in ('source-nodes', 'source-edges')
+                        or record['state'] not in ('INTENT', 'CONFIRMED')):
+                    raise RunBlocked('INTEGRITY')
+                previous = claimed
+                prior = self.db.execute('SELECT source_hash,state FROM source_audit_batches WHERE stage=? AND key=?',
+                                         (record['stage'], record['key'])).fetchone()
+                if (prior is None and record['state'] != 'INTENT') or (prior is not None and
+                        (prior != (record['source_hash'], 'INTENT') or record['state'] != 'CONFIRMED')):
+                    raise RunBlocked('INTEGRITY')
+                result = canonical_json(record['result']) if 'result' in record else None
+                self.db.execute('INSERT OR REPLACE INTO source_audit_batches VALUES (?,?,?,?,?)',
+                    (record['stage'], record['key'], record['source_hash'], record['state'], result))
+            except (ValueError, KeyError, TypeError):
+                raise RunBlocked('INTEGRITY') from None
+        mismatch = self.db.execute('''SELECT 1 FROM source_audit_batches a
+            LEFT JOIN run_batches b ON a.stage=b.stage AND a.key=b.key
+            WHERE b.key IS NULL OR a.source_hash IS NOT b.source_hash
+                OR a.state IS NOT b.state OR a.result IS NOT b.result
+            UNION ALL SELECT 1 FROM run_batches b
+            LEFT JOIN source_audit_batches a ON a.stage=b.stage AND a.key=b.key
+            WHERE a.key IS NULL LIMIT 1''').fetchone()
+        self.db.execute('DROP TABLE source_audit_batches')
+        if not was_in_transaction: self.db.commit()
+        if mismatch: raise RunBlocked('INTEGRITY')
 
     def _enqueue(self, log, value):
         row = self.db.execute('SELECT sequence,payload FROM run_outbox WHERE log=? ORDER BY sequence DESC LIMIT 1',
@@ -235,7 +284,7 @@ class RunState:
 
     def update(self, stage, state, done, total, *, error_code=None):
         if state in ('RUNNING', 'PASS'): self._check_heartbeat()
-        if (stage not in STAGES or state not in ('RUNNING', 'PASS', 'ERROR', 'BLOCKED')
+        if (stage not in self.stages or state not in ('RUNNING', 'PASS', 'ERROR', 'BLOCKED')
                 or type(done) is not int or type(total) is not int or not 0 <= done <= total):
             raise RunBlocked('CONFIG')
         with self._status_lock:
@@ -255,7 +304,7 @@ class RunState:
 
     def begin_batch(self, stage, key, source_hash):
         self._check_heartbeat()
-        if stage not in STAGES or not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', source_hash):
+        if stage not in self.stages or not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', source_hash):
             raise RunBlocked('CONFIG')
         row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
                               (stage, key)).fetchone()
@@ -272,7 +321,7 @@ class RunState:
     def record_attempt(self, stage, key, counter):
         """Durable dispatch intent; remote completion can remain uncertain."""
         self._check_heartbeat()
-        if (stage, counter) not in (('vectorize', 'embedding_calls'), ('write-nodes', 'graph_writes'),
+        if stage not in self.stages or (stage, counter) not in (('vectorize', 'embedding_calls'), ('write-nodes', 'graph_writes'),
                                      ('write-edges', 'graph_writes')):
             raise RunBlocked('CONFIG')
         row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
@@ -289,6 +338,7 @@ class RunState:
 
     def confirm_batch(self, stage, key, result):
         self._check_heartbeat()
+        if stage not in self.stages: raise RunBlocked('INTEGRITY')
         row = self.db.execute('SELECT source_hash,state,result FROM run_batches WHERE stage=? AND key=?',
                               (stage, key)).fetchone()
         encoded = canonical_json(result)
@@ -310,7 +360,7 @@ class RunState:
 
     def finish_stage(self, stage, result):
         self._check_heartbeat()
-        if stage not in STAGES:
+        if stage not in self.stages:
             raise RunBlocked('CONFIG')
         previous = self.completed_stage(stage)
         if previous is not None and canonical_json(previous) != canonical_json(result):
@@ -322,6 +372,8 @@ class RunState:
         self._receipt()
 
     def _receipt(self):
+        if self.identity.get('scope') == 'SOURCE_ONLY_DRY_RUN':
+            self._validate_source_ledger()
         stages = {stage: json.loads(result) for stage, result in self.db.execute('SELECT stage,result FROM run_stages')}
         receipt = {'identity': self.identity, 'stages': stages,
                    'audit': {log: {'sequence': seq, 'hash': digest} for log, (seq, digest) in self._anchors.items()}}

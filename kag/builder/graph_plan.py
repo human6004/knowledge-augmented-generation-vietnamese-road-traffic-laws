@@ -437,11 +437,24 @@ def _hash_payload(plan: GraphPlan) -> dict[str, Any]:
 
 
 def plan_hash(plan: GraphPlan) -> str:
-    """Hash the canonical semantic payload without materializing its JSON bytes."""
+    """Hash the same canonical semantic object, consuming source iterables once."""
     digest = hashlib.sha256()
     encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-    for chunk in encoder.iterencode(_hash_payload(plan)):
-        digest.update(chunk.encode('utf-8'))
+    fields = {'schema_sha256': plan.schema_sha256, 'contract_sha256': plan.contract_sha256,
+              'inputs': plan.input_manifest, 'nodes': plan.nodes, 'edges': plan.edges}
+    digest.update(b'{')
+    for ordinal, name in enumerate(sorted(fields)):
+        if ordinal: digest.update(b',')
+        digest.update((encoder.encode(name) + ':').encode('utf-8'))
+        if name in ('inputs', 'nodes', 'edges'):
+            digest.update(b'[')
+            for position, record in enumerate(fields[name]):
+                if position: digest.update(b',')
+                for chunk in encoder.iterencode(record): digest.update(chunk.encode('utf-8'))
+            digest.update(b']')
+        else:
+            digest.update(encoder.encode(fields[name]).encode('utf-8'))
+    digest.update(b'}')
     return digest.hexdigest()
 
 

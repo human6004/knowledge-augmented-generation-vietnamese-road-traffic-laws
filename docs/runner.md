@@ -15,6 +15,37 @@ Exit 0 = PASS, 1 = ERROR runtime/transport/provider, 2 = BLOCKED
 scope/lock/config/integrity. Lỗi lưu thông báo cố định; không lưu exception body,
 source text lỗi hoặc credential. Xem status của run để biết stage/error_code.
 
+## D0.8 source-only dry-run
+
+`kag/config/source-only.example.json` là config riêng, explicit
+`scope=SOURCE_ONLY_DRY_RUN`, `write_mode=NO_OP`. Điền byte SHA-256 của
+`c3_manifest` và external `run_root`; example SHA toàn zero sẽ BLOCK.
+Config này chỉ nhận scope/write_mode/paths/input_sha256/batch_size/heartbeat_seconds.
+Endpoint, project, vector/provider/checkpoint hoặc WRITE fields đều bị từ chối.
+Dùng cùng CLI `run`, `resume`, `verify`; source `verify` chỉ nhận run đã hoàn tất.
+
+Luồng source: preflight → plan → source-nodes → source-edges → source-verify →
+source-complete. Không tạo graph clients/provider/writer hoặc graph readback.
+Receipt có `kind=SOURCE_ONLY_DRY_RUN`, `graph_verified=false`, các dispatch counters
+zero; không có graph verify/release stage. Source PASS không phải graph release.
+RunState/status/events/receipt/batches/ledger và controlled stop_after_batch dùng
+cùng cơ chế official. Lock local theo run directory; không lấy graph database lock.
+Source resume từ chối foreign graph stages/batches; đối chiếu ledger với durable
+outbox bằng TEMP SQLite index, nhận cả chưa-flush intents. Mỗi key chỉ có một
+INTENT → CONFIRMED; deleted/extra/changed/reconfirmed batches BLOCK trước replay.
+
+C3 validation đọc JSONL từng record vào SQLite. Payload/identity/hash/endpoint
+index trên đĩa, SQLite cache 2 MiB; index seal read-only và byte hash được bind
+vào proof revalidation. Source mode giữ `source-validation.sqlite3` trong run;
+callers không có run directory dùng temporary index ngoài repo (đặt TMPDIR vào
+workspace). Semantic plan hash vẫn canonical JSON cùng năm fields như C3 cũ,
+encoder phát từng record; không đổi golden/schema/input hoặc production proof.
+Full production preflight giữ lazy disk mappings, không copy thành corpus dict.
+
+Source batching giữ O(batch) payload; RSS gồm fixed Python/SDK/SQLite overhead.
+Full source memory proof không chứng minh full production vector memory.
+Production WRITE vẫn BLOCK do physical backend identity gate hiện có.
+
 ## Config
 
 Copy `kag/config/runner.example.json` ra ngoài repo. Example mặc định DENY;
