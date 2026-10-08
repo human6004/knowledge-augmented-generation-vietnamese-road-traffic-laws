@@ -1,8 +1,10 @@
-# D0.4 — Production writer scope
+# Writer scope và execution authority
 
-Chỉ triển khai code và test scope/validation. D0.4 không tạo production project,
-không gọi embedding, không ghi graph. Production full build còn khóa đến
-`DEMO_MACHINE_PASS`; xác nhận cấu hình dưới đây không thay thế gate roadmap.
+Scope/validation, scoped writer, runner và readback đã có implementation.
+Public runner hiện chặn mọi `WRITE`; production full build vẫn BLOCKED.
+Config, offline source PASS hoặc backend identity PROVEN không mở gate.
+Các names/hash C3/C4 dưới đây là stable machine contracts, không đổi theo cách
+đặt tên sản phẩm. Xem [kiến trúc hiện tại](architecture.md).
 
 ## Scope và default
 
@@ -38,7 +40,7 @@ Mỗi input source và ba canonical `xref_a3g2` được kiểm checksum từ fi
 Đường dẫn input phải nằm trong project root; không absolute/path traversal.
 Schema/contract local phải khớp pin và contract truyền vào. Binding này chứng
 minh identity C3/local schema; schema đang cài trên server phải được preflight
-production D1/readback xác minh riêng trước full build.
+production/readback xác minh riêng trước mọi execution authority tương lai.
 
 `discover_production_project` làm gate offline trước, rồi dùng read-only
 `_rest_client.project_get()` để lọc exact `name + namespace`. Không dùng
@@ -50,9 +52,9 @@ ID `2` reserved cho sample và bị chặn ngay gate offline, kể cả khi serv
 tên project đó thành production. Production phải chọn ID khác qua discovery.
 
 Production proof được gắn vào `WriterConfig`. `NativeIntegerKGWriter._invoke`
-đồng thời yêu cầu [backend session/proof D0.10](backend-identity.md), revalidate
+đồng thời yêu cầu [backend session/proof](backend-identity.md), revalidate
 live identity trước dispatch. Identity PROVEN không mở production WRITE;
-D1 phải re-prove project/runtime production thật và xét các gate còn lại.
+Production authority cần re-prove project/runtime thật và xét các gate còn lại.
 Guard kiểm scope cho direct write và inherited `invoke/ainvoke`; staged write kiểm
 toàn bộ plan trước node đầu tiên. Payload node/edge phải khớp C3, chỉ được thêm
 vector đúng target schema với 3072 số hữu hạn. Content không rỗng phải có vector
@@ -64,8 +66,8 @@ Mỗi write kiểm lại checksum file và contract; lỗi chặn trước Graph
 Template official: `kag/config/writer_scope.example.json`. Không credential.
 Chọn profile tường minh; không tự đoán từ host. Host dùng loopback port publish;
 container dùng DNS mạng Docker. Endpoint phải có scheme/port, không userinfo,
-query hoặc fragment. `neo4j_uri` là cấu hình phục vụ verify về sau, D0.4 không
-khởi tạo Neo4j client. Auth lấy từ môi trường/runtime secret store khi cần.
+query hoặc fragment. `neo4j_uri` bind target cho identity/verify; offline scope
+validation không khởi tạo Neo4j client. Auth lấy từ môi trường/runtime secret store khi cần.
 
 ```python
 import json
@@ -81,11 +83,11 @@ scope = validate_production_scope(settings, contract, c3_manifest_path)
 from kag.builder.writer_adapter import discover_production_project
 writer_config = discover_production_project(project_client, settings, contract,
                                            c3_manifest_path)
-# Chỉ sau complete preflight này mới có thể khởi tạo vectorizer ở gate roadmap sau.
+# Chỉ sau complete preflight và execution authority riêng mới được tạo vectorizer thật.
 ```
 
-Template mặc định `DENY`, ID/confirmation rỗng, nên snippet từ chối. Khi gate
-roadmap cho phép production, operator đặt scope `PRODUCTION`, name exact,
+Template mặc định `DENY`, ID/confirmation rỗng, nên snippet từ chối. Config
+production hợp lệ phải có scope `PRODUCTION`, name exact,
 ID đã kiểm độc lập, và confirmation exact:
 
 ```text
@@ -93,7 +95,7 @@ CONFIRM_PRODUCTION:<project_name>:VietRoadTraffic:<expected_project_id>:ee8b3709
 ```
 
 Confirmation gắn target và plan; không phải credential. Không ghi token/key/
-password vào config repo. D0.4 tests chỉ dùng fake project metadata, không
+password vào config repo. Scope tests chỉ dùng fake project metadata, không
 gửi production graph request. Test fixture nhỏ dùng hash tính độc lập; evidence
 ngoài repo kiểm thêm C3 golden thật.
 
@@ -106,8 +108,7 @@ python -B -m unittest discover -s tests/runtime
 ```
 
 Chạy từng suite process riêng vì builder/runtime đều có module `test_inputs`.
-Môi trường chuẩn vẫn Docker runtime D0.2 CPython 3.10.16, không mạng, source chỉ
+Môi trường chuẩn vẫn CPython 3.10.16/Linux amd64, không mạng, source chỉ
 đọc. Rehash exact mỗi batch ưu tiên fail-closed; tối ưu khi runner có immutable
-input snapshot. Không thêm runner/streaming hoặc state/release ở D0.4.
-
-Bước tiếp theo: D0.5–D0.7 runner + verify + rehearsal C4.3a theo sample-first.
+input snapshot. Runner/state/streaming plan đã có tại
+[runtime operations](runner.md); đây không phải quyền chạy build production.

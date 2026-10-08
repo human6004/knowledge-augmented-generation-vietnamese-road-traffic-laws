@@ -1,4 +1,10 @@
-# E-DEMO / G1-DEMO retrieval contract
+# Retrieval và đánh giá frozen slice
+
+Hợp đồng stable của `kag/retriever` và helper exact-ranking/frozen-slice.
+Evaluation Framework G1/G2 hiện tại được mô tả trong
+[kiến trúc sản phẩm](architecture.md#evaluation-framework). Các names
+E-DEMO/G1-DEMO và external evidence cuối tài liệu là checkpoint lịch sử;
+không phải trạng thái official benchmark hôm nay.
 
 Retrieval chỉ đọc graph sample, không gọi Solver/LLM, writer, project mutation,
 schema update hoặc production runner. Production WRITE vẫn BLOCKED.
@@ -65,7 +71,8 @@ trước retrieval; không tuning hoặc threshold theo gold.
 
 Sample partition-5 hiện không chứa bất kỳ văn bản gold nào của eval 71 câu.
 Do đó smoke có thể chứng minh code path, nhưng G1-DEMO chưa thể PASS.
-Số demo không phải paper/production metrics. F-demo/G2-demo chỉ là bước sau
-khi hai gate PASS; không tự khởi động Solver.
+Số demo không phải paper/production metrics. Legal Solver và G2 framework đã
+có implementation riêng; slice rỗng vẫn BLOCKED, không được sửa gold/sample
+để mở gate. Không tự khởi động Solver/provider từ hợp đồng retrieval này.
 
-Evidence chính thức: `D:/study/caoDATA-workspace/e-demo-g1-demo/`.
+Evidence checkpoint lịch sử: `D:/study/caoDATA-workspace/e-demo-g1-demo/`.

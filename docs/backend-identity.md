@@ -1,4 +1,4 @@
-# Backend identity proof (D0.10)
+# Backend identity và physical database proof
 
 `BackendIdentitySession` is one live preflight authority, shared by sample and
 production. It resolves the complete pinned ProjectClient list, requires one
@@ -33,7 +33,7 @@ Receipts explicitly serialize stable allowlisted identity only. They cannot
 restore active authority. Resume creates a new session and re-proves live target;
 no nonce/session token enters the run hash.
 
-Production discovery still validates D0.4/C3 offline first. WriterConfig requires
+Production discovery still validates the scope/C3 input contract offline first. WriterConfig requires
 the matching session/proof; constructor and shared `_invoke` guard enforce it for
 native, inherited invoke/ainvoke, node and edge entry points. An existing writer
 cannot swap its config, client or backend binding. Scope/vector/node barrier
@@ -42,7 +42,8 @@ acquisition; its filename remains SHA256(physical databaseID), so proven aliases
 compete for one lock. Source-only locks do not use backend authority.
 
 Production WRITE stays BLOCKED independently of a successful identity proof.
-D1 must re-prove the real production project/runtime, then satisfy other execution
-gates. No sample project/physical ID is a production default. Offline writer
+Production execution needs a fresh proof of the real project/runtime and separate
+execution authority. No sample project/physical ID is a production default. Offline writer
 intent capture proves pinned request serialization before HTTP; it is TEST
-evidence, separate from LIVE backend identity evidence.
+evidence, separate from LIVE backend identity evidence. See the current
+[product architecture](architecture.md) and [runtime operations](runner.md).

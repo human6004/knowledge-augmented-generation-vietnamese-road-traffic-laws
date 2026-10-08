@@ -1,21 +1,26 @@
-# Runner và verify KAG
+# Vận hành Builder, resume và verification
 
-Entry point duy nhất: `python -B -m kag`. CLI gọi `kag.runner.run` hoặc
-`kag.runner.verify_run`; API tương lai dùng chính các hàm này. `--help` không
+Entry point runtime: `python -B -m kag`. CLI gọi `kag.runner.run` hoặc
+`kag.runner.verify_run`; đây là API vận hành Builder, không phải query HTTP
+adapter của WebApp. Legal answering và dataset CLI có entrypoints riêng trong
+[kiến trúc](architecture.md#entrypoints-và-lệnh-ổn-định). `--help` không
 khởi tạo SDK. Command thật bootstrap CPython 3.10.16/Linux amd64 và vendor pin
 trước import SDK; xem [runtime](runtime.md).
 
 ```sh
-python -B -m kag run --config /evidence/sample.json --run-id sample-rehearsal
-python -B -m kag resume --config /evidence/sample.json --run-id sample-rehearsal
-python -B -m kag verify --config /evidence/sample.json --run-id sample-rehearsal
+python -B -m kag run --config /evidence/runtime.json --run-id sample-validation
+python -B -m kag resume --config /evidence/runtime.json --run-id sample-validation
+python -B -m kag verify --config /evidence/runtime.json --run-id sample-validation
 ```
+
+Commands là templates: config và external mounts phải do operator chuẩn bị.
+`verify` đọc graph nhưng ghi verification/receipt vào run directory ngoài repo.
 
 Exit 0 = PASS, 1 = ERROR runtime/transport/provider, 2 = BLOCKED
 scope/lock/config/integrity. Lỗi lưu thông báo cố định; không lưu exception body,
 source text lỗi hoặc credential. Xem status của run để biết stage/error_code.
 
-## D0.8 source-only dry-run
+## Source-only validation
 
 `kag/config/source-only.example.json` là config riêng, explicit
 `scope=SOURCE_ONLY_DRY_RUN`, `write_mode=NO_OP`. Điền byte SHA-256 của
@@ -44,7 +49,7 @@ Full production preflight giữ lazy disk mappings, không copy thành corpus di
 
 Source batching giữ O(batch) payload; RSS gồm fixed Python/SDK/SQLite overhead.
 Full source memory proof không chứng minh full production vector memory.
-Production WRITE vẫn BLOCK độc lập với backend identity proof D0.10.
+Production WRITE vẫn BLOCK độc lập với backend identity proof.
 
 ## Config
 
@@ -65,13 +70,13 @@ phải điền policy và SHA-256 thực trước chạy. Unknown fields bị t�
   khi replay; provider nhận đúng `{type: openai, base_url, model, timeout}`.
 - `fallback_config`: cấu hình bounded của ResilientVectorizer. Aggregate replay
   phải khớp metadata cũ, gồm enabled/version/size/overlap/depth.
-- `confirmation`: null cho sample; production dùng confirmation D0.4 exact.
+- `confirmation`: null cho sample; production dùng confirmation scope exact.
   Production vẫn resolve name + namespace rồi kiểm ID độc lập và bind C3/schema/
   input bytes; xem [production scope](production-writer-scope.md).
   Runner hiện BLOCK mọi `WRITE`, kể cả khi backend identity đã PROVEN.
   Preflight yêu cầu [backend identity session](backend-identity.md) cùng writer và
-  GraphLock; matching host/port/config không đủ. D1 phải re-prove production live
-  và xét execution gate riêng. D0.4 vẫn bắt buộc; không có config flag mở WRITE.
+  GraphLock; matching host/port/config không đủ. Production live cần re-prove
+  và execution authority riêng. Scope vẫn bắt buộc; không có config flag mở WRITE.
 - `paths`: absolute `c3_manifest`, `sample_manifest`, `vector_artifact`,
   `provenance`, `chunk_manifest`, `source_checkpoint`, `run_root`, `lock_root`.
   Provider có thể dùng null cho replay inputs; production sample_manifest có thể null.
@@ -92,17 +97,12 @@ OpenSPG `http://127.0.0.1:8887`, Neo4j HTTP `http://openspg-neo4j:7474`,
 URI `bolt://openspg-neo4j:7687`, database `vietroadtraffic`.
 Phải kiểm alias/network đúng trên deployment trước dùng.
 
-```powershell
-rtk docker run --rm --platform linux/amd64 --network container:kag-openspg-server-1 `
-  --mount "type=bind,source=D:/study/knowledge-augmented-generation-vietnamese-road-traffic-laws,target=/workspace,readonly" `
-  --mount "type=bind,source=D:/study/caoDATA-workspace,target=/external,readonly" `
-  --mount "type=bind,source=D:/study/caoDATA-workspace/runs,target=/runs" `
-  --mount "type=bind,source=D:/study/caoDATA-workspace/runs/.graph-locks,target=/run/kag-locks" `
-  --mount "type=bind,source=D:/study/caoDATA-workspace/d0.5-d0.7-runner-verify-rehearsal,target=/evidence" `
-  --env KAG_NEO4J_USERNAME --env KAG_NEO4J_PASSWORD `
-  sha256:25190ba8f51e8d158db0910858e9de3de1e1324d29d8b236d4d120268fa7bf33 `
-  -m kag run --config /evidence/sample.json --run-id sample-rehearsal
-```
+Các lệnh/mount/image receipt của lần rehearsal trước được giữ trong Git history
+và external evidence; [design vận hành lịch sử](superpowers/specs/2026-10-06-runner-verify-rehearsal-design.md)
+giữ quyết định scope/state/lock và địa chỉ evidence.
+Không coi image ID hoặc external evidence paths của lần đó là deployment
+hiện tại. [Setup runtime](runtime.md) dùng tên image sản phẩm và CLI ổn định;
+run live cần kiểm lại routes, credentials, external mounts và scope.
 
 Prepare credentials trong environment riêng; không paste giá trị vào command/log.
 Không recreate stack hoặc đổi volumes để chạy runner.
@@ -116,7 +116,7 @@ Preflight một identity; plan đếm source nodes + edges; vectorize đếm nod
 export-artifact đếm vector batches; write-nodes/verify-nodes đếm nodes;
 write-edges đếm edges; verify/release đếm một gate. Counters không cộng lẫn stage.
 
-Source-only C3 validation giữ behavior D0.4. Vector JSONL đọc từng record vào disk
+Source-only C3 validation giữ scope/input contract. Vector JSONL đọc từng record vào disk
 index; ResilientVectorizer chỉ nhận một source batch. Run-owned checkpoint và
 batch files giữ vectors ngoài repo. Không list toàn corpus vectorized.
 Memory vector bounded O(batch); cached/export objects có thể cùng tồn tại ở
@@ -176,12 +176,12 @@ artifact checks và read-only verifier, ghi `verification.json` ngoài repo.
 
 Release sample là `SAMPLE/NO_OP`; không phải production release hoặc D_RELEASE_PASS.
 Receipt chứa runtime/schema/C3/input/config hashes, counters, artifacts/fingerprint
-và audit chain anchors. Production deployment/remote schema gate vẫn thuộc D1;
-task D0.5–D0.7 không cho phép chạy production thật.
+và audit chain anchors. Production deployment/remote schema cần authorization
+và gate riêng; runtime hiện không cho phép production WRITE.
 
 ## Regression offline
 
-Trong runtime digest trên, mount repo read-only và common lock như ví dụ, dùng
+Trong runtime canonical, mount repo read-only và common lock khi tests cần, dùng
 `--network none`; chạy riêng từng discovery process để tránh fixture collision:
 
 ```sh
@@ -192,4 +192,5 @@ python -B -m unittest discover -s tests/runtime -v
 ```
 
 Tests dùng fixture network/provider; không socket/embedding API thật hoặc production
-graph. Logs/probes/reports ngoài repo. Chỉ live C4.3a NO_OP sau toàn bộ offline PASS.
+graph. Logs/probes/reports ngoài repo. Live sample NO_OP cần authorization riêng
+và fresh backend proof; không tự chạy sau documentation/offline checks.

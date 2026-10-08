@@ -1,6 +1,6 @@
 # Backend LuậtGT
 
-Một ứng dụng Spring Boot 3.5.16 / Java 21, kiến trúc **monolith, MVC**. React là lớp hiển thị; backend phục vụ REST và SSE. KAG Python là tích hợp bên ngoài, được xây dựng riêng sau.
+Một ứng dụng Spring Boot 3.5.16 / Java 21, kiến trúc **monolith, MVC**. React là lớp hiển thị; backend phục vụ REST và SSE. Core KAG Python đã có implementation riêng; HTTP query adapter tương thích với Java còn thiếu. Xem [kiến trúc](../../docs/architecture.md).
 
 ```text
 src/main/java/vn/luatgt/
@@ -24,19 +24,17 @@ Controller không truy cập repository. Service giữ giao dịch và quy tắc
 
 Từ thư mục gốc repository (thư mục cha của `WebApp`), với Docker Desktop đã cài và chạy:
 
-```powershell
-./docker/init-env.ps1
-docker compose up -d --build
-```
+Khởi tạo môi trường/build stack theo [Docker WebApp](../../docker/README.md#chạy-webapp-độc-lập).
 
 Nếu đã có `.env`, dùng `./docker/init-env.ps1 -Update` để bổ sung biến còn thiếu. `docker-compose.yml` chỉ chứa WebApp, project `webapp`; OpenSPG dùng `docker-compose.kag.yml`, project `kag` và `.env.kag` riêng. WebApp dùng MySQL 8.4.11, database/tài khoản `luatgt`, cổng host 3306. Schema dùng UUID `BINARY(16)`, thời gian `DATETIME(6)` theo UTC, nội dung JSON/văn bản `LONGTEXT`, khóa ngoại cấp bảng. Volume MySQL mới không tự chứa dữ liệu PostgreSQL cũ; xem [hướng dẫn Docker](../../docker/README.md).
 
 API: `http://127.0.0.1:8080/api`; health: `/actuator/health`. Mật khẩu ADMIN lấy từ `.env`, không phải tài khoản demo trên FE. Tự đăng ký chỉ tạo USER. Bootstrap chỉ tạo ADMIN nếu email chưa tồn tại; không tự nâng USER thành ADMIN, không đặt lại mật khẩu ADMIN cũ.
 
-Để chạy Java trên máy, khởi động `docker compose up -d mysql redis minio`, đặt các biến `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD` trong môi trường rồi chạy `mvn spring-boot:run` tại `backend`. `REDIS_URL` phải chứa mật khẩu từ `.env`; Java không tự đọc `.env`.
+Để chạy Java trên máy, từ root repository khởi động `docker compose up -d mysql redis minio`, đặt các biến `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD` trong môi trường rồi chạy `mvn spring-boot:run` tại `WebApp/backend`. `REDIS_URL` phải chứa mật khẩu từ `.env`; Java không tự đọc `.env`.
 
 ```powershell
-cd backend
+# Từ root repository:
+cd WebApp/backend
 mvn verify
 ```
 
@@ -97,7 +95,18 @@ Văn bản: `externalId`/`doc_id`, `title`, `so_hieu`, `source`, ngày hiệu l�
 
 `POST /v1/query/stream` cùng request, trả SSE `event: delta` với `data: {"text":"..."}`, kết thúc bằng `event: done` với response đầy đủ như REST. BE proxy delta, kiểm tra và lưu kết quả cuối; nếu stream lỗi hoặc không có done, phát `error`, không đánh dấu câu trả lời hoàn tất. Frontend phải coi delta là nội dung tạm và chỉ xác nhận khi có done. Timeout đọc 30 giây, response 256 KB, circuit breaker và rate limit Redis. KAG chưa chạy thì REST trả 503; SSE trả event error. Không có câu trả lời giả.
 
-Pipeline dựng graph/vector và benchmark chờ core Python; các trang tương ứng hiển thị chưa triển khai và không tự ingest vào OpenSPG. Core KAG sẽ phát triển riêng dựa trên sườn `kag-legal-assistant`, dùng schema `VietRoadTraffic` và [contract runtime](../../docs/schema.md#contract-runtime-và-yêu-cầu-builder). Builder phải kiểm tra required/enum/Integer, ghi node trước cạnh và gộp evidence/provenance xác định trước cập nhật `LAST_WRITE_WINS`. Quan hệ nghiệp vụ `REPLACES/AMENDS` dùng UUID để lọc hiệu lực WebApp; không tự chuyển thành cạnh graph `repeals/amends` hoặc đổi chiều quan hệ của contract. Tra cứu mức phạt có cấu trúc chạy độc lập với KAG và chỉ dùng dữ liệu đã kiểm duyệt gắn văn bản còn hiệu lực. Trang hạ tầng kiểm tra DB/Redis/MinIO, không điều khiển Docker.
+Builder graph/vector, Legal Retriever/Solver và Evaluation Framework đã có trong `kag/`; các trang quản trị pipeline/graph/benchmark chưa có management integration và không tự ingest vào OpenSPG. Core dùng schema `VietRoadTraffic` và [contract runtime](../../docs/schema.md#contract-runtime-và-yêu-cầu-builder), kiểm tra required/enum/Integer, node barrier và provenance trước writer transport. Production WRITE vẫn BLOCKED. Quan hệ nghiệp vụ `REPLACES/AMENDS` dùng UUID để lọc hiệu lực WebApp; không tự chuyển thành cạnh graph `repeals/amends` hoặc đổi chiều quan hệ của contract. Tra cứu mức phạt có cấu trúc chạy độc lập với KAG và chỉ dùng dữ liệu đã kiểm duyệt gắn văn bản còn hiệu lực. Trang hạ tầng kiểm tra DB/Redis/MinIO, không điều khiển Docker.
+
+Native Solver trả `AnswerResult(answer,citations,abstained,reason)`, với citation
+field/span/evidence_id và optional unit_id/sign_id; `to_dict()` không xuất reason.
+Java hiện yêu cầu nonempty unit citations và không có trạng thái abstained;
+document/sign support hoặc quote metadata không thuộc LegalUnit.text cũng bị
+reject. Không drop support hoặc tạo unit_id giả để làm API success.
+Xem [gap và policy compatibility đề xuất](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích-đề-xuất).
+Timeout 2s connect/30s read, response/stream256KiB, chat20/60s mỗi owner và
+8 streams mỗi monolith là giới hạn client hiện tại. Policy adapter chưa triển
+khai; H1/H2 chưa bắt đầu. Upstream SSE chỉ nhận delta/done, Java tự phát error
+xuống FE; không gửi adapter error event mà parser chưa hỗ trợ.
 
 ## Nghiệp vụ bổ sung và chạy kiểm tra thật
 

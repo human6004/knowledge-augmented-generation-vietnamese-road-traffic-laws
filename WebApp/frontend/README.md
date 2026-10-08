@@ -2,7 +2,12 @@
 
 React/TypeScript/Vite, giao diện kem/nâu theo App-design.zip và rule.md.
 
+## Phát triển và kiểm thử
+
+Từ thư mục gốc repository:
+
 ```powershell
+cd WebApp/frontend
 pnpm install --frozen-lockfile
 pnpm dev --port 5174
 pnpm test
@@ -18,6 +23,10 @@ Tài khoản ADMIN lấy từ `.env`, người học tự đăng ký USER. JWT c
 
 Nhập dữ liệu dùng chuẩn hóa client và preview/confirm server. JSON đáp án bắt đầu từ 0, CSV/XLSX cột answer dùng 1–4. PNG/JPEG qua ZIP theo mã, không nhận WebP/SVG. Nhập lưu nháp; câu hỏi chỉ xuất bản sau xác nhận kiểm duyệt đáp án/điểm liệt/ảnh. 600 câu và ZIP ảnh có tại docs/imports.
 
-Chat đang dùng REST của backend; KAG chưa khả dụng thì không có câu trả lời giả. Backend đã có SSE, UI chưa hiển thị stream. Pipeline/graph/benchmark/config KAG được ghi rõ chờ core Python. Trang hạ tầng chỉ kiểm tra kết nối, không điều khiển Docker.
+Chat đang dùng REST của backend; HTTP query adapter KAG chưa có thì không có câu trả lời giả. Backend đã có SSE, UI chưa hiển thị stream. Core Python đã có Builder, Retriever/Solver và evaluation; trang pipeline/graph/benchmark còn chờ management integration. Trang cấu hình KAG đã đọc schema identity/contract từ API thật. Trang hạ tầng chỉ kiểm tra MySQL/Redis/MinIO, không điều khiển Docker hoặc chứng minh KAG readiness. Xem [kiến trúc và gap HTTP](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích-đề-xuất).
 
-Hướng dẫn chạy hệ thống, nhập dữ liệu và kiểm thử Docker thật: [README gốc](../README.md).
+Hướng dẫn chạy hệ thống, nhập dữ liệu và kiểm thử Docker thật: [README WebApp](../README.MD).
+
+[App.tsx](src/App.tsx) là nguồn route hiện tại; [pages/server](src/pages/server/)
+chứa trang hoạt động. [README thiết kế nhập từ ZIP](src/imports/README.md)
+giữ ý tưởng/lộ trình lịch sử, không dùng làm hướng dẫn setup hiện tại.

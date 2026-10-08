@@ -32,8 +32,8 @@ Không tạo `_name_vector` giả để né embedding. Không vector hóa proven
 ID, ngày tháng hoặc giá trị penalty. `None`/chuỗi rỗng không tạo vector;
 156/887 tên biển rỗng vẫn có `moTa` để truy hồi. Contract không sửa dữ liệu.
 
-`LegalUnit.text` dài tối đa 757.423 ký tự. C4 phải kiểm giới hạn đầu vào của
-model được chọn sau này trước khi ghi, không tự cắt text. Metadata không
+`LegalUnit.text` dài tối đa 757.423 ký tự. Vectorizer phải kiểm giới hạn đầu vào
+model được cấu hình trước khi ghi, không tự cắt text. Metadata không
 chứng minh model/server đã được cấu hình hoặc vector đã tồn tại. C1.1 không
 chọn provider/model, dimension hoặc gọi embedding. Chi tiết probe và
 thống kê nằm trong báo cáo ngoại vi `builder-preflight/c1_1/`.

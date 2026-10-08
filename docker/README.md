@@ -21,10 +21,13 @@ Hai stack có image, mạng, database, tài khoản và volume riêng. Không c�
 # Nếu .env đã có: ./docker/init-env.ps1 -Update
 docker compose up -d --build
 ./docker/check-config.ps1 -Stack WebApp
-./WebApp/scripts/verify-stack.ps1
 ```
 
+Nhập nháp, kiểm duyệt và smoke API có side effects: [workflow WebApp](../WebApp/README.MD#chạy-bằng-docker).
+
 WebApp gồm frontend, backend Spring Boot, MySQL nghiệp vụ, Redis và MinIO. Giao diện ở http://127.0.0.1:8081, API ở http://127.0.0.1:8080/api. WebApp chạy được mà không cần OpenSPG hoặc `.env.kag`; chat KAG báo chưa khả dụng khi adapter Python chưa chạy.
+
+Script init không ghi đè `.env` hiện hữu; dùng `-Update` để bổ sung biến thiếu.
 
 Backend dùng tài khoản `luatgt` và `DB_PASSWORD`, không dùng root. MySQL 8.4.11 ở `127.0.0.1:3306`, database `luatgt`, volume `webapp_kag-data`; Redis/MinIO dùng `webapp_redis-data` và `webapp_minio-data`. Văn bản dùng `utf8mb4_0900_bin`, thời gian lưu UTC.
 
@@ -47,21 +50,17 @@ docker compose --env-file .env.kag -f docker-compose.kag.yml up -d --build
 docker compose --env-file .env.kag -f docker-compose.kag.yml logs --tail 100 openspg-server
 ```
 
-KAG/OpenSPG gồm server, MySQL metadata, Neo4j và MinIO, chạy trực tiếp dưới project `kag`, không cần profile hay WebApp đang chạy. Builder C1–C4 đã PASS trên sample; adapter/retriever/solver còn triển khai; stack này hiện khởi chạy engine OpenSPG, chưa phải dịch vụ hỏi đáp KAG hoàn chỉnh.
+KAG/OpenSPG gồm server, MySQL metadata, Neo4j và MinIO, chạy trực tiếp dưới project `kag`, không cần profile hay WebApp đang chạy. Core Python đã có deterministic Builder, Legal Retriever/Solver và Evaluation Framework. Stack này khởi chạy engine OpenSPG; HTTP query adapter mà WebApp cần vẫn chưa được triển khai. Production WRITE vẫn BLOCKED; xem [kiến trúc](../docs/architecture.md).
 
-OpenSPG Server là lớp API và điều phối. MySQL lưu metadata, project và schema OpenSPG. Neo4j lưu knowledge graph và phục vụ tìm kiếm. MinIO lưu object. Các thành phần Python kết nối theo sơ đồ:
+OpenSPG Server cung cấp project/schema và writer API. MySQL lưu metadata; Neo4j lưu graph/index; MinIO lưu object. Local Retriever/verifier đọc Neo4j trực tiếp, không qua OpenSPG cho mọi request:
 
 ```text
-KAG Python
-Builder / Retriever / Solver
-          |
-          | HTTP
-          v
-    OpenSPG Server
-      /    |    \
-     v     v     v
-  MySQL  Neo4j  MinIO
- metadata graph storage
+Python builder writer/SDK → HTTP OpenSPG Server → Neo4j graph/index
+                                  ├→ MySQL metadata/project/schema
+                                  └→ MinIO objects
+Python Legal Retriever / verifier ──→ HTTP Neo4j read statements
+Python Legal Solver → Retriever + pinned iterative planner/pipeline
+WebApp KagClient → HTTP query adapter [absent; separate from OpenSPG]
 ```
 
 Python chạy trực tiếp trên host dùng địa chỉ OpenSPG `http://127.0.0.1:28887`. Tên service như `openspg-server` chỉ phân giải được trong mạng Docker của stack.
@@ -133,6 +132,6 @@ Không tự lấy dữ liệu từ stack `vietroadtraffic_b2c` hoặc các volum
 
 Trong OpenSPG UI, cấu hình lưu trữ MinIO theo URL `minio://openspg-minio:9000?accessKey=<OPENSPG_MINIO_USER>&secretKey=<OPENSPG_MINIO_PASSWORD>` với giá trị từ `.env.kag`. Nếu image có kết nối mặc định dùng mật khẩu mẫu upstream, cập nhật kết nối trước khi upload/build. MySQL và Neo4j nhận kết nối/mật khẩu trực tiếp qua tham số server.
 
-Image server/MySQL/Neo4j pin literal `@sha256` D0.1 trong Compose; biến `OPENSPG_*_IMAGE` không còn override image. MinIO dùng Dockerfile đã pin nguồn của project. Python dùng venv riêng 3.10.16 và bootstrap từ vendor đã pin; xem [setup runtime D0.2](../docs/runtime.md). JVM mặc định 2–8 GB, Neo4j heap tối đa 4 GB và page cache 1 GB. Có thể chỉnh `OPENSPG_JAVA_XMS`, `OPENSPG_JAVA_XMX`, `OPENSPG_BUILDER_CONCURRENCY` (mặc định 4).
+Image server/MySQL/Neo4j pin literal `@sha256` trong Compose; biến `OPENSPG_*_IMAGE` không còn override image. MinIO dùng Dockerfile đã pin nguồn của project. Python dùng venv riêng 3.10.16 và bootstrap từ vendor đã pin; xem [setup runtime Python](../docs/runtime.md). JVM mặc định 2–8 GB, Neo4j heap tối đa 4 GB và page cache 1 GB. Có thể chỉnh `OPENSPG_JAVA_XMS`, `OPENSPG_JAVA_XMX`, `OPENSPG_BUILDER_CONCURRENCY` (mặc định 4).
 
-OpenSPG engine không cung cấp `/v1/query` và `/v1/query/stream` mà WebApp gọi. Giữ `KAG_BASE_URL` trong `.env` cho adapter Python tại cổng 8000; không trỏ tới OpenSPG UI cổng 28887. Không tự import dataset/schema hoặc bật ingestion khi khởi động. Core KAG sẽ triển khai riêng; Builder phải tuân thủ [contract runtime](../docs/schema.md#contract-runtime-và-yêu-cầu-builder), kiểm tra dữ liệu, codec và gộp provenance xác định trước khi ghi graph.
+OpenSPG engine không cung cấp `/v1/query` và `/v1/query/stream` mà WebApp gọi. Giữ `KAG_BASE_URL` trong `.env` cho adapter Python tại cổng 8000; không trỏ tới OpenSPG UI cổng 28887. Không tự import dataset/schema hoặc bật ingestion khi khởi động. Core Builder đã có validation/codec/provenance theo [contract runtime](../docs/schema.md#contract-runtime-và-yêu-cầu-builder); cấu hình hạ tầng không mở WRITE. Native answer/Java citation gap và [policy HTTP đề xuất](../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích-đề-xuất) cần quyết định riêng. H1/H2 chưa bắt đầu.
