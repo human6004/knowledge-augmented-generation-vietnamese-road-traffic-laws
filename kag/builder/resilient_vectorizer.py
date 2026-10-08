@@ -13,12 +13,10 @@ from pathlib import Path
 import sqlite3
 import time
 from types import MethodType, SimpleNamespace
-import math
+
+from kag.vector_contract import TARGETS, valid_vector as _valid_vector
 
 
-TARGETS = {'LegalDocument': (('title', '_title_vector'),),
-           'LegalUnit': (('text', '_text_vector'),),
-           'TrafficSign': (('ten', '_ten_vector'), ('moTa', '_mo_ta_vector'))}
 BACKOFF = (2, 5, 10)
 _SAFE_CODES = {'MODEL_NOT_FOUND', 'SERVICE_UNAVAILABLE', 'BAD_REQUEST', 'RATE_LIMIT_EXCEEDED',
                'context_length_exceeded', 'invalid_request_error'}
@@ -52,12 +50,6 @@ def _error_info(error):
             'timeout': isinstance(error, TimeoutError) or 'timeout' in name.lower(),
             'connection': isinstance(error, ConnectionError) or 'connection' in name.lower(),
             'explicit_input_limit': code == 'context_length_exceeded'}
-
-
-def _valid_vector(vector, dimension):
-    return (isinstance(vector, list) and len(vector) == dimension
-            and all(type(v) in (float, int) and math.isfinite(v) for v in vector)
-            and any(v != 0 for v in vector))
 
 
 @dataclass

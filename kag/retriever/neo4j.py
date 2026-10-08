@@ -5,7 +5,7 @@ from urllib.parse import quote
 from urllib.request import Request
 
 from kag.builder.codec import canonical_json
-from kag.builder.resilient_vectorizer import TARGETS, _valid_vector
+from kag.vector_contract import TARGETS, valid_vector as _valid_vector
 from kag.verify import Neo4jReadClient, QUERIES
 
 

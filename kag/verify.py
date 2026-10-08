@@ -12,7 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from kag.builder.codec import BuilderContractError, canonical_json, decode_properties
 from kag.builder.embedding_chunker import effective_weights
 from kag.builder.mapping import application_edge_key
-from kag.builder.resilient_vectorizer import TARGETS, _valid_vector
+from kag.vector_contract import TARGETS, valid_vector as _valid_vector
 from kag.run_state import MESSAGES, RunBlocked
 
 

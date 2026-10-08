@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from .codec import canonical_json
 from .graph_plan import plan_hash
 from .inputs import ARTIFACT_HASHES
-from .resilient_vectorizer import TARGETS, _valid_vector
+from kag.vector_contract import TARGETS, valid_vector as _valid_vector
 
 
 C3_IDENTITY = {

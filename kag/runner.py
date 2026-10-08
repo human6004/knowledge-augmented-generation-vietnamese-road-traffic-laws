@@ -382,7 +382,7 @@ def _clients(config, project_client, reader):
 def _provider(config, verified):
     from kag.common.vectorize_model.openai_model import OpenAIVectorizeModel
     from kag.builder.component.vectorizer.batch_vectorizer import BatchVectorizer
-    from kag.builder.resilient_vectorizer import TARGETS
+    from kag.vector_contract import TARGETS
     key = os.environ.get(config['credential_env']['embedding_key'])
     if not key: raise RunBlocked('CONFIG')
     model = dict(config['embedding_model']); model.pop('type')
@@ -464,7 +464,7 @@ def _replay_index(config, state, verified):
 
 
 def _cached_batch(config, path, originals):
-    from kag.builder.resilient_vectorizer import TARGETS
+    from kag.vector_contract import TARGETS
     db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
     old = sqlite3.connect(Path(config['paths']['source_checkpoint']).resolve().as_uri() + '?mode=ro', uri=True)
     nodes, jobs = [], []

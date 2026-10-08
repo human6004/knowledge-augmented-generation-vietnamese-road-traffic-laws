@@ -45,6 +45,14 @@ if sys.argv[1] == 'preload-builder':
     from kag.builder import codec
 elif sys.argv[1] == 'preload-solver':
     import kag.solver as preloaded_solver
+elif sys.argv[1] == 'preload-vector':
+    from kag import vector_contract
+elif sys.argv[1] == 'preload-retriever':
+    from kag.retriever import retriever
+elif sys.argv[1] == 'preload-verify':
+    from kag import verify
+elif sys.argv[1] == 'preload-scope':
+    from kag.builder import production_scope
 from kag.bootstrap import initialize
 initialize()
 from kag.builder import codec
@@ -111,7 +119,8 @@ print('REAL_IMPORT_PASS; registry=PASS; network=0; embedding=0; graph_writes=0')
         env = os.environ.copy()
         for name in ('PYTHONPATH', 'KAG_PROJECT_ID', 'KAG_PROJECT_HOST_ADDR'):
             env.pop(name, None)
-        for case in ('initialize-first', 'preload-builder', 'preload-solver'):
+        for case in ('initialize-first', 'preload-builder', 'preload-solver',
+                     'preload-vector', 'preload-retriever', 'preload-verify', 'preload-scope'):
             with self.subTest(import_order=case):
                 result = subprocess.run([sys.executable, '-B', '-c', code, case], cwd=ROOT,
                                         env=env, capture_output=True, text=True)
