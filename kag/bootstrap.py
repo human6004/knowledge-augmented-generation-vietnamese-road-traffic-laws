@@ -3,6 +3,7 @@
 Call initialize() before importing SDK components. Ordinary offline builder
 imports stay lightweight and do not initialize the SDK.
 """
+import importlib
 import os
 from pathlib import Path
 import subprocess
@@ -48,7 +49,13 @@ def initialize():
     sys.path.insert(0, str(VENDOR))
     kag.__path__.insert(0, str(VENDOR / 'kag'))
     kag.builder.__path__.append(str(VENDOR / 'kag/builder'))
+    solver = sys.modules.get('kag.solver')
+    if solver is not None and Path(solver.__file__).resolve() != ROOT / 'kag/solver/__init__.py':
+        solver = None
     os.environ['KAG_DEBUG_DUMP_CONFIG'] = '0'
+    if solver is not None:
+        # Resolve the upstream initializer while retaining preloaded package references.
+        importlib.reload(solver)
     # Execute the upstream entry point with the shared package namespace;
     # its real component registrations and init_env remain authoritative.
     entry = VENDOR / 'kag/__init__.py'
