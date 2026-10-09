@@ -128,12 +128,15 @@ async def admit_request(request: Request, scope: str, dto=QueryV1Request):
     """Internal admission for future routes; no route is registered here."""
     principal = request_principal(request)
     authorize(principal, scope, None)
+    if dto is RetrieveRequest:
+        authorize(principal, 'inspect', None)
     if any(name in request.headers for name in ('x-user-id', 'user_id', 'x-service-id')):
         raise ApiFailure('INVALID_REQUEST')
     if dto not in (QueryV1Request, RetrieveRequest):
         raise ApiFailure('NOT_READY')
     parsed = dto.from_json(await bounded_body(request))
-    user_id = UUID(parsed.user_id)
-    authorize(principal, scope, user_id)
-    request.state.delegated_user_id = user_id
+    if dto is QueryV1Request:
+        user_id = UUID(parsed.user_id)
+        authorize(principal, scope, user_id)
+        request.state.delegated_user_id = user_id
     return parsed

@@ -8,7 +8,12 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.node.*;
 import java.time.Instant;
 import java.util.*;
+import java.io.*;
+import java.nio.file.Path;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,6 +21,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.*;
 import org.springframework.http.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.test.context.transaction.TestTransaction;
+import vn.luatgt.service.ChatService;
+import vn.luatgt.dto.ChatRequest;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +39,11 @@ class CoreTest {
     @Autowired ContentHistoryRepository history;
     @Autowired LawRelationRepository relations;
     @Autowired PenaltyRepository penalties;
+    @Autowired LegalUnitRepository legalUnits;
+    @Autowired ChatRepository chats;
+    @Autowired AccountRepository accounts;
+    @Autowired ChatService chat;
+    @TempDir Path streamTemporary;
     @MockitoBean RateLimit rate;
     @MockitoBean KagClient kag;
     @MockitoBean ObjectStorage storage;
@@ -131,5 +145,133 @@ class CoreTest {
         when(kag.query(any())).thenThrow(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Dịch vụ KAG chưa khả dụng")); String user=register();
         mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Mức phạt là gì?\"}")).andExpect(status().isServiceUnavailable());
         mvc.perform(get("/api/chat").header("Authorization","Bearer "+user)).andExpect(status().isOk()).andExpect(jsonPath("$[0].state").value("UNAVAILABLE")).andExpect(jsonPath("$[0].answer").value(""));
+    }
+    @Test void chatDelegatesOnlyAuthenticatedOwnerAndRejectsBrowserIdentity() throws Exception {
+        String user=register();
+        UUID owner=UUID.fromString(body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn()).path("id").asText());
+        when(kag.query(any())).thenAnswer(invocation->{
+            Map<?,?> request=invocation.getArgument(0);
+            assertEquals(owner,request.get("user_id")); assertInstanceOf(UUID.class,request.get("user_id"));
+            assertEquals(Set.of("user_id","message","context_id","schema_contract"),request.keySet());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Dịch vụ KAG chưa khả dụng");
+        });
+        mvc.perform(post("/api/chat").contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Căn cứ?\"}")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON)
+            .content("{\"message\":\"Căn cứ?\",\"user_id\":\"00000000-0000-4000-8000-000000000001\"}")).andExpect(status().isBadRequest());
+        verifyNoInteractions(kag);
+        mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).header("X-User-ID",UUID.randomUUID().toString())
+            .header("X-KAG-Token","forged-browser-token").contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Căn cứ?\"}")).andExpect(status().isServiceUnavailable());
+        verify(kag,times(1)).query(any());
+    }
+    @Test void nativeAbstentionAndMixedInvalidCitationsCannotBecomeAnswers() throws Exception {
+        String user=register();
+        for(String response:List.of("{\"answer\":\"Không đủ căn cứ\",\"citations\":[]}",
+            "{\"answer\":\"Nội dung thử\",\"citations\":[{\"doc_id\":\"missing\",\"unit_id\":\"missing::1\",\"quote\":\"Nguồn\"},{\"sign_id\":\"P.1\"}]}")) {
+            when(kag.query(any())).thenReturn(json.readTree(response));
+            mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Căn cứ?\"}")).andExpect(status().isBadGateway());
+        }
+        var items=body(mvc.perform(get("/api/chat").header("Authorization","Bearer "+user)).andReturn());
+        assertEquals(2,items.size()); for(var item:items) { assertEquals("UNAVAILABLE",item.path("state").asText()); assertEquals("",item.path("answer").asText()); }
+    }
+    record StreamSource(Content document,LegalUnit unit,ObjectNode answer) {}
+    StreamSource streamSource() throws Exception {
+        var doc=new Content(); doc.kind="documents"; doc.externalId="P5::"+UUID.randomUUID(); doc.published=true;
+        doc.data=json.writeValueAsString(Map.of("doc_id",doc.externalId,"title","Nguồn giả lập P5","ngay_hieu_luc","2025-01-01"));
+        contents.saveAndFlush(doc);
+        var value=(ObjectNode)new KagClientTest().answer(); String quote=value.path("citations").get(0).path("quote").asText();
+        var unit=new LegalUnit(); unit.documentId=doc.id; unit.unitId=doc.externalId+"::1"; unit.published=true;
+        unit.data=json.writeValueAsString(Map.of("doc_id",doc.externalId,"unit_id",unit.unitId,"text",quote)); legalUnits.saveAndFlush(unit);
+        var citation=(ObjectNode)value.path("citations").get(0); citation.put("doc_id",doc.externalId).put("unit_id",unit.unitId);
+        return new StreamSource(doc,unit,value);
+    }
+    UUID streamOwner() throws Exception {
+        String user=register(); return UUID.fromString(body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn()).path("id").asText());
+    }
+    KagClientTest streamWire() throws Exception {
+        var wire=new KagClientTest(); wire.temporary=streamTemporary; wire.setup(); return wire;
+    }
+    void bridge(KagClientTest wire,KagClientTest.Fixture fixture) {
+        var actual=wire.client(fixture);
+        doAnswer(call->{ actual.stream(call.getArgument(0),call.getArgument(1)); return null; }).when(kag).stream(any(),any());
+    }
+    @Test @Transactional void realDoneOnlyAndLegacyStreamPersistBeforeDownstreamDone() throws Exception {
+        for(boolean legacy:new boolean[]{false,true}) {
+            var source=streamSource(); var owner=streamOwner(); var wire=streamWire();
+            try(var fixture=wire.new Fixture()) {
+                fixture.body=source.answer().toString();
+                if(!legacy) fixture.raw=("event: done\ndata: "+fixture.body+"\n\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                bridge(wire,fixture); var output=new ByteArrayOutputStream();
+                chat.stream(owner,new ChatRequest("Căn cứ P5?","")).writeTo(output);
+                String text=output.toString(java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(text.contains("event: done\n")); assertEquals(legacy,text.contains("event: delta\n")); assertFalse(text.contains("event: error\n"));
+                var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner).getFirst();
+                assertEquals("ANSWERED",stored.state); assertEquals(source.answer().path("answer").asText(),stored.answer);
+                assertEquals(source.answer().path("citations"),json.readTree(stored.citations));
+            }
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"document-unpublished","unit-unpublished","wrong-document","quote-changed","expired-document","mixed-invalid"})
+    @Transactional void rejectedLegalEvidenceNeverPersistsAnswerOrEmitsDownstreamDone(String mode) throws Exception {
+        var source=streamSource(); var owner=streamOwner(); var wire=streamWire();
+        switch(mode) {
+            case "document-unpublished" -> { source.document().published=false; contents.saveAndFlush(source.document()); }
+            case "unit-unpublished" -> { source.unit().published=false; legalUnits.saveAndFlush(source.unit()); }
+            case "wrong-document" -> { var data=(ObjectNode)json.readTree(source.unit().data); data.put("doc_id","foreign"); source.unit().data=data.toString(); legalUnits.saveAndFlush(source.unit()); }
+            case "quote-changed" -> { var data=(ObjectNode)json.readTree(source.unit().data); data.put("text","Nội dung khác"); source.unit().data=data.toString(); legalUnits.saveAndFlush(source.unit()); }
+            case "expired-document" -> { var data=(ObjectNode)json.readTree(source.document().data); data.put("ngay_het_hieu_luc","2000-01-01"); source.document().data=data.toString(); contents.saveAndFlush(source.document()); }
+            default -> { var invalid=source.answer().path("citations").get(0).deepCopy(); ((ObjectNode)invalid).put("doc_id","missing"); ((ArrayNode)source.answer().path("citations")).add(invalid); }
+        }
+        try(var fixture=wire.new Fixture()) {
+            fixture.raw=("event: done\ndata: "+source.answer()+"\n\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            bridge(wire,fixture); var output=new ByteArrayOutputStream(); chat.stream(owner,new ChatRequest("Căn cứ P5?","")).writeTo(output);
+            String text=output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertFalse(text.contains("event: done\n")); assertTrue(text.contains("event: error\n"));
+            var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner).getFirst();
+            assertEquals("UNAVAILABLE",stored.state); assertTrue(stored.answer==null||stored.answer.isEmpty()); assertEquals(json.createArrayNode(),json.readTree(stored.citations));
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"missing-done","missing-blank","partial-error","invalid-done"})
+    @Transactional void incompleteTransportLeavesUnavailableWithoutPartialAnswer(String mode) throws Exception {
+        var source=streamSource(); var owner=streamOwner(); var wire=streamWire();
+        try(var fixture=wire.new Fixture()) {
+            String delta="event: delta\ndata: {\"text\":\"partial\"}\n\n";
+            fixture.raw=(switch(mode) {
+                case "missing-done" -> delta;
+                case "missing-blank" -> "event: done\ndata: "+source.answer()+"\n";
+                case "partial-error" -> delta+"event: error\ndata: {\"message\":\"failed\"}\n\n";
+                default -> "event: done\ndata: {\"answer\":\"fabricated\",\"citations\":[]}\n\n";
+            }).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            bridge(wire,fixture); var output=new ByteArrayOutputStream(); chat.stream(owner,new ChatRequest("Căn cứ P5?","")).writeTo(output);
+            String text=output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertFalse(text.contains("event: done\n")); assertTrue(text.contains("event: error\n"));
+            var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner).getFirst();
+            assertEquals("UNAVAILABLE",stored.state); assertTrue(stored.answer==null||stored.answer.isEmpty());
+        }
+    }
+    @Test @Transactional void disconnectAfterCompletedValidDoneKeepsPersistedEvidence() throws Exception {
+        var source=streamSource(); var owner=streamOwner(); var wire=streamWire();
+        TestTransaction.flagForCommit(); TestTransaction.end();
+        try(var fixture=wire.new Fixture()) {
+            fixture.raw=("event: done\ndata: "+source.answer()+"\n\n").getBytes(java.nio.charset.StandardCharsets.UTF_8); bridge(wire,fixture);
+            var output=new OutputStream() {
+                int writes;
+                @Override public void write(int value) throws IOException { throw new IOException("Synthetic downstream disconnect"); }
+                @Override public void write(byte[] bytes,int offset,int length) throws IOException {
+                    var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner).getFirst();
+                    if(writes++==0) assertEquals("ANSWERED",stored.state);
+                    assertEquals(source.answer().path("answer").asText(),stored.answer);
+                    assertEquals(source.answer().path("citations").toString(),stored.citations);
+                    throw new IOException("Synthetic downstream disconnect");
+                }
+            };
+            assertThrows(UncheckedIOException.class,()->chat.stream(owner,new ChatRequest("Căn cứ P5?","")).writeTo(output));
+            var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner).getFirst();
+            assertEquals(source.answer().path("answer").asText(),stored.answer);
+            assertEquals(source.answer().path("citations"),json.readTree(stored.citations));
+        } finally {
+            chats.deleteAll(chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner));
+            legalUnits.deleteById(source.unit().id); contents.deleteById(source.document().id); accounts.deleteById(owner);
+            TestTransaction.start();
+        }
     }
 }

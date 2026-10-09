@@ -24,7 +24,7 @@ import httpx
 from .app import ApiSettings
 from .artifacts import (ArtifactFailure, ServingRelease, VerificationState,
                         _backend, _json, _readback, _unchanged)
-from .contract import ApiFailure
+from .contract import ApiFailure, RetrieveRequest
 from .security import admit_request
 
 REQUEST_SECONDS = 25.0
@@ -167,18 +167,19 @@ def _today():
     return datetime.now(ZoneInfo('Asia/Saigon')).date()
 
 
-def _require_configuration(settings):
-    if type(settings) is not RuntimeSettings:
+def _require_configuration(settings, *, capability='query'):
+    if type(settings) is not RuntimeSettings or capability not in ('query','retrieve'):
         raise ApiFailure('NOT_READY')
+    query_only = {'webapp_snapshot_id','chat_url','chat_model','chat_key'} if capability=='retrieve' else set()
     for name in RuntimeSettings.__dataclass_fields__:
-        if name != 'secrets':
+        if name != 'secrets' and name not in query_only:
             value = getattr(settings,name)
             if type(value) is not str or not value.strip() or len(value) > 4096:
                 raise ApiFailure('NOT_READY')
-    for name in ('embedding_key','chat_key','reader_password'):
+    for name in ('embedding_key','reader_password') if capability=='retrieve' else ('embedding_key','chat_key','reader_password'):
         if getattr(settings,name).lower() in ('dummy','abc123'):
             raise ApiFailure('NOT_READY')
-    for name in ('embedding_url','chat_url'):
+    for name in ('embedding_url',) if capability=='retrieve' else ('embedding_url','chat_url'):
         url = httpx.URL(getattr(settings,name))
         if url.scheme not in ('http','https') or not url.host or url.userinfo or url.query or url.fragment:
             raise ApiFailure('NOT_READY')
@@ -189,7 +190,7 @@ def _require_operational_proof(settings, release):
     raise ArtifactFailure(VerificationState.UNVERIFIED)
 
 
-def _identity(request, settings, release, parsed, as_of=None):
+def _identity(request, settings, release, parsed, as_of=None, *, capability='query'):
     if type(release) is not ServingRelease:
         raise ApiFailure('NOT_READY')
     if parsed.schema_contract != release.schema_contract:
@@ -198,6 +199,14 @@ def _identity(request, settings, release, parsed, as_of=None):
         raise RuntimeFailure('RELEASE_MISMATCH')
     if release.descriptor['source_snapshot_id'] != settings.source_snapshot_id:
         raise RuntimeFailure('SOURCE_SNAPSHOT_MISMATCH')
+    if capability=='retrieve':
+        if request.headers.getlist('x-kag-release-id') != [settings.release_id]:
+            raise RuntimeFailure('RELEASE_MISMATCH')
+        try:
+            _unchanged(release)
+        except OSError:
+            raise ArtifactFailure(VerificationState.UNAVAILABLE) from None
+        return None
     as_of = _today() if as_of is None else as_of
     for name, expected, code in (
             ('x-kag-release-id',settings.release_id,'RELEASE_MISMATCH'),
@@ -228,6 +237,7 @@ class RequestRuntime:
     as_of: object
     sdk_models: list = field(default_factory=list,repr=False)
     closed: bool = False
+    capability: str = 'query'
 
     async def close(self):
         if self.closed:
@@ -299,16 +309,20 @@ def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float
                           or ticket[2].deadline != deadline):
         raise ApiFailure('NOT_READY')
     runtime = ticket[2]
+    if runtime.capability not in ('query','retrieve'):
+        raise ApiFailure('NOT_READY')
     runtime.budget.remaining()
     _unchanged(release)
     from kag.retriever.retriever import Retriever
-    from kag.legal_solver import build_pipeline
     embed = _new_embedding(settings,runtime)
     runtime.budget.remaining()
-    llm = _new_llm(settings,runtime)
-    runtime.budget.remaining()
+    if runtime.capability=='query':
+        from kag.legal_solver import build_pipeline
+        llm = _new_llm(settings,runtime)
+        runtime.budget.remaining()
     runtime.retriever = Retriever(runtime.reader,embed,_json(release.contract_bytes))
-    runtime.pipeline = build_pipeline(runtime.retriever,llm)
+    if runtime.capability=='query':
+        runtime.pipeline = build_pipeline(runtime.retriever,llm)
     return runtime
 
 
@@ -451,6 +465,51 @@ class RuntimeSupervisor:
                                 TokenMeterFactory().remove_meter(meter_context.task_id)
                             finally:
                                 meter_context.__exit__(None,None,None)
+                except Exception:
+                    self.closed = True
+                    raise ApiFailure('INTERNAL_ERROR') from None
+
+        return await self.supervise(operation,deadline)
+
+    async def retrieve(self, request, settings, release, *, finalize=None, factory=None):
+        deadline = time.monotonic()+REQUEST_SECONDS
+        request.state.h1_deadline = deadline
+        parsed = await admit_request(request,'inspect',RetrieveRequest)
+        if request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        try:
+            _require_configuration(settings,capability='retrieve')
+        except (ValueError,httpx.InvalidURL):
+            raise ApiFailure('NOT_READY') from None
+
+        async def operation():
+            runtime = RequestRuntime(None,None,None,deadline,self._budget,parsed.message,None,
+                                     capability='retrieve')
+            token = None
+            try:
+                await asyncio.to_thread(_identity,request,settings,release,parsed,capability='retrieve')
+                runtime.budget.remaining()
+                _require_operational_proof(settings,release)
+                initialize_runtime()
+                runtime.reader = await asyncio.to_thread(_new_reader,settings,release,runtime.budget)
+                def integrity():
+                    runtime.budget.remaining()
+                    _backend(runtime.reader,release)
+                    _readback(runtime.reader,release.records,_json(release.contract_bytes))
+                    _backend(runtime.reader,release)
+                    _unchanged(release)
+                    runtime.budget.remaining()
+                await asyncio.to_thread(integrity)
+                token = _CURRENT.set((settings,release,runtime))
+                runtime = await asyncio.to_thread(factory or make_runtime,settings,release,deadline)
+                result = await run_retrieve(runtime,parsed.message,parsed.top_k,parsed.expand)
+                await asyncio.to_thread(integrity)
+                return result if finalize is None else await finalize(runtime,result,parsed)
+            finally:
+                if token is not None:
+                    _CURRENT.reset(token)
+                try:
+                    await runtime.close()
                 except Exception:
                     self.closed = True
                     raise ApiFailure('INTERNAL_ERROR') from None

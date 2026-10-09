@@ -26,6 +26,9 @@ app:
   admin-email: ${ADMIN_EMAIL:}
   admin-password: ${ADMIN_PASSWORD:}
   kag-url: ${KAG_BASE_URL:http://localhost:8000}
+  kag-token-file: ${KAG_TOKEN_FILE:}
+  kag-release-id: ${KAG_RELEASE_ID:}
+  kag-webapp-snapshot-id: ${KAG_WEBAPP_SNAPSHOT_ID:}
   minio-url: ${MINIO_URL:http://localhost:9000}
   minio-user: ${MINIO_USER}
   minio-password: ${MINIO_PASSWORD}

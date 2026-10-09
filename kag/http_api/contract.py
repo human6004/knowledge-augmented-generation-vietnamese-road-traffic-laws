@@ -121,7 +121,7 @@ class _Request:
     @classmethod
     def from_dict(cls, value):
         required = ('user_id', 'message', 'context_id', 'schema_contract') if cls is QueryV1Request else (
-            'user_id', 'message', 'schema_contract')
+            'message', 'schema_contract')
         _object(value, required, () if cls is QueryV1Request else ('top_k', 'expand'))
         return cls(**{**value, 'schema_contract': SchemaIdentity.from_dict(value['schema_contract'])})
 
@@ -172,14 +172,16 @@ class QueryV1Request(_Request):
 
 @dataclass(frozen=True)
 class RetrieveRequest(_Request):
-    user_id: str
+    """Service-only request for the h1-read-v1.1 retrieve contract."""
     message: str
     schema_contract: SchemaIdentity
     top_k: int = 10
     expand: bool = False
 
     def __post_init__(self):
-        _request(self.user_id, self.message, self.schema_contract)
+        if (not _text(self.message) or not self.message.strip() or utf16_units(self.message) > 4000 or
+                type(self.schema_contract) is not SchemaIdentity):
+            raise ApiFailure('INVALID_REQUEST')
         if type(self.top_k) is not int or not 1 <= self.top_k <= 10 or type(self.expand) is not bool:
             raise ApiFailure('INVALID_REQUEST')
 
@@ -246,3 +248,13 @@ def encode_v1(payload: dict) -> bytes:
     if len(raw) > 245760:
         raise ApiFailure('V1_RESULT_UNREPRESENTABLE')
     return raw
+
+
+def encode_retrieve(payload: dict) -> bytes:
+    """Same strict UTF-8 encoding, with the approved retrieve wire-limit error."""
+    try:
+        return encode_v1(payload)
+    except ApiFailure as exc:
+        if exc.code == 'V1_RESULT_UNREPRESENTABLE':
+            raise ApiFailure('RESULT_LIMIT_EXCEEDED') from None
+        raise

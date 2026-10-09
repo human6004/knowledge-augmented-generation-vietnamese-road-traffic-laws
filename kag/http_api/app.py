@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from ipaddress import ip_address
 import os
+import math
 from pathlib import Path
 import time
 from uuid import uuid4
@@ -79,11 +80,12 @@ class _SafeHTTP:
         started = False
 
         async def authority():
-            from .runtime import _today
             if time.monotonic() >= scope['state']['h1_deadline']:
                 raise ApiFailure('QUERY_TIMEOUT')
-            if _today() != scope['state']['h1_as_of']:
-                raise ApiFailure('DATE_BOUNDARY_CHANGED')
+            if scope['state'].get('h1_query_verified'):
+                from .runtime import _today
+                if _today() != scope['state']['h1_as_of']:
+                    raise ApiFailure('DATE_BOUNDARY_CHANGED')
             try:
                 await asyncio.wait_for(asyncio.to_thread(scope['state']['h1_authority_guard']),
                     scope['state']['h1_deadline']-time.monotonic())
@@ -92,7 +94,8 @@ class _SafeHTTP:
 
         async def safe_send(message):
             nonlocal started
-            if scope['state'].get('h1_query_verified'):
+            verified = scope['state'].get('h1_query_verified') or scope['state'].get('h1_retrieve_verified')
+            if verified:
                 await authority()
             if message['type'] == 'http.response.start':
                 started = True
@@ -101,10 +104,12 @@ class _SafeHTTP:
                 message = {**message, 'headers': headers+[
                     (b'x-request-id', scope['state']['request_id'].encode('ascii')),
                     (b'cache-control', b'no-store')]}
-            if scope['state'].get('h1_query_verified'):
-                now = datetime.now(ZoneInfo('Asia/Saigon'))
-                midnight = datetime.combine(now.date()+timedelta(days=1),datetime.min.time(),now.tzinfo)
-                midnight_deadline = time.monotonic()+(midnight-now).total_seconds()
+            if verified:
+                midnight_deadline = scope['state']['h1_deadline']
+                if scope['state'].get('h1_query_verified'):
+                    now = datetime.now(ZoneInfo('Asia/Saigon'))
+                    midnight = datetime.combine(now.date()+timedelta(days=1),datetime.min.time(),now.tzinfo)
+                    midnight_deadline = time.monotonic()+(midnight-now).total_seconds()
                 delivery = asyncio.create_task(send(message))
                 try:
                     while not delivery.done():
@@ -128,11 +133,13 @@ class _SafeHTTP:
         except ApiFailure as exc:
             if not started:
                 scope['state']['h1_query_verified'] = False
+                scope['state']['h1_retrieve_verified'] = False
                 response = _failure(Request(scope), exc.code)
                 await response(scope, receive, safe_send)
         except Exception:
             if not started:
                 scope['state']['h1_query_verified'] = False
+                scope['state']['h1_retrieve_verified'] = False
                 response = _failure(Request(scope), 'INTERNAL_ERROR')
                 await response(scope, receive, safe_send)
 
@@ -144,7 +151,89 @@ def _local(request: Request) -> bool:
         return False
 
 
-def create_app(settings: ApiSettings | None = None, runtime_factory=None) -> FastAPI:
+def _verify_retrieve_items(items, release, reader):
+    from kag.vector_contract import TARGETS
+    if type(items) is not list:
+        raise ApiFailure('INVALID_NATIVE_RESULT')
+    if len(items) > 110:
+        raise ApiFailure('RESULT_LIMIT_EXCEEDED')
+    try:
+        contract._json_value(items)
+    except (ValueError,RecursionError):
+        raise ApiFailure('INVALID_NATIVE_RESULT') from None
+    catalog = {}
+    relations = set()
+    schema = artifacts._json(release.contract_bytes)
+    for record in release.records:
+        catalog.setdefault((record.entity_type,record.entity_id),{})[record.field] = record
+        for relation in record.graph_context:
+            relations.add((tuple(relation['from']),relation['predicate'],tuple(relation['to'])))
+    indexes = reader.indexes()
+    fields = {'entity_type','entity_id','doc_id','unit_id','sign_id','source_texts',
+              'score','vector_sources','graph_context'}
+    def score(value):
+        return type(value) in (int,float) and 0<=value<=1 and math.isfinite(value)
+    seen = set()
+    for item in items:
+        if (type(item) is not dict or set(item)!=fields
+                or any(not contract._text(item[k]) or not item[k] for k in ('entity_type','entity_id'))
+                or type(item['source_texts']) is not dict or type(item['vector_sources']) is not list
+                or type(item['graph_context']) is not list
+                or (item['score'] is not None and not score(item['score']))):
+            raise ApiFailure('INVALID_NATIVE_RESULT')
+        key = item['entity_type'],item['entity_id']
+        records = catalog.get(key)
+        if not records:
+            raise ApiFailure('SOURCE_VALIDATION_FAILED')
+        reference = next(iter(records.values()))
+        if (any(item[k]!=getattr(reference,k) for k in ('doc_id','unit_id','sign_id'))
+                or key in seen):
+            raise ApiFailure('SOURCE_VALIDATION_FAILED')
+        seen.add(key)
+        kind = key[0].removeprefix(release.schema_contract.namespace+'.')
+        targets = dict(TARGETS[kind])
+        # Catalog metadata uses logical names; native preserves physical names and empty Text.
+        texts = {row['schema_name']:reference.metadata.get(row['logical_name'])
+                 for row in schema['node_properties'][kind] if row['schema_name'] in targets}
+        if (set(item['source_texts'])!=set(targets)
+                or item['source_texts']!=texts):
+            raise ApiFailure('SOURCE_VALIDATION_FAILED')
+        properties = set()
+        for source in item['vector_sources']:
+            if (type(source) is not dict or set(source)!={'property','score','index'}
+                    or not contract._text(source['property']) or not score(source['score'])
+                    or not contract._text(source['index']) or not source['index']):
+                raise ApiFailure('INVALID_NATIVE_RESULT')
+            prop = source['property']
+            if prop not in targets or prop in properties:
+                raise ApiFailure('SOURCE_VALIDATION_FAILED')
+            properties.add(prop)
+            matched = [i for i in indexes if i.get('labelsOrTypes')==[key[0]]
+                       and i.get('properties')==[targets[prop]] and i.get('type')=='VECTOR']
+            if len(matched)!=1 or matched[0].get('name')!=source['index']:
+                raise ApiFailure('SOURCE_VALIDATION_FAILED')
+        if ((item['score'] is None) != (not item['vector_sources'])
+                or (item['vector_sources'] and item['score']!=max(s['score'] for s in item['vector_sources']))
+                or (item['score'] is None and not item['graph_context'])):
+            raise ApiFailure('INVALID_NATIVE_RESULT')
+        contexts = set()
+        for relation in item['graph_context']:
+            if (type(relation) is not dict or set(relation)!={'from','predicate','to'}
+                    or not contract._text(relation['predicate'])
+                    or any(type(relation[s]) is not list or len(relation[s])!=2
+                           or any(not contract._text(v) or not v for v in relation[s]) for s in ('from','to'))):
+                raise ApiFailure('INVALID_NATIVE_RESULT')
+            source,target = tuple(relation['from']),tuple(relation['to'])
+            identity = source,relation['predicate'],target
+            if (identity not in relations or key not in (source,target)
+                    or source not in catalog or target not in catalog or identity in contexts):
+                raise ApiFailure('SOURCE_VALIDATION_FAILED')
+            contexts.add(identity)
+
+
+def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, enable_sample_routes=False) -> FastAPI:
+    if type(enable_sample_routes) is not bool:
+        raise ApiFailure('NOT_READY')
     settings = ApiSettings.from_env() if settings is None else settings
     if type(settings) is not ApiSettings:
         raise ApiFailure('NOT_READY')
@@ -222,8 +311,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None) -> Fas
             raise ApiFailure('RELEASE_UNAVAILABLE') from None
         return artifacts.release_view(release)
 
-    @app.post('/v1/query')
-    async def query(request: Request):
+    async def verified_query(request: Request, *, stream=False):
         from . import runtime as core
         release, settings = app.state.serving_release, app.state.runtime_settings
         supervisor = getattr(app.state,'runtime_supervisor',None)
@@ -297,6 +385,10 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None) -> Fas
                     if exc.code == 'V1_RESULT_UNREPRESENTABLE':
                         raise ApiFailure('RESULT_LIMIT_EXCEEDED') from None
                     raise
+                if stream:
+                    raw = b'event: done\ndata: '+raw+b'\n\n'
+                    if len(raw) > 245760:
+                        raise ApiFailure('RESULT_LIMIT_EXCEEDED')
                 if sources() != verified:
                     raise ApiFailure('SOURCE_VALIDATION_FAILED')
                 request.state.h1_authority_guard = identity
@@ -324,6 +416,9 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None) -> Fas
             if time.monotonic() >= request.state.h1_deadline:
                 raise ApiFailure('QUERY_TIMEOUT')
             request.state.h1_query_verified, request.state.h1_as_of = True, as_of
+            if stream:
+                headers['X-Accel-Buffering'] = 'no'
+                return Response(raw,media_type='text/event-stream',headers=headers)
             return Response(raw,media_type='application/json',headers=headers)
         except core.RuntimeFailure as exc:
             raise ApiFailure(exc.code) from None
@@ -333,5 +428,103 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None) -> Fas
                 if not task.done():
                     task.cancel()
             await asyncio.gather(operation,watcher,return_exceptions=True)
+
+    @app.post('/v1/query')
+    async def query(request: Request):
+        return await verified_query(request)
+
+    if enable_sample_routes:
+        @app.post('/v1/query/stream')
+        async def query_stream(request: Request):
+            return await verified_query(request,stream=True)
+
+        @app.post('/v1/retrieve')
+        async def retrieve(request: Request):
+            from . import runtime as core
+            release, settings = app.state.serving_release, app.state.runtime_settings
+            supervisor = getattr(app.state,'runtime_supervisor',None)
+            if type(release) is not artifacts.ServingRelease or settings is None or supervisor is None:
+                await admit_request(request,'inspect',contract.RetrieveRequest)
+                if request.query_params:
+                    raise ApiFailure('INVALID_REQUEST')
+                raise ApiFailure('RELEASE_UNAVAILABLE' if type(release) is not artifacts.ServingRelease else 'NOT_READY')
+            if settings.secrets != app.state.http_settings.secrets:
+                await admit_request(request,'inspect',contract.RetrieveRequest)
+                raise ApiFailure('NOT_READY')
+
+            async def finalize(instance, result, parsed):
+                def identity():
+                    instance.budget.response_remaining()
+                    selected = app.state.serving_release
+                    if type(selected) is not artifacts.ServingRelease:
+                        raise ApiFailure('RELEASE_UNAVAILABLE')
+                    if selected.schema_contract != release.schema_contract:
+                        raise ApiFailure('SCHEMA_CONTRACT_MISMATCH')
+                    if selected.descriptor['source_snapshot_id'] != release.descriptor['source_snapshot_id']:
+                        raise ApiFailure('SOURCE_SNAPSHOT_MISMATCH')
+                    if (selected.release_id != release.release_id or selected.descriptor_sha256 != release.descriptor_sha256
+                            or app.state.runtime_settings != settings or app.state.http_settings.secrets != settings.secrets):
+                        raise ApiFailure('RELEASE_MISMATCH')
+                    try:
+                        if artifacts._read(release.root,'release.json') != dict(release.artifacts)['release.json']:
+                            raise ApiFailure('RELEASE_MISMATCH')
+                        core._identity(request,settings,release,parsed,capability='retrieve')
+                    except core.RuntimeFailure as exc:
+                        raise ApiFailure(exc.code) from None
+                    except artifacts.ArtifactFailure as exc:
+                        raise ApiFailure('BACKEND_UNAVAILABLE' if exc.state is artifacts.VerificationState.UNAVAILABLE
+                                         else 'SOURCE_VALIDATION_FAILED') from None
+                    instance.budget.response_remaining()
+
+                def sources():
+                    identity()
+                    try:
+                        artifacts._backend(instance.reader,release)
+                        artifacts._readback(instance.reader,release.records,artifacts._json(release.contract_bytes))
+                        _verify_retrieve_items(result,release,instance.reader)
+                        artifacts._backend(instance.reader,release)
+                        artifacts._unchanged(release)
+                    except artifacts.ArtifactFailure as exc:
+                        raise ApiFailure('BACKEND_UNAVAILABLE' if exc.state is artifacts.VerificationState.UNAVAILABLE
+                                         else 'SOURCE_VALIDATION_FAILED') from None
+                    identity()
+
+                def verified_bytes():
+                    sources()
+                    payload = {'contract_version':'h1-read-v1.1','request_id':request.state.request_id,
+                        'release_id':release.release_id,'source_snapshot_id':settings.source_snapshot_id,
+                        'schema_contract':asdict(release.schema_contract),'items':result}
+                    raw = contract.encode_retrieve(payload)
+                    sources()
+                    request.state.h1_authority_guard = identity
+                    return raw
+                return await asyncio.to_thread(verified_bytes)
+
+            watching = True
+            async def disconnected():
+                while watching:
+                    if getattr(request,'_stream_consumed',False) and await request.is_disconnected():
+                        return True
+                    await asyncio.sleep(.02)
+            operation = asyncio.create_task(supervisor.retrieve(request,settings,release,
+                finalize=finalize,factory=app.state.runtime_factory))
+            watcher = asyncio.create_task(disconnected())
+            try:
+                done,_ = await asyncio.wait({operation,watcher},return_when=asyncio.FIRST_COMPLETED)
+                if watcher in done and watcher.result():
+                    raise asyncio.CancelledError
+                raw = operation.result()
+                if time.monotonic() >= request.state.h1_deadline:
+                    raise ApiFailure('QUERY_TIMEOUT')
+                request.state.h1_retrieve_verified = True
+                return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
+            except core.RuntimeFailure as exc:
+                raise ApiFailure(exc.code) from None
+            finally:
+                watching = False
+                for task in (operation,watcher):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(operation,watcher,return_exceptions=True)
 
     return app

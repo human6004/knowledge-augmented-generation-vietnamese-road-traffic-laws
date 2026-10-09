@@ -1,6 +1,7 @@
 """SYNTHETIC runtime admission and drain; actual native aanswer, no network."""
 import asyncio
 from datetime import date
+from dataclasses import replace
 import importlib
 import importlib.util
 import json
@@ -775,3 +776,387 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls,[True])
         finally:
             await runtime.close()
+
+
+class RetrieveRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    """Owned inspect retrieval: actual Retriever, synthetic proof and I/O only."""
+    asyncTearDown = RuntimeTests.asyncTearDown
+    settings = RuntimeTests.settings
+    request = RuntimeTests.request
+    synthetic = RuntimeTests.synthetic
+    real_sdk = RuntimeTests.real_sdk
+
+    async def asyncSetUp(self):
+        await RuntimeTests.asyncSetUp(self)
+        self.reader.seal(publication=False)
+        from kag.http_api.artifacts import load_release
+        self.release = load_release(self.root,'synthetic-release')
+        self.calls = []
+
+    def retrieve_settings(self, **changes):
+        return replace(self.settings(),chat_url=None,chat_model=None,chat_key=None,
+                       webapp_snapshot_id=None,**changes)
+
+    def retrieve_request(self, token='i'*43, body=None, headers=None):
+        payload = {'message':QUESTION,'schema_contract':IDENTITY}
+        payload.update(body or {})
+        request = self.request(token=token,raw=json.dumps(payload).encode(),headers=headers)
+        request.scope['headers'] = [(k,v) for k,v in request.scope['headers']
+            if k not in (b'x-webapp-snapshot-id',b'x-kag-as-of') or k.decode() in (headers or {})]
+        return request
+
+    def retrieve_synthetic(self, vector=None, sdk=False):
+        module = api()
+        stack = self.synthetic(sdk=sdk)
+        def embedding(settings,runtime):
+            self.events.append('embedding.constructor')
+            self.captured_runtime = runtime
+            def embed(question):
+                self.calls.append(('embed',question))
+                return [1.0]+[0.0]*3071 if vector is None else vector
+            return embed
+        if not sdk:
+            stack.enter_context(patch.object(module,'_new_embedding',embedding))
+        self.forbidden = []
+        for target in ('kag.http_api.runtime._new_llm','kag.legal_solver.build_pipeline',
+                       'kag.legal_solver.aanswer','kag.http_api.runtime.uuid4',
+                       'kag.http_api.runtime._today'):
+            mock = stack.enter_context(patch(target,side_effect=AssertionError('Retrieve crossed query boundary')))
+            self.forbidden.append(mock)
+        return stack
+
+    async def retrieve(self, supervisor=None, request=None, settings=None, release=None):
+        supervisor = supervisor or api().RuntimeSupervisor()
+        self.assertTrue(callable(getattr(supervisor,'retrieve',None)),
+                        'P2 owned embedding-only retrieve entrypoint missing')
+        try:
+            return await supervisor.retrieve(request or self.retrieve_request(),
+                self.retrieve_settings() if settings is None else settings,
+                self.release if release is None else release)
+        finally:
+            if not supervisor.busy:
+                await supervisor.close()
+
+    async def reject(self, code='NOT_READY', **kwargs):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        with self.retrieve_synthetic(),self.assertRaises((ApiFailure,module.RuntimeFailure)) as caught:
+            await self.retrieve(supervisor,**kwargs)
+        self.assertEqual(caught.exception.code,code)
+        self.assertEqual(self.calls,[])
+        self.assertNotIn('embedding.constructor',self.events)
+        self.assertFalse(supervisor.busy)
+        await supervisor.close()
+
+    async def test_service_only_no_chat_publication_date_or_delegated_uuid(self):
+        request = self.retrieve_request(headers={'x-kag-as-of':'not-a-date'})
+        with self.retrieve_synthetic():
+            result = await self.retrieve(request=request)
+        self.assertEqual(result[0]['source_texts']['text'],TEXT)
+        self.assertEqual(request.state.service_principal.service_id,'inspect')
+        self.assertNotIn('delegated_user_id',request.state._state)
+        self.assertIsNone(self.captured_runtime.pipeline)
+        self.assertIsNone(self.captured_runtime.as_of)
+        self.assertTrue(self.captured_runtime.closed)
+        self.assertTrue(self.reader.closed)
+        self.assertEqual(self.calls,[('embed',QUESTION)])
+        self.assertTrue(all(mock.call_count==0 for mock in self.forbidden))
+        for first,second in (('SYNTHETIC.proof','reader.constructor'),('backend','embedding.constructor'),
+                             ('source','embedding.constructor')):
+            self.assertLess(self.events.index(first),self.events.index(second))
+
+    async def test_native_order_scores_four_targets_and_expansion_nulls(self):
+        from kag.vector_contract import TARGETS
+        def search(kind,prop,vector,k):
+            self.calls.append(('vector',kind,prop,len(vector),k))
+            self.assertEqual(vector,[1.0]+[0.0]*3071)
+            return [{'id':'unit-1','score':0.9,'index':'native-index'}] if kind=='LegalUnit' else []
+        def expand(keys,predicates,limit):
+            self.calls.append(('expand',keys,limit))
+            return [self.reader.relation]
+        with self.retrieve_synthetic(),patch.object(self.reader,'vector_search',search),patch.object(self.reader,'expand',expand):
+            result = await self.retrieve(request=self.retrieve_request(body={'top_k':1,'expand':True}))
+        self.assertEqual([(r['entity_id'],r['score']) for r in result],[('unit-1',0.9),('document-1',None)])
+        self.assertEqual(result[0]['vector_sources'],[{'property':'text','score':0.9,'index':'native-index'}])
+        self.assertEqual(result[1]['vector_sources'],[])
+        self.assertEqual(result[0]['graph_context'],[self.reader.relation])
+        self.assertEqual([c[1:3] for c in self.calls if c[0]=='vector'],
+                         [(kind,prop) for kind,targets in TARGETS.items() for prop,_ in targets])
+        self.assertTrue(all(c[3:]==(3072,10) for c in self.calls if c[0]=='vector'))
+        self.assertEqual(self.calls[-1],('expand',[['VietRoadTraffic.LegalUnit','unit-1']],50))
+        self.assertEqual(sum(c[0]=='embed' for c in self.calls),1)
+        self.assertTrue(all(mock.call_count==0 for mock in self.forbidden))
+
+    async def test_empty_native_retrieval_preserved(self):
+        with self.retrieve_synthetic(),patch.object(self.reader,'vector_search',return_value=[]) as search:
+            self.assertEqual(await self.retrieve(),[])
+        self.assertEqual(search.call_count,4)
+        self.assertEqual(self.calls,[('embed',QUESTION)])
+        self.assertTrue(self.reader.closed)
+
+    async def test_query_credential_cannot_retrieve(self):
+        await self.reject('SCOPE_DENIED',request=self.retrieve_request(token='q'*43))
+
+    async def test_missing_auth_cannot_retrieve(self):
+        await self.reject('AUTH_INVALID',request=self.retrieve_request(token=''))
+
+    async def test_delegated_body_and_identity_header_rejected(self):
+        for request in (self.retrieve_request(body={'user_id':USER}),
+                        self.retrieve_request(headers={'x-user-id':USER})):
+            with self.subTest(request=request):
+                await self.reject('INVALID_REQUEST',request=request)
+
+    async def test_query_parameters_cannot_control_runtime(self):
+        request = self.retrieve_request()
+        request.scope['query_string'] = b'capability=query'
+        await self.reject('INVALID_REQUEST',request=request)
+
+    async def test_wrong_schema_before_reader_and_embedding(self):
+        await self.reject('SCHEMA_CONTRACT_MISMATCH',request=self.retrieve_request(
+            body={'schema_contract':{**IDENTITY,'schema_sha256':'a'*64}}))
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_wrong_release_before_reader_and_embedding(self):
+        await self.reject('RELEASE_MISMATCH',settings=self.retrieve_settings(release_id='foreign'))
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_missing_release_header_before_reader_and_embedding(self):
+        request = self.retrieve_request()
+        request.scope['headers'] = [(k,v) for k,v in request.scope['headers'] if k!=b'x-kag-release-id']
+        await self.reject('RELEASE_MISMATCH',request=request)
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_wrong_release_header_before_reader_and_embedding(self):
+        await self.reject('RELEASE_MISMATCH',request=self.retrieve_request(headers={'x-kag-release-id':'foreign'}))
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_duplicate_release_header_before_reader_and_embedding(self):
+        request = self.retrieve_request()
+        request.scope['headers'].append((b'x-kag-release-id',b'synthetic-release'))
+        await self.reject('RELEASE_MISMATCH',request=request)
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_wrong_source_snapshot_before_reader_and_embedding(self):
+        await self.reject('SOURCE_SNAPSHOT_MISMATCH',settings=self.retrieve_settings(source_snapshot_id='foreign'))
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_missing_release_denied(self):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        self.assertTrue(callable(getattr(supervisor,'retrieve',None)),'P2 owned retrieve missing')
+        with self.retrieve_synthetic(),self.assertRaises(ApiFailure) as caught:
+            await supervisor.retrieve(self.retrieve_request(),self.retrieve_settings(),None)
+        self.assertEqual(caught.exception.code,'NOT_READY')
+        self.assertEqual(self.calls,[])
+        await supervisor.close()
+
+    async def test_missing_reader_or_embedding_configuration_denied(self):
+        for field in ('reader_username','reader_password','embedding_url','embedding_model','embedding_key'):
+            with self.subTest(field=field):
+                await self.reject(settings=self.retrieve_settings(**{field:None}))
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_invalid_embedding_configuration_denied(self):
+        for changes in ({'embedding_key':'dummy'},{'embedding_url':'http://user:secret@fixture.invalid'},
+                        {'embedding_url':'not a url'},{'embedding_model':''}):
+            with self.subTest(changes=changes):
+                await self.reject(settings=self.retrieve_settings(**changes))
+
+    async def test_artifact_drift_before_work_denied(self):
+        (self.root/'source-catalog.json').write_bytes(b'{}')
+        await self.reject()
+        self.assertNotIn('reader.constructor',self.events)
+
+    async def test_default_operational_proof_still_denies(self):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        self.assertTrue(callable(getattr(supervisor,'retrieve',None)),'P2 owned retrieve missing')
+        with patch.object(module,'_new_reader') as constructor,self.assertRaises(ApiFailure) as caught:
+            await supervisor.retrieve(self.retrieve_request(),self.retrieve_settings(),self.release)
+        self.assertEqual(caught.exception.code,'NOT_READY')
+        constructor.assert_not_called()
+        self.assertFalse(supervisor.live_ready)
+        await supervisor.close()
+
+    async def test_backend_physical_identity_denied_before_embedding(self):
+        self.reader.metadata['databaseID'] = 'foreign'
+        await self.reject('SOURCE_VALIDATION_FAILED')
+        self.assertTrue(self.reader.closed)
+
+    async def test_vector_index_identity_denied_before_embedding(self):
+        self.reader.vector_indexes[0]['options']['indexConfig']['vector.dimensions'] = 1536
+        await self.reject('SOURCE_VALIDATION_FAILED')
+        self.assertTrue(self.reader.closed)
+
+    async def test_source_readback_denied_before_embedding(self):
+        self.reader.nodes[('VietRoadTraffic.LegalUnit','unit-1')]['properties']['text'] = 'changed'
+        await self.reject('SOURCE_VALIDATION_FAILED')
+        self.assertTrue(self.reader.closed)
+
+    async def test_unavailable_read_capability_denied_before_embedding(self):
+        with patch.object(self.reader,'read_nodes',side_effect=OSError('private endpoint')):
+            await self.reject()
+        self.assertTrue(self.reader.closed)
+
+    async def post_drift(self, change, code):
+        module = api()
+        original = self.reader.vector_search
+        def search(*args):
+            rows = original(*args)
+            change()
+            return rows
+        with self.retrieve_synthetic(),patch.object(self.reader,'vector_search',search),self.assertRaises(
+                (ApiFailure,module.RuntimeFailure)) as caught:
+            await self.retrieve()
+        self.assertEqual(caught.exception.code,code)
+        self.assertEqual(self.calls,[('embed',QUESTION)])
+        self.assertTrue(self.reader.closed)
+
+    async def test_artifact_drift_after_work_rejects_output(self):
+        await self.post_drift(lambda:(self.root/'source-catalog.json').write_bytes(b'{}'),'NOT_READY')
+
+    async def test_backend_drift_after_work_rejects_output(self):
+        await self.post_drift(lambda:self.reader.metadata.update(databaseID='foreign'),'SOURCE_VALIDATION_FAILED')
+
+    async def test_index_drift_after_work_rejects_output(self):
+        await self.post_drift(lambda:self.reader.vector_indexes[0].update(state='POPULATING'),'SOURCE_VALIDATION_FAILED')
+
+    async def test_source_drift_after_work_rejects_output(self):
+        await self.post_drift(lambda:self.reader.nodes[('VietRoadTraffic.LegalUnit','unit-1')]['properties'].update(
+            text='changed'),'SOURCE_VALIDATION_FAILED')
+
+    async def test_invalid_vectors_fail_native_contract_and_cleanup(self):
+        module = api()
+        for vector in ([],[1.0]*1536,[0.0]*3072,[float('nan')]+[0.0]*3071,
+                       [float('inf')]+[0.0]*3071,'unsupported'):
+            with self.subTest(vector_type=type(vector).__name__,length=len(vector)):
+                self.reader.closed = False
+                with self.retrieve_synthetic(vector=vector),self.assertRaises(module.RuntimeFailure) as caught:
+                    await self.retrieve()
+                self.assertEqual(caught.exception.code,'PROVIDER_ERROR')
+                self.assertTrue(self.reader.closed)
+                self.assertTrue(self.captured_runtime.closed)
+
+    async def test_invalid_vector_rows_fail_native_contract(self):
+        module = api()
+        for rows in ([{'id':'unit-1','score':float('nan')}],['unsupported'],[{'id':'unit-1','score':2}]):
+            with self.subTest(rows=rows):
+                with self.retrieve_synthetic(),patch.object(self.reader,'vector_search',return_value=rows),self.assertRaises(
+                        module.RuntimeFailure) as caught:
+                    await self.retrieve()
+                self.assertEqual(caught.exception.code,'PROVIDER_ERROR')
+                self.assertTrue(self.reader.closed)
+
+    async def test_query_still_requires_chat_configuration(self):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        with self.synthetic(),self.assertRaises(ApiFailure) as caught:
+            await supervisor.query(self.request(),self.retrieve_settings(),self.release)
+        self.assertEqual(caught.exception.code,'NOT_READY')
+        self.assertNotIn('reader.constructor',self.events)
+        await supervisor.close()
+
+    async def test_retrieve_cleanup_failure_closes_supervisor(self):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        def close():
+            self.events.append('reader.close.failed')
+            raise OSError('raw private detail')
+        with self.retrieve_synthetic(),patch.object(self.reader,'close',close),self.assertRaises(ApiFailure) as caught:
+            await self.retrieve(supervisor)
+        self.assertEqual(caught.exception.code,'INTERNAL_ERROR')
+        self.assertTrue(supervisor.closed)
+        self.assertFalse(supervisor.busy)
+
+    async def drain(self, cancel=False, shutdown=False):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        self.assertTrue(callable(getattr(supervisor,'retrieve',None)),'P2 owned retrieve missing')
+        entered,finish = threading.Event(),threading.Event()
+        original = self.reader.vector_search
+        def search(*args):
+            entered.set()
+            if not finish.wait(5):
+                raise AssertionError('Synthetic retrieve worker must be released')
+            return original(*args)
+        with self.retrieve_synthetic(sdk=True),self.real_sdk(),patch.object(self.reader,'vector_search',search),patch.object(
+                module,'REQUEST_SECONDS',1.0):
+            task = asyncio.create_task(supervisor.retrieve(self.retrieve_request(),self.retrieve_settings(),self.release))
+            closing = None
+            try:
+                while not entered.is_set() and not task.done():
+                    await asyncio.sleep(.001)
+                if task.done() and not entered.is_set():
+                    await task
+                self.assertTrue(entered.is_set(),'Actual Retriever worker must start')
+                if cancel:
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                elif shutdown:
+                    closing = asyncio.create_task(supervisor.close())
+                    await asyncio.sleep(0)
+                    self.assertFalse(closing.done())
+                else:
+                    with self.assertRaises(ApiFailure) as caught:
+                        await task
+                    self.assertEqual(caught.exception.code,'QUERY_TIMEOUT')
+                self.assertTrue(supervisor.busy)
+                self.assertFalse(self.reader.closed)
+                self.assertTrue(all(not model.client.is_closed() for model in self.sdk_models))
+                if not shutdown:
+                    self.assertTrue(supervisor.draining)
+                    with patch.object(module,'_today',lambda:AS_OF),self.assertRaises(module.RuntimeFailure) as caught:
+                        await supervisor.query(self.request(),self.settings(),self.release)
+                    self.assertEqual(caught.exception.code,'CONCURRENCY_LIMIT')
+                    with self.assertRaises(module.RuntimeFailure):
+                        await supervisor.retrieve(self.retrieve_request(),self.retrieve_settings(),self.release)
+            finally:
+                finish.set()
+                await supervisor.close()
+                await asyncio.gather(task,return_exceptions=True)
+                if closing is not None:
+                    await closing
+        self.assertFalse(supervisor.busy)
+        self.assertTrue(self.reader.closed)
+        self.assertTrue(all(model.client.is_closed() and model.aclient.is_closed() for model in self.sdk_models))
+        self.assertEqual(len(self.sdk_models),1)
+        self.assertEqual(self.meter_contexts,[])
+
+    async def test_retrieve_timeout_retains_slot_and_real_sdk_until_worker_drains(self):
+        await self.drain()
+
+    async def test_retrieve_cancel_retains_slot_and_real_sdk_until_worker_drains(self):
+        await self.drain(cancel=True)
+
+    async def test_retrieve_shutdown_waits_for_actual_worker(self):
+        await self.drain(shutdown=True)
+
+    async def test_active_query_blocks_owned_retrieve_before_constructors(self):
+        module = api()
+        supervisor = module.RuntimeSupervisor()
+        started,finish = asyncio.Event(),asyncio.Event()
+        original = module.run_query
+        async def run(*args):
+            started.set()
+            await finish.wait()
+            return await original(*args)
+        self.reader.descriptor['webapp_snapshot_id'] = 'synthetic-webapp'
+        self.reader.seal()
+        from kag.http_api.artifacts import load_release
+        release = load_release(self.root,'synthetic-release')
+        self.assertTrue(callable(getattr(supervisor,'retrieve',None)),'P2 owned retrieve missing')
+        with self.synthetic(),patch.object(module,'run_query',run):
+            task = asyncio.create_task(supervisor.query(self.request(),self.settings(),release))
+            try:
+                await started.wait()
+                before = list(self.events)
+                with self.assertRaises(module.RuntimeFailure) as caught:
+                    await supervisor.retrieve(self.retrieve_request(),self.retrieve_settings(),release)
+                self.assertEqual(caught.exception.code,'CONCURRENCY_LIMIT')
+                self.assertEqual(self.events,before)
+            finally:
+                finish.set()
+                result = await task
+                await supervisor.close()
+        self.assertFalse(result.abstained)

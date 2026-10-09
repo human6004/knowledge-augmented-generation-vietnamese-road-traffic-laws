@@ -98,7 +98,7 @@ assert 'kag.bootstrap' not in sys.modules or not sys.modules['kag.bootstrap']._i
         self.failure('INVALID_REQUEST', self.api.SchemaIdentity, 'VietRoadTraffic', 'bad', 'b'*64, status=422)
         schema = self.api.SchemaIdentity.from_dict(SCHEMA)
         self.failure('INVALID_REQUEST', self.api.QueryV1Request, USER, 123, '', schema, status=422)
-        self.failure('INVALID_REQUEST', self.api.RetrieveRequest, USER, 'q', schema, True, False, status=422)
+        self.failure('INVALID_REQUEST', self.api.RetrieveRequest, 'q', schema, True, False, status=422)
 
     def test_empty_or_blank_message_rejected(self):
         for message in ('', ' \n\t'):
@@ -159,18 +159,84 @@ assert 'kag.bootstrap' not in sys.modules or not sys.modules['kag.bootstrap']._i
         self.failure('INVALID_JSON', self.api.QueryV1Request.from_json, '{}', status=400)
 
     def test_retrieve_defaults_and_explicit_values(self):
-        payload = {k: v for k, v in query().items() if k != 'context_id'}
-        value = self.api.RetrieveRequest.from_dict(payload)
+        payload = {'message': query()['message'], 'schema_contract': SCHEMA}
+        try:
+            value = self.api.RetrieveRequest.from_dict(payload)
+        except self.api.ApiFailure as exc:
+            self.fail('Service-only retrieve rejected: ' + exc.code)
         self.assertEqual((value.top_k, value.expand), (10, False))
-        self.assertEqual(self.api.RetrieveRequest.from_dict({**payload, 'top_k': 1, 'expand': True}).top_k, 1)
+        self.assertEqual(asdict(value), {**payload, 'top_k': 10, 'expand': False})
+        for top_k in (1, 10):
+            explicit = self.api.RetrieveRequest.from_dict({**payload, 'top_k': top_k, 'expand': True})
+            self.assertEqual((explicit.top_k, explicit.expand), (top_k, True))
+        with self.assertRaises(FrozenInstanceError):
+            value.message = 'changed'
 
     def test_retrieve_strict_limits_and_no_extra_fields(self):
-        payload = {k: v for k, v in query().items() if k != 'context_id'}
+        payload = {'message': 'q', 'schema_contract': SCHEMA}
         for changes in ({'top_k': True}, {'top_k': 0}, {'top_k': 11}, {'top_k': '10'},
-                        {'top_k': 1.0}, {'expand': 1}, {'expand': 'false'}, {'context_id': ''}):
+                        {'top_k': 1.0}, {'top_k': None}, {'top_k': []}, {'expand': 1},
+                        {'expand': 'false'}, {'expand': None}, {'expand': []}, {'context_id': ''}):
             with self.subTest(changes=changes):
                 self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict,
                              {**payload, **changes}, status=422)
+
+    def test_retrieve_user_id_forbidden_even_null_at_both_boundaries(self):
+        for user_id in (USER, None, False, ''):
+            payload = {'message': 'q', 'schema_contract': SCHEMA, 'user_id': user_id}
+            with self.subTest(user_id=user_id):
+                self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict, payload, status=422)
+                self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_json,
+                             json.dumps(payload).encode(), status=422)
+
+    def test_retrieve_required_fields_and_unknown_fields(self):
+        payload = {'message': 'q', 'schema_contract': SCHEMA}
+        for key in payload:
+            self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict,
+                         {k: v for k, v in payload.items() if k != key}, status=422)
+        for value in ({**payload, 'model': 'other'},
+                      {**payload, 'schema_contract': {**SCHEMA, 'extra': True}}):
+            self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict, value, status=422)
+
+    def test_retrieve_utf8_roundtrip_preserves_exact_text_without_user(self):
+        payload = {'message': ' e\u0301😀\n ', 'schema_contract': SCHEMA, 'top_k': 1, 'expand': True}
+        try:
+            value = self.api.RetrieveRequest.from_json(json.dumps(payload, ensure_ascii=False).encode())
+        except self.api.ApiFailure as exc:
+            self.fail('Service-only UTF-8 retrieve rejected: ' + exc.code)
+        self.assertEqual(asdict(value), payload)
+
+    def test_retrieve_message_utf16_boundary_and_wrong_types(self):
+        payload = {'message': '😀' * 2000, 'schema_contract': SCHEMA}
+        try:
+            value = self.api.RetrieveRequest.from_dict(payload)
+        except self.api.ApiFailure as exc:
+            self.fail('Valid 4000 UTF-16 retrieve rejected: ' + exc.code)
+        self.assertEqual(value.message, payload['message'])
+        for invalid in ('😀' * 2000 + 'a', '', ' \n\t', None, False, 7, [], {}, '\ud800'):
+            self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict,
+                         {**payload, 'message': invalid}, status=422)
+
+    def test_retrieve_schema_identity_strict(self):
+        for invalid in (None, [], 'raw', {**SCHEMA, 'namespace': ''},
+                        {**SCHEMA, 'schema_sha256': 'A' * 64},
+                        {**SCHEMA, 'contract_sha256': 'b' * 63}):
+            self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_dict,
+                         {'message': 'q', 'schema_contract': invalid}, status=422)
+
+    def test_retrieve_invalid_json_utf8_bom_surrogates_duplicates_nonfinite(self):
+        for raw in (b'{', b'\xff', b'\xef\xbb\xbf{}', b'{"message":"\\ud800"}',
+                    b'{"\\udfff":1}', b'{"message":"q","message":"q"}',
+                    b'{"schema_contract":{"namespace":"x","namespace":"x"}}',
+                    b'{"top_k":NaN}', b'{"top_k":Infinity}', b'{"top_k":-Infinity}',
+                    b'{"top_k":1e999}'):
+            with self.subTest(raw=raw):
+                self.failure('INVALID_JSON', self.api.RetrieveRequest.from_json, raw, status=400)
+
+    def test_retrieve_nonobjects_and_wrong_json_input_type(self):
+        for raw in (b'null', b'[]', b'"text"'):
+            self.failure('INVALID_REQUEST', self.api.RetrieveRequest.from_json, raw, status=422)
+        self.failure('INVALID_JSON', self.api.RetrieveRequest.from_json, '{}', status=400)
 
     def test_projection_preserves_answer_all_citations_and_order(self):
         parent = source(identity='unit-parent', unit_id='unit-parent', text='Nguồn cha.')
