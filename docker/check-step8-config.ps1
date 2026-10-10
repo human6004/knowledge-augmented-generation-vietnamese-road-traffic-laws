@@ -66,7 +66,7 @@ foreach ($taskService in @('kag-api','openspg-server')) {
 }
 if (!$taskApi.read_only -or 'ALL' -notin $taskApi.cap_drop -or 'no-new-privileges:true' -notin $taskApi.security_opt -or $taskApi.user -notmatch '^[1-9][0-9]*:[1-9][0-9]*$' -or !$taskApi.init) { throw 'API requires non-root, read-only filesystem and dropped capabilities.' }
 if ($taskApi.environment.KAG_OPERATIONAL_PROOF -ne 'DENY' -or $taskApi.environment.KAG_PRODUCTION_WRITE -ne 'BLOCKED' -or $taskApi.environment.KAG_PROVIDER_EGRESS -ne 'DENY' -or $taskApi.environment.KAG_HTTP_WORKERS -ne '1' -or $taskApi.environment.KAG_DEBUG_DUMP_CONFIG -ne '0') { throw 'Serving authority must remain denied.' }
-if ($taskApi.environment.KAG_PROJECT_ID -or $taskApi.environment.KAG_PROJECT_HOST_ADDR) { throw 'Remote bootstrap configuration denied.' }
+if ('KAG_PROJECT_ID' -in $taskApi.environment.PSObject.Properties.Name -or 'KAG_PROJECT_HOST_ADDR' -in $taskApi.environment.PSObject.Properties.Name) { throw 'Remote bootstrap configuration denied.' }
 if ($taskApi.command -or $taskApi.entrypoint -or $taskApi.build.network -ne 'none' -or $taskApi.build.pull) { throw 'Entrypoint override or online build denied.' }
 if ($taskApi.build.context -ne $taskRoot -or $taskApi.build.dockerfile -ne 'docker/kag-api/Dockerfile') { throw 'API must package existing pinned source.' }
 if (Compare-Object @($taskApi.build.additional_contexts.PSObject.Properties.Name) @('http_wheels','vendor_objects')) { throw 'Exactly offline wheels and vendor objects build contexts required.' }

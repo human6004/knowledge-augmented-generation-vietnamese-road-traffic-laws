@@ -67,6 +67,71 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaises(server.ConfigurationError):
                     server.create_app()
 
+    def test_empty_project_id_is_rejected(self):
+        with patch.dict(os.environ, {'KAG_PROJECT_ID':''}):
+            with self.assertRaises(server.ConfigurationError):
+                server.create_app()
+
+    def test_empty_project_host_is_rejected(self):
+        with patch.dict(os.environ, {'KAG_PROJECT_HOST_ADDR':''}):
+            with self.assertRaises(server.ConfigurationError):
+                server.create_app()
+
+    def test_both_empty_project_keys_are_rejected(self):
+        with patch.dict(os.environ, {'KAG_PROJECT_ID':'','KAG_PROJECT_HOST_ADDR':''}):
+            with self.assertRaises(server.ConfigurationError):
+                server.create_app()
+
+    def test_both_nonempty_project_keys_are_rejected(self):
+        with patch.dict(os.environ, {'KAG_PROJECT_ID':'1','KAG_PROJECT_HOST_ADDR':'http://offline.invalid'}):
+            with self.assertRaises(server.ConfigurationError):
+                server.create_app()
+
+    def test_optional_secret_accepts_4096_bytes_and_one_terminator(self):
+        secret = self.root/'reader.password'
+        for terminator in (b'',b'\n',b'\r\n'):
+            with self.subTest(terminator=terminator):
+                secret.write_bytes(b'x'*4096+terminator)
+                with patch.dict(os.environ, {'KAG_HTTP_READER_PASSWORD_FILE':str(secret)}):
+                    self.assertEqual(server._secret('KAG_HTTP_READER_PASSWORD_FILE'),'x'*4096)
+
+    def test_optional_secret_rejects_4097_bytes_with_or_without_terminator(self):
+        secret = self.root/'reader.password'
+        for terminator in (b'',b'\n',b'\r\n'):
+            with self.subTest(terminator=terminator):
+                secret.write_bytes(b'x'*4097+terminator)
+                with patch.dict(os.environ, {'KAG_HTTP_READER_PASSWORD_FILE':str(secret)}):
+                    with self.assertRaises(server.ConfigurationError):
+                        server._secret('KAG_HTTP_READER_PASSWORD_FILE')
+
+    def test_optional_secret_rejects_two_terminators(self):
+        secret = self.root/'reader.password'
+        for terminators in (b'\n\n',b'\r\n\r\n',b'\n\r\n',b'\r\n\n'):
+            with self.subTest(terminators=terminators):
+                secret.write_bytes(b'valid-secret'+terminators)
+                with patch.dict(os.environ, {'KAG_HTTP_READER_PASSWORD_FILE':str(secret)}):
+                    with self.assertRaises(server.ConfigurationError):
+                        server._secret('KAG_HTTP_READER_PASSWORD_FILE')
+
+    def test_optional_secret_rejects_truncated_oversize_file(self):
+        secret = self.root/'reader.password'
+        secret.write_bytes(b'x'*4096+b'\n\r\n'+b'TRAILING-BYTES')
+        with patch.dict(os.environ, {'KAG_HTTP_READER_PASSWORD_FILE':str(secret)}):
+            with self.assertRaises(server.ConfigurationError):
+                server._secret('KAG_HTTP_READER_PASSWORD_FILE')
+
+    def test_optional_secret_rejects_invalid_payload_without_leaking_it(self):
+        secret = self.root/'reader.password'
+        for payload in (b'',b' \t',b'\n',b'\r\n',b'\xff',
+                        b'private\nvalue',b'private\rvalue',b'private\0value'):
+            with self.subTest(payload_length=len(payload)):
+                secret.write_bytes(payload)
+                with patch.dict(os.environ, {'KAG_HTTP_READER_PASSWORD_FILE':str(secret)}):
+                    with self.assertRaises(server.ConfigurationError) as caught:
+                        server._secret('KAG_HTTP_READER_PASSWORD_FILE')
+                self.assertEqual(str(caught.exception),'KAG API startup configuration unavailable.')
+                self.assertNotIn(str(secret),str(caught.exception))
+
     def test_release_id_without_root_is_rejected(self):
         with patch.dict(os.environ, {'KAG_HTTP_RELEASE_ID':'not-a-test-release'}):
             with self.assertRaises(server.ConfigurationError):
@@ -187,13 +252,14 @@ class PackagedASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.json()['error']['code'],'RELEASE_UNAVAILABLE')
 
     async def test_query_and_sse_preserve_fail_closed_response(self):
-        payload={'user_id':'00000000-0000-4000-8000-000000000001','message':'q',
+        payload={'user_id':'00000000-0000-4000-8000-000000000001','message':'q','context_id':'',
             'schema_contract':{'namespace':'VietRoadTraffic','schema_sha256':'a'*64,'contract_sha256':'b'*64}}
         for path in ('/v1/query','/v1/query/stream'):
-            result = await self.client.post(path,headers={'authorization':'Bearer '+'q'*64},json=payload)
-            self.assertEqual(result.status_code,503)
-            self.assertEqual(result.json()['error']['code'],'RELEASE_UNAVAILABLE')
-            self.assertEqual(result.headers['cache-control'],'no-store')
+            with self.subTest(path=path):
+                result = await self.client.post(path,headers={'authorization':'Bearer '+'q'*64},json=payload)
+                self.assertEqual(result.status_code,503)
+                self.assertEqual(result.json()['error']['code'],'RELEASE_UNAVAILABLE')
+                self.assertEqual(result.headers['cache-control'],'no-store')
 
 
 if __name__ == '__main__':

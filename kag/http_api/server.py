@@ -18,7 +18,7 @@ def _policy():
         if os.environ.get(key,value) != value:
             raise ConfigurationError()
     # Upstream init_env switches to remote project configuration when these are inherited.
-    if any(os.environ.get(key) for key in ('KAG_PROJECT_ID','KAG_PROJECT_HOST_ADDR')):
+    if any(key in os.environ for key in ('KAG_PROJECT_ID','KAG_PROJECT_HOST_ADDR')):
         raise ConfigurationError()
 
 
@@ -31,10 +31,18 @@ def _secret(key):
             raise ConfigurationError()
         with Path(path).open('rb') as stream:
             raw = stream.read(4099)
-        raw = raw.removesuffix(b'\r\n').removesuffix(b'\n')
+        if len(raw) > 4098:
+            raise ConfigurationError()
+        if raw.endswith(b'\r\n'):
+            raw = raw[:-2]
+        elif raw.endswith(b'\n'):
+            raw = raw[:-1]
         if not 1 <= len(raw) <= 4096 or any(b in raw for b in (b'\0',b'\n',b'\r')):
             raise ConfigurationError()
-        return raw.decode('ascii',errors='strict')
+        value = raw.decode('ascii',errors='strict')
+        if not value.strip():
+            raise ConfigurationError()
+        return value
     except (OSError,UnicodeError,ValueError):
         raise ConfigurationError() from None
 
