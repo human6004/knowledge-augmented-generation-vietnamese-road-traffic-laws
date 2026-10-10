@@ -16,3 +16,22 @@
 **/.env.*
 **/kag_config.yaml
 **/*.log
+# Pinned vendor examples/tests are required by the Dockerfile clean-tree check.
+!vendor/KAG/kag/examples/FinAlibaba/kag_config.yaml
+!vendor/KAG/kag/examples/NetOperatorQA/kag_config.yaml
+!vendor/KAG/kag/examples/baidu_map_mcp/kag_config.yaml
+!vendor/KAG/kag/examples/baike/kag_config.yaml
+!vendor/KAG/kag/examples/csqa/kag_config.yaml
+!vendor/KAG/kag/examples/domain_kg/kag_config.yaml
+!vendor/KAG/kag/examples/google_web_search_mcp/kag_config.yaml
+!vendor/KAG/kag/examples/medicine/kag_config.yaml
+!vendor/KAG/kag/examples/riskmining/kag_config.yaml
+!vendor/KAG/kag/examples/supplychain/kag_config.yaml
+!vendor/KAG/kag/open_benchmark/2wiki/kag_config.yaml
+!vendor/KAG/kag/open_benchmark/AffairQA/kag_config.yaml
+!vendor/KAG/kag/open_benchmark/hotpotqa/kag_config.yaml
+!vendor/KAG/kag/open_benchmark/musique/kag_config.yaml
+!vendor/KAG/kag/open_benchmark/prqa/kag_config.yaml
+!vendor/KAG/tests/unit/executor/kag_config.yaml
+!vendor/KAG/tests/unit/kag_config.yaml
+!vendor/KAG/tests/unit/test_planner/kag_config.yaml
