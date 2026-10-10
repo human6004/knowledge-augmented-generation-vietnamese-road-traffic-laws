@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --experimental-strip-types tests/auth.test.mjs && node --experimental-strip-types tests/import.test.mjs && node --experimental-strip-types tests/api.test.mjs",
+    "test": "node --experimental-strip-types tests/auth.test.mjs && node --experimental-strip-types tests/import.test.mjs && node --experimental-strip-types tests/api.test.mjs && node --experimental-strip-types tests/chat.test.mjs",
     "preview": "vite preview",
     "format": "oxfmt"
   },
