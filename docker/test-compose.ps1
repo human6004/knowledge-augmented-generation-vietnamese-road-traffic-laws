@@ -12,6 +12,9 @@ try {
     Assert-Task (@(Get-Content "$taskTempRoot/.env.kag" | Where-Object { $_ -notmatch '^OPENSPG_[A-Z0-9_]+=' }).Count -eq 0) 'KAG env phải chỉ chứa biến OpenSPG.'
     & "$taskTempRoot/docker/init-env.ps1"
     Assert-Task (!(Select-String -LiteralPath "$taskTempRoot/.env" -Pattern '^OPENSPG_')) 'WebApp env không được chứa biến OpenSPG.'
+    $taskTokenFile = Join-Path $taskTempRoot 'kag-query.test-token'
+    [IO.File]::WriteAllText($taskTokenFile, ('t' * 64), [Text.Encoding]::ASCII)
+    Add-Content -LiteralPath "$taskTempRoot/.env" -Value "KAG_TOKEN_FILE=$($taskTokenFile.Replace('\', '/'))"
     $taskWebappHash = (Get-FileHash "$taskTempRoot/.env").Hash
     $taskKagHash = (Get-FileHash "$taskTempRoot/.env.kag").Hash
     & "$taskTempRoot/docker/init-env.ps1" -Update

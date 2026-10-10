@@ -34,7 +34,7 @@ if ($Kag) {
         "MINIO_PASSWORD=$(New-TaskSecret)",
         'ADMIN_EMAIL=admin@luatgt.local',
         "ADMIN_PASSWORD=$(New-TaskSecret)",
-        'KAG_BASE_URL=http://host.docker.internal:8000'
+        'KAG_BASE_URL=http://host.docker.internal:38000'
     )
 }
 if (Test-Path -LiteralPath $taskEnv) {

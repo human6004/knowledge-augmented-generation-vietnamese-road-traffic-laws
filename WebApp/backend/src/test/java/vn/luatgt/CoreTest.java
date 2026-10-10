@@ -146,6 +146,23 @@ class CoreTest {
         mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Mức phạt là gì?\"}")).andExpect(status().isServiceUnavailable());
         mvc.perform(get("/api/chat").header("Authorization","Bearer "+user)).andExpect(status().isOk()).andExpect(jsonPath("$[0].state").value("UNAVAILABLE")).andExpect(jsonPath("$[0].answer").value(""));
     }
+    @ParameterizedTest @ValueSource(ints={401,403,422,503})
+    @Transactional void realH1ErrorsNeverPersistAnsweredChatOrEmitDone(int status) throws Exception {
+        var owner=streamOwner(); var wire=streamWire();
+        try(var fixture=wire.new Fixture()) {
+            fixture.status=status; fixture.body=KagClientTest.h1Failure(status); var actual=wire.client(fixture);
+            when(kag.query(any())).thenAnswer(call->actual.query(call.getArgument(0)));
+            doAnswer(call->{ actual.stream(call.getArgument(0),call.getArgument(1)); return null; }).when(kag).stream(any(),any());
+            var error=assertThrows(ResponseStatusException.class,()->chat.ask(owner,new ChatRequest("Offline H1 integration","")));
+            assertEquals(503,error.getStatusCode().value());
+            var output=new ByteArrayOutputStream(); chat.stream(owner,new ChatRequest("Offline H1 stream","")).writeTo(output);
+            String body=output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(body.startsWith("event: error\n")); assertFalse(body.contains("event: delta")); assertFalse(body.contains("event: done"));
+            assertFalse(body.contains(KagClientTest.TOKEN)); assertFalse(body.contains(wire.secret.toString()));
+            var stored=chats.findTop50ByOwnerIdOrderByCreatedAtDesc(owner); assertEquals(2,stored.size());
+            for(var row:stored) { assertEquals("UNAVAILABLE",row.state); assertNull(row.answer); assertEquals("[]",row.citations); }
+        }
+    }
     @Test void chatDelegatesOnlyAuthenticatedOwnerAndRejectsBrowserIdentity() throws Exception {
         String user=register();
         UUID owner=UUID.fromString(body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn()).path("id").asText());

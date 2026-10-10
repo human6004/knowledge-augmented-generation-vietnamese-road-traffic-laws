@@ -55,7 +55,12 @@ services:
       MINIO_URL: http://minio:9000
       MINIO_USER: ${MINIO_USER:?Run docker/init-env.ps1 first}
       MINIO_PASSWORD: ${MINIO_PASSWORD:?Run docker/init-env.ps1 first}
-      KAG_BASE_URL: ${KAG_BASE_URL:-http://host.docker.internal:8000}
+      KAG_BASE_URL: ${KAG_BASE_URL:-http://host.docker.internal:38000}
+      KAG_TOKEN_FILE: /run/secrets/kag_query_token
+      KAG_RELEASE_ID: ${KAG_RELEASE_ID:-}
+      KAG_WEBAPP_SNAPSHOT_ID: ${KAG_WEBAPP_SNAPSHOT_ID:-}
+      TZ: Asia/Ho_Chi_Minh
+    secrets: [kag_query_token]
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       mysql: {condition: service_healthy}
@@ -71,3 +76,6 @@ volumes:
   kag-data:
   redis-data:
   minio-data:
+secrets:
+  kag_query_token:
+    file: ${KAG_TOKEN_FILE:?Provide an external backend-only KAG query token file}

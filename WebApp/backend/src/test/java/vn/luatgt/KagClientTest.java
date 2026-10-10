@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.time.*;
@@ -11,15 +15,19 @@ import java.util.*;
 import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.web.server.ResponseStatusException;
 import vn.luatgt.integration.KagClient;
 import vn.luatgt.service.KagSchema;
 import static org.junit.jupiter.api.Assertions.*;
 
+@ExtendWith(OutputCaptureExtension.class)
 class KagClientTest {
     @TempDir Path temporary;
     final ObjectMapper json=new ObjectMapper();
@@ -55,12 +63,20 @@ class KagClientTest {
                     if(!name.equals(omit)) exchange.getResponseHeaders().add(name,name.equals(wrong)?"wrong":value);
                     if(name.equals(duplicate)) exchange.getResponseHeaders().add(name,value);
                 }
-                boolean streaming=exchange.getRequestURI().getPath().endsWith("/stream");
+                boolean streaming=status==200&&exchange.getRequestURI().getPath().endsWith("/stream");
                 exchange.getResponseHeaders().set("Content-Type",streaming&&media.equals("application/json")?"text/event-stream":media);
                 if(encoding!=null) exchange.getResponseHeaders().set("Content-Encoding",encoding);
                 byte[] bytes=raw!=null?raw:(streaming?"event: delta\ndata: "+json.createObjectNode().put("text",delta)+"\n\n"+(incomplete?"":"event: done\ndata: "+body+"\n\n"):body).getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 try { exchange.sendResponseHeaders(status,bytes.length); try(var out=exchange.getResponseBody()) { out.write(bytes); } }
                 catch(java.io.IOException expectedDisconnect) { exchange.close(); }
+            });
+            server.createContext("/v1/health",exchange->{
+                boolean ready=exchange.getRequestURI().getRawQuery()!=null;
+                String health=ready?"{\"request_id\":\"00000000-0000-4000-8000-000000000002\",\"error\":{\"code\":\"NOT_READY\",\"message\":\"Dịch vụ chưa sẵn sàng.\",\"retryable\":false},\"native_state\":null,\"status\":\"unavailable\",\"capability\":\"query-v1\",\"checks\":{\"auth\":\"pass\",\"runtime\":\"blocked\",\"sources\":\"unknown\",\"admission\":\"pass\"},\"provider_transport\":\"not_probed\",\"production_write\":\"blocked\"}":"{\"contract_version\":\"h1-read-v1.0\",\"status\":\"alive\"}";
+                byte[] bytes=health.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type","application/json");
+                exchange.sendResponseHeaders(ready?503:200,bytes.length);
+                try(var out=exchange.getResponseBody()) { out.write(bytes); }
             });
             server.start();
         }
@@ -111,6 +127,27 @@ class KagClientTest {
             assertTrue(List.of("Bearer "+"u".repeat(43)).equals(f.headers.get("Authorization"))); assertEquals(2,f.calls.get());
         }
     }
+    @ParameterizedTest @ValueSource(strings={"", "\n", "\r\n"})
+    void oneSecretTerminatorMatchesH1WithoutChangingBearer(String terminator) throws Exception {
+        Files.writeString(secret,TOKEN+terminator);
+        try(var f=new Fixture()) {
+            var client=client(f); assertEquals(answer(),client.query(request()));
+            assertEquals(List.of("Bearer "+TOKEN),f.headers.get("Authorization"));
+            var events=new ArrayList<String>(); client.stream(request(),(event,data)->events.add(event));
+            assertEquals(List.of("delta","done"),events);
+            assertEquals(List.of("Bearer "+TOKEN),f.headers.get("Authorization"));
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"", "\n", "\r\n"})
+    void secretPayloadBoundaryCannotBeBypassedByTerminator(String terminator) throws Exception {
+        Files.writeString(secret,"t".repeat(512)+terminator);
+        try(var f=new Fixture()) {
+            assertEquals(answer(),client(f).query(request()));
+            assertEquals(List.of("Bearer "+"t".repeat(512)),f.headers.get("Authorization"));
+        }
+        Files.writeString(secret,"t".repeat(513)+terminator);
+        try(var f=new Fixture()) { unavailable(()->client(f).query(request())); assertEquals(0,f.calls.get()); }
+    }
     @ParameterizedTest @ValueSource(strings={"app.kag-token-file","app.kag-release-id","app.kag-webapp-snapshot-id"})
     void missingConfigurationFailsBeforeHttp(String property) throws Exception {
         try(var f=new Fixture()) { var client=client(f,Map.of(property,""),null); unavailable(()->client.query(request())); assertEquals(0,f.calls.get()); }
@@ -126,9 +163,9 @@ class KagClientTest {
         try(var f=new Fixture()) { unavailable(()->client(f).query(request())); assertEquals(0,f.calls.get()); }
         finally { view.setAcl(original); }
     }
-    @ParameterizedTest @ValueSource(strings={"short","newline","bom","long","nonascii"})
+    @ParameterizedTest @ValueSource(strings={"short","double-newline","embedded-newline","carriage-return","nul","bom","long","nonascii"})
     void invalidSecretFailsBeforeHttp(String mode) throws Exception {
-        Files.writeString(secret,switch(mode) { case "short"->"x"; case "newline"->TOKEN+"\n"; case "bom"->"\ufeff"+TOKEN; case "long"->"x".repeat(513); default->"é".repeat(43); });
+        Files.writeString(secret,switch(mode) { case "short"->"x"; case "double-newline"->TOKEN+"\n\n"; case "embedded-newline"->TOKEN+"\nx"; case "carriage-return"->TOKEN+"\r"; case "nul"->TOKEN+"\0"; case "bom"->"\ufeff"+TOKEN; case "long"->"x".repeat(513); default->"é".repeat(43); });
         try(var f=new Fixture()) { unavailable(()->client(f).query(request())); assertEquals(0,f.calls.get()); }
     }
     @ParameterizedTest @ValueSource(strings={"user_id","schema_contract","message","context_id","Authorization"})
@@ -188,12 +225,55 @@ class KagClientTest {
             unavailable(()->client(f).query(request())); assertEquals(1,f.calls.get());
         }
     }
+    static String h1Failure(int status) {
+        String code=switch(status) { case 401->"AUTH_INVALID"; case 403->"SCOPE_DENIED"; case 422->"INVALID_REQUEST"; default->"RELEASE_UNAVAILABLE"; };
+        String message=switch(status) { case 401->"Xác thực dịch vụ không hợp lệ."; case 403->"Quyền dịch vụ không được phép."; case 422->"Yêu cầu không hợp lệ."; default->"Release chưa khả dụng."; };
+        return "{\"request_id\":\"00000000-0000-4000-8000-000000000002\",\"error\":{\"code\":\""+code+"\",\"message\":\""+message+"\",\"retryable\":false},\"native_state\":null}";
+    }
+    @ParameterizedTest @ValueSource(ints={401,403,422,503})
+    void h1ErrorsRemainSanitizedAndNeverEmitStreamSuccess(int status,CapturedOutput output) throws Exception {
+        String bearer=status==401||status==403?"u".repeat(43):TOKEN;
+        Files.writeString(secret,bearer);
+        try(var f=new Fixture()) {
+            f.status=status; f.body=h1Failure(status); var client=client(f);
+            unavailable(()->client.query(request())); var events=new ArrayList<String>();
+            unavailable(()->client.stream(request(),(event,data)->events.add(event)));
+            assertTrue(events.isEmpty()); assertEquals(2,f.calls.get());
+            assertEquals(List.of("Bearer "+bearer),f.headers.get("Authorization"));
+            assertFalse(output.getAll().contains(bearer));
+            assertFalse(output.getAll().contains(TOKEN)); assertFalse(output.getAll().contains(secret.toString()));
+        }
+    }
+    @Test void liveness200NeverTurnsNotReadyIntoAnAnswer() throws Exception {
+        try(var f=new Fixture()) {
+            var http=HttpClient.newHttpClient();
+            for(String path:List.of("/v1/health","/v1/health?mode=ready&capability=query-v1")) {
+                var response=http.send(HttpRequest.newBuilder(URI.create(f.url()+path)).header("Authorization","Bearer "+TOKEN).GET().build(),HttpResponse.BodyHandlers.ofString());
+                assertEquals(path.contains("?")?503:200,response.statusCode());
+                if(path.contains("?")) assertEquals("NOT_READY",json.readTree(response.body()).path("error").path("code").asText());
+                else assertEquals("alive",json.readTree(response.body()).path("status").asText());
+            }
+            f.status=503; f.body=h1Failure(503); var client=client(f); unavailable(()->client.query(request()));
+            var events=new ArrayList<String>(); unavailable(()->client.stream(request(),(event,data)->events.add(event))); assertTrue(events.isEmpty());
+            var unconfigured=client(f,Map.of("app.kag-release-id","","app.kag-webapp-snapshot-id",""),null);
+            unavailable(()->unconfigured.query(request())); assertEquals(2,f.calls.get());
+        }
+    }
+    @Test void refusedConnectionNeverEmitsStreamEvents() throws Exception {
+        try(var f=new Fixture()) {
+            var client=client(f); f.server.stop(0); unavailable(()->client.query(request()));
+            var events=new ArrayList<String>(); unavailable(()->client.stream(request(),(event,data)->events.add(event))); assertTrue(events.isEmpty());
+        }
+    }
     @Test void circuitBreakerAndNoUnsafePostRetryRemain() throws Exception {
         try(var f=new Fixture()) { f.status=503; var client=client(f); for(int i=0;i<4;i++) unavailable(()->client.query(request())); assertEquals(3,f.calls.get()); }
         try(var f=new Fixture()) { f.closeBeforeHeaders=true; unavailable(()->client(f).query(request())); assertEquals(1,f.calls.get()); }
     }
-    @Test void realReadTimeoutRemains30Seconds() throws Exception {
-        try(var f=new Fixture()) { f.delay=31000; long start=System.nanoTime(); unavailable(()->client(f).query(request()));
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void realReadTimeoutRemains30Seconds(boolean streaming) throws Exception {
+        try(var f=new Fixture()) { f.delay=31000; long start=System.nanoTime(); var client=client(f); var events=new ArrayList<String>();
+            unavailable(()->{ if(streaming) client.stream(request(),(event,data)->events.add(event)); else client.query(request()); });
+            assertTrue(events.isEmpty());
             long seconds=Duration.ofNanos(System.nanoTime()-start).toSeconds(); assertTrue(seconds>=29&&seconds<36); assertEquals(1,f.calls.get()); }
     }
     @Test void reflectedServiceTokenNeverReachesRestOrStreamConsumer() throws Exception {

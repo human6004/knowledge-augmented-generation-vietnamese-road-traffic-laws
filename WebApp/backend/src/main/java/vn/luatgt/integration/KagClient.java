@@ -94,8 +94,13 @@ public class KagClient {
         Path path=Path.of(tokenFile);
         if(!Files.isRegularFile(path,LinkOption.NOFOLLOW_LINKS)||!Files.isReadable(path)) throw new IOException("Credentials unavailable");
         byte[] secret;
-        try(var file=Files.newInputStream(path,LinkOption.NOFOLLOW_LINKS)) { secret=file.readNBytes(513); }
-        String token=StandardCharsets.US_ASCII.newDecoder().decode(ByteBuffer.wrap(secret)).toString();
+        try(var file=Files.newInputStream(path,LinkOption.NOFOLLOW_LINKS)) { secret=file.readNBytes(515); }
+        if(secret.length>514) throw new IOException("Credentials unavailable");
+        int length=secret.length;
+        if(length>0&&secret[length-1]=='\n') {
+            length--; if(length>0&&secret[length-1]=='\r') length--;
+        }
+        String token=StandardCharsets.US_ASCII.newDecoder().decode(ByteBuffer.wrap(secret,0,length)).toString();
         if(token.length()<43||token.length()>512||!token.matches("[A-Za-z0-9._~+/-]+=*")) throw new IOException("Credentials unavailable");
         return new Admitted(bytes,token,LocalDate.now(clock));
     }
