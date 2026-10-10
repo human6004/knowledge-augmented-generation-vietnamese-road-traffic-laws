@@ -80,6 +80,7 @@ $taskInspect = Join-Path $taskOutput 'inspect.token'
 $taskValues = [ordered]@{
     STEP8_KAG_PROJECT=$ProjectName; STEP8_API_PORT=[string]$ApiPort; STEP8_OPENSPG_PORT=[string]$OpenSpgPort
     STEP8_API_IMAGE="${ProjectName}-api:source"; STEP8_RUNTIME_IMAGE='vietroadtraffic-kag-runtime:d0.2'
+    STEP8_API_IMAGE_ID='sha256:d854da5ecb3d9e26b110723ffc466e3568b6b8b1ed765fc49265f066c43c8d2a'
     STEP8_RUNTIME_IMAGE_ID='sha256:25190ba8f51e8d158db0910858e9de3de1e1324d29d8b236d4d120268fa7bf33'
     STEP8_MINIO_IMAGE='kag-openspg-minio:latest'
     STEP8_MINIO_IMAGE_ID='sha256:5e65d87b41ed46cbdb6edcd5f0bc92ab947f0f9873d609b41e2c071f6028f532'

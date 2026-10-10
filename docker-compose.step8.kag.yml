@@ -86,7 +86,6 @@ services:
       - --builder.model.execute.num=1
       - --cloudext.graphstore.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${STEP8_NEO4J_PASSWORD:?Initialize independent credentials}&database=neo4j
       - --cloudext.searchengine.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${STEP8_NEO4J_PASSWORD:?Initialize independent credentials}&database=neo4j
-    ports: ["127.0.0.1:${STEP8_OPENSPG_PORT:-38887}:8887"]
     networks:
       private: {aliases: [server]}
     depends_on:
@@ -114,6 +113,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 1024m
+    memswap_limit: 1024m
     cpus: 1.0
     pids_limit: 128
     stop_grace_period: 40s
@@ -153,7 +153,6 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
       - /run/kag-locks:rw,noexec,nosuid,size=1m,mode=0700,uid=${STEP8_API_UID:-10001},gid=${STEP8_API_GID:-10001}
-    ports: ["127.0.0.1:${STEP8_API_PORT:-38000}:8000"]
     networks: [private]
     healthcheck:
       # Liveness only; capability readiness deliberately remains 503/DENY.
@@ -163,10 +162,43 @@ services:
       retries: 3
       start_period: 60s
 
+  kag-ingress:
+    image: haproxy@sha256:168a5e3984df24054946c94fb7d29d785c7ed1af8ce11ea4b33253221c8c85c8
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    user: "99:99"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    init: true
+    stop_grace_period: 10s
+    depends_on:
+      kag-api: {condition: service_healthy}
+    entrypoint: [haproxy]
+    command: [-W, -db, -f, /usr/local/etc/haproxy/haproxy.cfg]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    volumes:
+      - type: bind
+        source: ./docker/kag-ingress/haproxy.cfg
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        read_only: true
+        bind: {create_host_path: false}
+    ports: ["127.0.0.1:${STEP8_API_PORT:-38000}:8080"]
+    networks: [private, ingress]
+
 networks:
   private:
     name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_private
     internal: true
+  ingress:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_ingress
+    internal: false
 volumes:
   openspg-mysql-data:
     name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_openspg-mysql-data
