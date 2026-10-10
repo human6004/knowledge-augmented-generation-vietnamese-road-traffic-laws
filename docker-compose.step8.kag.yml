@@ -1,0 +1,181 @@
+# Configuration only. Deployment, restore and provider egress require separate approval.
+name: ${STEP8_KAG_PROJECT:?Initialize an external Step8 env file}
+
+services:
+  openspg-mysql:
+    image: spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-mysql@sha256:71eb546d5fc5faf70b3d8a358c022f601591b54a029b79298f2fa0302e46de9a
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      MYSQL_DATABASE: openspg
+      MYSQL_ROOT_PASSWORD: ${STEP8_MYSQL_PASSWORD:?Initialize independent credentials}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_general_ci"]
+    volumes: ["openspg-mysql-data:/var/lib/mysql"]
+    networks:
+      private: {aliases: [mysql]}
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysql -h 127.0.0.1 -u root -e 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  openspg-neo4j:
+    image: spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-neo4j@sha256:4bc5b7f6b83d333b1d2c8f60ac145c068d77d50bca65b3a07c927f9e2a541eb9
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    mem_limit: 2048m
+    cpus: 1.0
+    pids_limit: 256
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      NEO4J_AUTH: neo4j/${STEP8_NEO4J_PASSWORD:?Initialize independent credentials}
+      NEO4J_server_memory_heap_initial__size: 256M
+      NEO4J_server_memory_heap_max__size: 768M
+      NEO4J_server_memory_pagecache_size: 512M
+    volumes: ["openspg-neo4j-data:/data", "openspg-neo4j-logs:/logs"]
+    networks:
+      private: {aliases: [neo4j]}
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  openspg-minio:
+    image: ${STEP8_MINIO_IMAGE:?Select the retained compatible MinIO image}
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: step8-minio
+      MINIO_ROOT_PASSWORD: ${STEP8_MINIO_PASSWORD:?Initialize independent credentials}
+    volumes: ["openspg-minio-data:/data"]
+    networks:
+      private: {aliases: [minio]}
+
+  openspg-server:
+    image: spg-registry.us-west-1.cr.aliyuncs.com/spg/openspg-server@sha256:fe6708deef9ebb8da8da7b1cb643e83b827769a5be8811961311639aa1f2cb88
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    mem_limit: 1536m
+    cpus: 1.0
+    pids_limit: 256
+    environment: {TZ: Asia/Ho_Chi_Minh, LANG: C.UTF-8}
+    entrypoint: ["java"]
+    command:
+      - -Dfile.encoding=UTF-8
+      - -Xms256m
+      - -Xmx768m
+      - -jar
+      - arks-sofaboot-0.0.1-SNAPSHOT-executable.jar
+      - --server.repository.impl.jdbc.host=openspg-mysql
+      - --server.repository.impl.jdbc.password=${STEP8_MYSQL_PASSWORD:?Initialize independent credentials}
+      - --builder.model.execute.num=1
+      - --cloudext.graphstore.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${STEP8_NEO4J_PASSWORD:?Initialize independent credentials}&database=neo4j
+      - --cloudext.searchengine.url=neo4j://openspg-neo4j:7687?user=neo4j&password=${STEP8_NEO4J_PASSWORD:?Initialize independent credentials}&database=neo4j
+    ports: ["127.0.0.1:${STEP8_OPENSPG_PORT:-38887}:8887"]
+    networks:
+      private: {aliases: [server]}
+    depends_on:
+      openspg-mysql: {condition: service_healthy}
+      openspg-neo4j: {condition: service_healthy}
+      openspg-minio: {condition: service_started}
+
+  kag-api:
+    image: ${STEP8_API_IMAGE:?Select a distinct Step8 API image name}
+    build:
+      context: .
+      dockerfile: docker/kag-api/Dockerfile
+      pull: false
+      network: none
+      args:
+        KAG_RUNTIME_IMAGE: ${STEP8_RUNTIME_IMAGE:?Select the canonical cached runtime}
+      additional_contexts:
+        http_wheels: ${STEP8_HTTP_WHEELS_DIR:?Provide verified offline FastAPI wheel directory}
+        vendor_objects: ${STEP8_VENDOR_OBJECTS_DIR:?Provide canonical vendor Git objects directory}
+    platform: linux/amd64
+    pull_policy: never
+    restart: "no"
+    user: "${STEP8_API_UID:-10001}:${STEP8_API_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 40s
+    init: true
+    environment:
+      KAG_HTTP_HOST: 0.0.0.0
+      KAG_HTTP_PORT: "8000"
+      KAG_HTTP_WORKERS: "1"
+      KAG_HTTP_QUERY_SECRET_FILE: /run/secrets/query_token
+      KAG_HTTP_INSPECT_SECRET_FILE: /run/secrets/inspect_token
+      KAG_HTTP_RELEASE_ROOT: ${STEP8_RELEASE_ID:+/release}
+      KAG_HTTP_RELEASE_ID: ${STEP8_RELEASE_ID:-}
+      KAG_HTTP_READER_USERNAME: ${STEP8_READER_USERNAME:-}
+      KAG_HTTP_READER_PASSWORD_FILE: ${STEP8_READER_USERNAME:+/run/api-credentials/reader.password}
+      KAG_HTTP_EMBEDDING_URL: ${STEP8_EMBEDDING_URL:-}
+      KAG_HTTP_EMBEDDING_MODEL: ${STEP8_EMBEDDING_MODEL:-}
+      KAG_HTTP_EMBEDDING_KEY_FILE: ${STEP8_EMBEDDING_MODEL:+/run/api-credentials/embedding.key}
+      KAG_HTTP_CHAT_URL: ${STEP8_CHAT_URL:-}
+      KAG_HTTP_CHAT_MODEL: ${STEP8_CHAT_MODEL:-}
+      KAG_HTTP_CHAT_KEY_FILE: ${STEP8_CHAT_MODEL:+/run/api-credentials/chat.key}
+      KAG_OPERATIONAL_PROOF: DENY
+      KAG_PRODUCTION_WRITE: BLOCKED
+      KAG_PROVIDER_EGRESS: DENY
+      KAG_DEBUG_DUMP_CONFIG: "0"
+    secrets: [query_token, inspect_token]
+    volumes:
+      - type: bind
+        source: ${STEP8_RELEASE_DIR:?Provide an external operator release directory}
+        target: /release
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${STEP8_API_CREDENTIALS_DIR:?Provide separate API-only credential directory}
+        target: /run/api-credentials
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+      - /run/kag-locks:rw,noexec,nosuid,size=1m,mode=0700,uid=${STEP8_API_UID:-10001},gid=${STEP8_API_GID:-10001}
+    ports: ["127.0.0.1:${STEP8_API_PORT:-38000}:8000"]
+    networks: [private]
+    healthcheck:
+      # Liveness only; capability readiness deliberately remains 503/DENY.
+      test: ["CMD", "python", "-B", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/v1/health',timeout=2); assert r.status==200"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+
+networks:
+  private:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_private
+    internal: true
+volumes:
+  openspg-mysql-data:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_openspg-mysql-data
+  openspg-neo4j-data:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_openspg-neo4j-data
+  openspg-neo4j-logs:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_openspg-neo4j-logs
+  openspg-minio-data:
+    name: ${STEP8_KAG_PROJECT:?Initialize a Step8 project}_openspg-minio-data
+secrets:
+  query_token: {file: "${STEP8_QUERY_SECRET_FILE:?Generate independent query secret}"}
+  inspect_token: {file: "${STEP8_INSPECT_SECRET_FILE:?Generate independent inspect secret}"}
