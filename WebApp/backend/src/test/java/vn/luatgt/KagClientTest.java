@@ -156,7 +156,14 @@ class KagClientTest {
         Files.delete(secret); try(var f=new Fixture()) { unavailable(()->client(f).query(request())); assertEquals(0,f.calls.get()); }
     }
     @Test void unreadableSecretFailsBeforeHttp() throws Exception {
-        var view=Files.getFileAttributeView(secret,AclFileAttributeView.class); assertNotNull(view,"Windows ACL fixture required");
+        var view=Files.getFileAttributeView(secret,AclFileAttributeView.class);
+        if(view==null) {
+            var original=Files.getPosixFilePermissions(secret);
+            Files.setPosixFilePermissions(secret,Set.of());
+            try(var f=new Fixture()) { unavailable(()->client(f).query(request())); assertEquals(0,f.calls.get()); }
+            finally { Files.setPosixFilePermissions(secret,original); }
+            return;
+        }
         var original=view.getAcl(); var denied=new ArrayList<AclEntry>();
         denied.add(AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(view.getOwner()).setPermissions(AclEntryPermission.READ_DATA).build()); denied.addAll(original);
         view.setAcl(denied);
@@ -275,6 +282,15 @@ class KagClientTest {
             unavailable(()->{ if(streaming) client.stream(request(),(event,data)->events.add(event)); else client.query(request()); });
             assertTrue(events.isEmpty());
             long seconds=Duration.ofNanos(System.nanoTime()-start).toSeconds(); assertTrue(seconds>=29&&seconds<36); assertEquals(1,f.calls.get()); }
+    }
+    @Test void sampleQueryTimeoutIsBoundedWithoutChangingDefault() throws Exception {
+        try(var f=new Fixture()) {
+            var client=client(f);
+            assertThrows(IllegalArgumentException.class,()->client.queryTimeout(29));
+            assertThrows(IllegalArgumentException.class,()->client.queryTimeout(181));
+            client.queryTimeout(180);
+            assertNotNull(client.query(request()));
+        }
     }
     @Test void reflectedServiceTokenNeverReachesRestOrStreamConsumer() throws Exception {
         try(var f=new Fixture()) {

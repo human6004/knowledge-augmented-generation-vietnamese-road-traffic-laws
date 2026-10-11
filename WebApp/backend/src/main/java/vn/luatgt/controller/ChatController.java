@@ -17,7 +17,7 @@ public class ChatController {
     @PostMapping Map<String,Object> ask(@Valid @RequestBody ChatRequest input,JwtAuthenticationToken auth) { return service.ask(AuthService.user(auth),input); }
     @PostMapping(value="/stream",produces=MediaType.TEXT_EVENT_STREAM_VALUE)
     ResponseEntity<StreamingResponseBody> stream(@Valid @RequestBody ChatRequest input,JwtAuthenticationToken auth) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Accel-Buffering","no").body(service.stream(AuthService.user(auth),input));
+        return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).cacheControl(CacheControl.noStore()).header("X-Accel-Buffering","no").body(service.stream(AuthService.user(auth),input));
     }
     @GetMapping List<Map<String,Object>> history(JwtAuthenticationToken auth) { return service.history(AuthService.user(auth)); }
 }

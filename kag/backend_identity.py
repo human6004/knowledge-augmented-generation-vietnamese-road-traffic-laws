@@ -251,3 +251,76 @@ class _DockerReadOpener:
             input=json.dumps({'url':request.full_url, 'data':request.data.decode(),
                               'headers':dict(request.header_items()), 'timeout':timeout}))
         return io.BytesIO(output.encode())
+
+
+class DockerPrivateBackendTransport:
+    """Read Docker identity over the local socket; no published admin ports required.
+
+    The runner must share the exact new OpenSPG network namespace. Docker access
+    here performs GET inspection only; serving containers never mount this socket.
+    """
+    def __init__(self, project, server_id, database_id, runtime_id, storage_revision=''):
+        if (not re.fullmatch(r'kag-s8-[a-z0-9][a-z0-9-]*',project)
+                or not isinstance(storage_revision,str)
+                or storage_revision and not re.fullmatch(r'-fresh-[a-z0-9-]{1,40}',storage_revision)):
+            raise BackendIdentityError()
+        self.project=project
+        self.storage_revision=storage_revision
+        self.server_id,self.database_id,self.runtime_id=server_id,database_id,runtime_id
+
+    def _inspect(self, container_id):
+        import http.client
+        import socket
+        if not re.fullmatch(r'[0-9a-f]{64}',container_id): raise BackendIdentityError()
+        class Connection(http.client.HTTPConnection):
+            def connect(inner):
+                inner.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                inner.sock.settimeout(10)
+                inner.sock.connect('/var/run/docker.sock')
+        connection=Connection('localhost',timeout=10)
+        try:
+            connection.request('GET','/containers/'+container_id+'/json')
+            response=connection.getresponse()
+            if response.status != 200: raise BackendIdentityError()
+            return json.loads(response.read())
+        finally: connection.close()
+
+    def read(self, store, verifier):
+        import socket
+        try:
+            server,database,runtime=(self._inspect(key) for key in
+                (self.server_id,self.database_id,self.runtime_id))
+            if (server['Id'] != self.server_id or database['Id'] != self.database_id
+                    or runtime['Id'] != self.runtime_id
+                    or not all(c['State']['Running'] for c in (server,database,runtime))
+                    or runtime['HostConfig']['NetworkMode'] != 'container:'+self.server_id):
+                raise BackendIdentityError()
+            for container,service in ((server,'openspg-server'),(database,'openspg-neo4j')):
+                labels=container['Config']['Labels']
+                if (labels.get('com.docker.compose.project') != self.project
+                        or labels.get('com.docker.compose.service') != service): raise BackendIdentityError()
+            volume=self.project+'_openspg-neo4j-data'+self.storage_revision
+            mounts={(m['Destination'],m.get('Name'),m['Type']) for m in database['Mounts']}
+            if mounts != {('/data',volume,'volume'),('/logs',self.project+'_openspg-neo4j-logs','volume')} or server['Mounts']:
+                raise BackendIdentityError()
+            network=self.project+'_private'
+            if any(set(c['NetworkSettings']['Networks']) != {network} for c in (server,database)):
+                raise BackendIdentityError()
+            attachment=database['NetworkSettings']['Networks'][network]
+            if server['NetworkSettings']['Networks'][network]['NetworkID'] != attachment['NetworkID']:
+                raise BackendIdentityError()
+            parsed=urlsplit(store['uri'])
+            if (parsed.scheme not in ('bolt','neo4j') or parsed.port != 7687
+                    or parsed.hostname not in attachment['Aliases']
+                    or verifier.endpoint != 'http://'+parsed.hostname+':7474'
+                    or verifier.database != store['database']): raise BackendIdentityError()
+            dns=sorted({x[4][0] for x in socket.getaddrinfo(parsed.hostname,None)})
+            if dns != [attachment['IPAddress']]: raise BackendIdentityError()
+            from kag.verify import Neo4jReadClient
+            reader=Neo4jReadClient(verifier.endpoint,store['database'],
+                username=store['user'],password=store['password'],timeout=60)
+            metadata=reader.database_metadata()
+            return metadata,(server['Id'],server['Image'],database['Id'],database['Image'],
+                             attachment['NetworkID'],volume)
+        except Exception:
+            raise BackendIdentityError() from None

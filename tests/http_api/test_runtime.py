@@ -69,6 +69,36 @@ def action(executor):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_embedding_diagnostics_exclude_provider_body_and_input(self):
+        import io
+        from contextlib import redirect_stdout
+        secret='PRIVATE_PROVIDER_BODY_AND_INPUT'
+        output=io.StringIO()
+        for status,body,kind,dimension in ((200,{'data':[{'embedding':[1.0]*3072}], 'private':secret},'list',3072),
+                                         (503,{'error':secret},'NoneType',None)):
+            response=httpx.Response(status,json=body,request=httpx.Request('POST','http://fixture.invalid',json={'input':secret}))
+            with redirect_stdout(output):api()._embedding_response_metadata(response)
+            row=json.loads(output.getvalue().splitlines()[-1].removeprefix('SAMPLE_EMBEDDING '))
+            self.assertEqual(row,dict(status=status,embedding_type=kind,dimension=dimension))
+        self.assertNotIn(secret,output.getvalue())
+
+    async def test_query_failure_diagnostics_hide_exception_and_question(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        module=api()
+        secret='PRIVATE_EXCEPTION_AND_QUESTION'
+        request=SimpleNamespace(budget=module._Budget(time.monotonic()+10),closed=False,
+            question=secret,as_of=AS_OF,pipeline=object())
+        async def fail(*args,**kwargs):raise ValueError(secret)
+        output=io.StringIO()
+        with patch('kag.legal_solver.aanswer',fail),redirect_stdout(output):
+            with self.assertRaises(module.RuntimeFailure) as caught:
+                await module.run_query(request,secret,AS_OF)
+        self.assertEqual(caught.exception.code,'PROVIDER_ERROR')
+        self.assertNotIn(secret,output.getvalue())
+        self.assertIn('"error_type": "ValueError"',output.getvalue())
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='runtime-synthetic-')
         self.root = Path(self.temp.name)
@@ -123,7 +153,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                         'selections':[] if abstain else [{'evidence_id':value['evidence_ids']['text'],
                             'field':'text','start':0,'end':len(TEXT)}],'support_selections':[]}
                 return json.dumps(response,ensure_ascii=False)
-        def proof(settings,release):
+        def proof(settings,release,*,capability='query'):
             events.append('SYNTHETIC.proof')
         def reader(*args):
             events.append('reader.constructor')

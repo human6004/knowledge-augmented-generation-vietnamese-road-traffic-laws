@@ -705,8 +705,12 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_step5_approved_public_routes_and_methods(self):
         paths = self.app.openapi()['paths']
-        self.assertEqual(set(paths),{'/v1/health','/v1/graph/release','/v1/query'})
+        self.assertEqual(set(paths),{'/v1/health','/v1/graph/release','/v1/query',
+                                    '/v1/pipeline/status','/v1/benchmark/datasets'})
         self.assertEqual(set(paths['/v1/query']),{'post'})
+        for path in ('/v1/pipeline/status','/v1/benchmark/datasets'):
+            self.assertEqual(set(paths[path]),{'get'})
+            self.assertEqual((await self.client.post(path)).status_code,405)
         for path in ('/v1/query/stream','/v1/retrieve','/v1/jobs','/v1/benchmarks','/v2/query','/write','/docs','/openapi.json'):
             self.assertEqual((await self.client.post(path)).status_code,404)
 
@@ -1382,10 +1386,10 @@ class TerminalSSETests(unittest.IsolatedAsyncioTestCase):
                 owner,name=(artifacts,'verify_native_sources') if stage=='source' else (
                     (contract,'project_v1') if stage=='projection' else (contract,'encode_v1'))
                 original=getattr(owner,name)
-                def call(*args,original=original):
+                def call(*args,original=original,**kwargs):
                     entered.set()
                     if not finish.wait(10): raise AssertionError('Synthetic stage must be released')
-                    return original(*args)
+                    return original(*args,**kwargs)
                 blocked=patch.object(owner,name,call)
             with self.subTest(stage=stage),blocked:
                 self.reader.closed=False

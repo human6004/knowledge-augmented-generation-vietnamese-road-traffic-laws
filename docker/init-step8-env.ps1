@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [Parameter(Mandatory=$true)][string]$WheelDirectory,
+    [ValidatePattern('^sha256:[0-9a-f]{64}$')][string]$ApiImageId = 'sha256:d854da5ecb3d9e26b110723ffc466e3568b6b8b1ed765fc49265f066c43c8d2a',
     [ValidatePattern('^kag-s8-[a-z0-9][a-z0-9-]*$')][string]$ProjectName = 'kag-s8-20261009',
     [ValidateRange(1024,65535)][int]$ApiPort = 38000,
     [ValidateRange(1024,65535)][int]$OpenSpgPort = 38887
@@ -75,12 +76,15 @@ function Write-TaskNewFile([string]$Path,[string]$Value) {
 }
 $taskRelease = Join-Path $taskOutput 'release'
 $taskCredentials = Join-Path $taskOutput 'api-credentials'
+$taskBrokerCredentials = Join-Path $taskOutput 'broker-credentials'
+$taskEgressCredentials = Join-Path $taskOutput 'egress-credentials'
+$taskLedger = Join-Path $taskOutput 'attempts.json'
 $taskQuery = Join-Path $taskOutput 'query.token'
 $taskInspect = Join-Path $taskOutput 'inspect.token'
 $taskValues = [ordered]@{
     STEP8_KAG_PROJECT=$ProjectName; STEP8_API_PORT=[string]$ApiPort; STEP8_OPENSPG_PORT=[string]$OpenSpgPort
     STEP8_API_IMAGE="${ProjectName}-api:source"; STEP8_RUNTIME_IMAGE='vietroadtraffic-kag-runtime:d0.2'
-    STEP8_API_IMAGE_ID='sha256:d854da5ecb3d9e26b110723ffc466e3568b6b8b1ed765fc49265f066c43c8d2a'
+    STEP8_API_IMAGE_ID=$ApiImageId
     STEP8_RUNTIME_IMAGE_ID='sha256:25190ba8f51e8d158db0910858e9de3de1e1324d29d8b236d4d120268fa7bf33'
     STEP8_MINIO_IMAGE='kag-openspg-minio:latest'
     STEP8_MINIO_IMAGE_ID='sha256:5e65d87b41ed46cbdb6edcd5f0bc92ab947f0f9873d609b41e2c071f6028f532'
@@ -88,6 +92,11 @@ $taskValues = [ordered]@{
     STEP8_QUERY_SECRET_FILE=$taskQuery; STEP8_INSPECT_SECRET_FILE=$taskInspect
     STEP8_RELEASE_DIR=$taskRelease; STEP8_RELEASE_ID=''
     STEP8_API_CREDENTIALS_DIR=$taskCredentials; STEP8_READER_USERNAME=''
+    STEP8_BROKER_CREDENTIALS_DIR=$taskBrokerCredentials; STEP8_BROKER_URL=''
+    STEP8_BROKER_DATABASE_ID=''; STEP8_BROKER_SERVER_ID=''
+    STEP8_EGRESS_CREDENTIALS_DIR=$taskEgressCredentials; STEP8_QUERY_PROFILE=''
+    STEP8_ATTEMPT_LEDGER_FILE=$taskLedger; STEP8_ATTEMPT_LOCK_FILE=($taskLedger+'.lock')
+    STEP8_PROVIDER_BIND='127.0.0.1'; STEP8_PROVIDER_CLIENT='127.0.0.1'
     STEP8_EMBEDDING_URL=''; STEP8_EMBEDDING_MODEL=''; STEP8_CHAT_URL=''; STEP8_CHAT_MODEL=''
     STEP8_HTTP_WHEELS_DIR=$taskWheels; STEP8_VENDOR_OBJECTS_DIR=$taskObjects
     STEP8_API_UID=[string]$taskUid; STEP8_API_GID=[string]$taskGid
@@ -99,10 +108,14 @@ $taskLines = foreach ($taskEntry in $taskValues.GetEnumerator()) {
 }
 [void][IO.Directory]::CreateDirectory($taskOutput)
 Protect-TaskDirectory $taskOutput
-foreach ($taskDirectory in @($taskRelease,$taskCredentials)) {
+foreach ($taskDirectory in @($taskRelease,$taskCredentials,$taskBrokerCredentials,$taskEgressCredentials)) {
     [void][IO.Directory]::CreateDirectory($taskDirectory); Protect-TaskDirectory $taskDirectory
 }
 Write-TaskNewFile $taskQuery (New-TaskSecret)
 Write-TaskNewFile $taskInspect (New-TaskSecret)
+Write-TaskNewFile (Join-Path $taskEgressCredentials 'egress.token') (New-TaskSecret)
+# Disabled placeholder is not a provider ledger and cannot admit inference.
+Write-TaskNewFile $taskLedger '{}'
+Write-TaskNewFile ($taskLedger+'.lock') ''
 Write-TaskNewFile (Join-Path $taskOutput 'kag.env') (($taskLines -join "`n")+"`n")
 Write-Output 'Created independent Step8 env/tokens; existing credentials untouched. Empty release/reader configuration: readiness DENY. No Docker operation executed.'

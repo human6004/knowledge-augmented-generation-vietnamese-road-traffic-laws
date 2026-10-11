@@ -12,6 +12,9 @@ from kag.verify import Neo4jReadClient, QUERIES
 APPROVED = ('hasUnit','hasChild','hasSign','citesUnit','excludesUnit',
             'cites','amends','repeals','implements','consolidates')
 READS = {
+    'reader_identity': ('SHOW CURRENT USER YIELD user,roles,passwordChangeRequired,suspended '
+                        'RETURN user,roles,passwordChangeRequired,suspended'),
+    'reader_privileges': 'SHOW USER PRIVILEGES YIELD access,action RETURN access,action',
     'retrieval_vector': ('CALL db.index.vector.queryNodes($index,$k,$vector) YIELD node,score '
                          'WHERE $label IN labels(node) RETURN node.id AS id,score '
                          'ORDER BY score DESC,id'),
@@ -41,9 +44,10 @@ class Neo4jRetrievalClient(Neo4jReadClient):
     def _query(self,name,parameters=None,*,database=None):
         if name in QUERIES:
             return super()._query(name,parameters,database=database)
-        if name not in READS or database not in (None,self.database):
+        target = 'system' if name in ('reader_identity','reader_privileges') else self.database
+        if name not in READS or database not in (None,target):
             raise ValueError('unapproved retrieval statement')
-        request = Request(self.endpoint+'/db/'+quote(self.database,safe='')+'/tx/commit',
+        request = Request(self.endpoint+'/db/'+quote(target,safe='')+'/tx/commit',
             data=canonical_json({'statements':[{'statement':READS[name],
                                                 'parameters':parameters or {}}]}).encode(),
             headers={'Authorization':self._auth,'Content-Type':'application/json'},method='POST')
@@ -77,6 +81,12 @@ class Neo4jRetrievalClient(Neo4jReadClient):
             raise ValueError('vector index not ONLINE/3072/cosine')
         rows = self._query('retrieval_vector',{'index':index['name'],'label':label,'k':k,'vector':vector})
         return [dict(row,index=index['name']) for row in rows]
+
+    def reader_security(self):
+        rows = self._query('reader_identity')
+        if len(rows) != 1:
+            raise ValueError('unique current reader principal required')
+        return rows[0], self._query('reader_privileges')
 
     def expand(self,keys,predicates,limit):
         positive_limit(limit)

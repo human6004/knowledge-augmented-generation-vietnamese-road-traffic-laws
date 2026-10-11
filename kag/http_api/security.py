@@ -128,11 +128,12 @@ async def admit_request(request: Request, scope: str, dto=QueryV1Request):
     """Internal admission for future routes; no route is registered here."""
     principal = request_principal(request)
     authorize(principal, scope, None)
-    if dto is RetrieveRequest:
+    from .contract import SampleVectorRequest
+    if dto in (RetrieveRequest, SampleVectorRequest):
         authorize(principal, 'inspect', None)
     if any(name in request.headers for name in ('x-user-id', 'user_id', 'x-service-id')):
         raise ApiFailure('INVALID_REQUEST')
-    if dto not in (QueryV1Request, RetrieveRequest):
+    if dto not in (QueryV1Request, RetrieveRequest, SampleVectorRequest):
         raise ApiFailure('NOT_READY')
     parsed = dto.from_json(await bounded_body(request))
     if dto is QueryV1Request:

@@ -61,7 +61,7 @@ def _config(value):
         config = json.loads(canonical_json(value))
         config.setdefault('scope', 'DENY')
         config.setdefault('write_mode', 'DENY')
-        if config['scope'] not in ('C4_3A_MANIFEST_SAMPLE', 'PRODUCTION'):
+        if config['scope'] not in ('C4_3A_MANIFEST_SAMPLE', 'PRODUCTION', 'FRESH_SAMPLE'):
             raise RunBlocked('SCOPE')
         if (config['runtime_location'] not in ('host', 'container')
                 or config['write_mode'] not in ('NO_OP', 'WRITE')
@@ -79,12 +79,18 @@ def _config(value):
                 (config['project_id'] != 2 or config['project_name'] != 'VietRoadTrafficC43A10Pct'
                  or config['write_mode'] != 'NO_OP' or config['vector_policy'] != 'replay-existing')):
             raise RunBlocked('SCOPE')
+        if config['scope'] == 'FRESH_SAMPLE' and (
+                not config['project_name'].startswith('FreshSample_')
+                or (config['database'] not in ('neo4j','vietroadtraffic')
+                    and not re.fullmatch(r'freshsample[a-z0-9]{8,40}', config['database']))
+                or config['vector_policy'] != 'replay-existing' or config['batch_size'] > 32):
+            raise RunBlocked('SCOPE')
         if set(config['endpoints']) != {'openspg', 'neo4j_http', 'neo4j_uri'}:
             raise RunBlocked('CONFIG')
         location = config['runtime_location']
         # C4's localhost restriction remains intact, including shared container network namespaces.
         c3._endpoint(config['endpoints']['openspg'], ('http', 'https'),
-                     'host' if config['scope'] == 'C4_3A_MANIFEST_SAMPLE' else location)
+                     'host' if config['scope'] in ('C4_3A_MANIFEST_SAMPLE','FRESH_SAMPLE') else location)
         c3._endpoint(config['endpoints']['neo4j_http'], ('http', 'https'), location)
         c3._endpoint(config['endpoints']['neo4j_uri'], ('bolt', 'neo4j', 'bolt+s', 'neo4j+s'), location)
         if set(config['paths']) != PATH_FIELDS or not isinstance(config['input_sha256'], dict):
@@ -182,6 +188,18 @@ def _files(config):
 
 
 def _sample_sources(data, manifest):
+    if manifest.get('kind') == 'FRESH_SAMPLE':
+        keys = [tuple(k) for k in manifest['selected_node_keys']]
+        tuples = [tuple(k) for k in manifest['selected_edge_tuples']]
+        if (not 1 <= len(keys) <= 128 or len(keys) != len(set(keys))
+                or not 1 <= len(tuples) <= 256 or len(tuples) != len(set(tuples))
+                or any(k not in data['node_hashes'] for k in keys)
+                or any(k not in data['edge_hashes'] or k[:2] not in keys or k[3:] not in keys for k in tuples)
+                or manifest['c3_sha256'] != {k:c3.C3_IDENTITY[v] for k,v in
+                    (('nodes','nodes_jsonl_sha256'),('edges','edges_jsonl_sha256'),('plan','plan_sha256'))}):
+            raise RunBlocked('PLAN')
+        return ([n for n in data['nodes'] if (n['type'],n['id']) in keys],
+                [e for e in data['edges'] if tuple(e['tuple']) in tuples])
     if (manifest['chosen_partition'] != 5 or manifest['partition_algorithm'] !=
             "int(sha256(doc_id.encode('utf-8')).hexdigest(),16) % 10"):
         raise RunBlocked('PLAN')
@@ -210,7 +228,7 @@ def preflight(config, *, project_client, reader, backend_transport=None):
         checksums = _files(config)
         from kag.bootstrap import initialize
         initialize()
-        from kag.builder.writer_adapter import discover_manifest_project, discover_production_project
+        from kag.builder.writer_adapter import discover_manifest_project, discover_production_project, discover_fresh_sample_project
         from kag.backend_identity import BackendIdentitySession, DockerBackendTransport
         backend_session = BackendIdentitySession(project_client, reader,
             backend_transport if backend_transport is not None else DockerBackendTransport(config['endpoints']['openspg']),
@@ -233,14 +251,17 @@ def preflight(config, *, project_client, reader, backend_transport=None):
             source_index = data['index']
             manifest = json.loads(Path(config['paths']['sample_manifest']).read_bytes())
             nodes, edges = _sample_sources(data, manifest)
-            writer_config = discover_manifest_project(project_client, config['endpoints']['openspg'], contract,
+            discovery = discover_fresh_sample_project if config['scope'] == 'FRESH_SAMPLE' else discover_manifest_project
+            writer_config = discovery(project_client, config['endpoints']['openspg'], contract,
                 config['paths']['sample_manifest'], nodes, edges, backend_session=backend_session)
             node_hashes = {(n['type'], n['id']): data['node_hashes'][(n['type'], n['id'])] for n in nodes}
             edge_hashes = {tuple(e['tuple']): data['edge_hashes'][tuple(e['tuple'])] for e in edges}
             checksums.extend(data['file_checksums'])
         # Identity is necessary, but never opens the production execution gate.
-        if config['write_mode'] == 'WRITE': raise RunBlocked('SCOPE')
+        if config['write_mode'] == 'WRITE' and config['scope'] != 'FRESH_SAMPLE': raise RunBlocked('SCOPE')
         backend_proof = writer_config.backend_proof
+        if backend_proof.canonical_database_name != config['database']:
+            raise RunBlocked('SCOPE')
         database_id = backend_proof.physical_database_id
         if not isinstance(database_id, str) or not database_id.strip():
             raise RunBlocked('LOCK')

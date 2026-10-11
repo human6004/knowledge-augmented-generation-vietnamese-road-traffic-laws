@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import ipaddress
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any
@@ -58,6 +59,9 @@ class _ManifestScope:
     node_keys: frozenset[tuple[str, str]]
     edge_tuples: frozenset[tuple[str, ...]]
     _proof: object = field(repr=False, compare=False)
+    target: Mapping[str, Any] | None = None
+    node_hashes: Mapping[tuple[str, str], str] | None = None
+    edge_hashes: Mapping[tuple[str, ...], str] | None = None
 
     def verify_file(self) -> None:
         try:
@@ -109,6 +113,7 @@ class WriterConfig:
                 raise WriterAdapterError('sample scope cannot carry production proof')
         proof = {'C4_1_SMOKE': _SMOKE_PROJECT_PROOF,
                  'C4_3A_MANIFEST_SAMPLE': _MANIFEST_PROJECT_PROOF,
+                 'FRESH_SAMPLE': _MANIFEST_PROJECT_PROOF,
                  'PRODUCTION': _PRODUCTION_PROOF}.get(self.scope)
         if (proof is None
                 or not isinstance(self.project, _VerifiedSmokeProject)
@@ -136,7 +141,12 @@ class WriterConfig:
                     or not isinstance(self.manifest_scope, _ManifestScope)):
                 raise WriterAdapterError('C4.3a requires its exact verified project and manifest scope')
             self.manifest_scope.verify_file()
-        if self.scope in ('PRODUCTION', 'C4_3A_MANIFEST_SAMPLE'):
+        if self.scope == 'FRESH_SAMPLE':
+            if not isinstance(self.manifest_scope, _ManifestScope):
+                raise WriterAdapterError('fresh sample requires a sealed manifest')
+            self.manifest_scope.verify_file()
+            _check_fresh_target(self.manifest_scope.target, self.backend_proof)
+        if self.scope in ('PRODUCTION', 'C4_3A_MANIFEST_SAMPLE', 'FRESH_SAMPLE'):
             _check_backend(self.backend_session, self.backend_proof,
                            self.host_addr, self.project_id, self.project_name, self.namespace)
 
@@ -254,6 +264,56 @@ def discover_manifest_project(project_client: Any, host_addr: str, contract: Map
     return WriterConfig(host_addr, project, contract['namespace'], contract,
                         scope='C4_3A_MANIFEST_SAMPLE', manifest_scope=scope,
                         backend_session=backend_session, backend_proof=backend_proof)
+
+
+def _check_fresh_target(target, proof):
+    volume = (re.fullmatch(r'kag-s8-[a-z0-9][a-z0-9-]*_openspg-neo4j-data(-fresh-[a-z0-9-]{1,40})?',
+                          proof.runtime_identity[-1])
+              if isinstance(proof, BackendIdentityProof) and proof.runtime_identity else None)
+    if (not isinstance(target, Mapping) or not isinstance(proof, BackendIdentityProof)
+            or set(target) != {'project_id','project_name','namespace','database',
+                              'physical_database_id','runtime_identity'}
+            or not target['project_name'].startswith('FreshSample_')
+            or (target['database'] not in ('neo4j','vietroadtraffic')
+                and not target['database'].startswith('freshsample'))
+            or (proof.project_id, proof.project_name, proof.namespace, proof.canonical_database_name,
+                proof.physical_database_id, list(proof.runtime_identity)) !=
+               (target['project_id'],target['project_name'],target['namespace'],target['database'],
+                target['physical_database_id'],target['runtime_identity'])
+            or len(proof.runtime_identity) != 7
+            or volume is None
+            or target['database'] == 'vietroadtraffic' and volume.group(1) is None):
+        raise WriterAdapterError('fresh sample target differs from its physical isolated backend')
+
+
+def discover_fresh_sample_project(project_client, host_addr, contract, manifest_path,
+                                  node_specs, edge_specs, *, backend_session=None):
+    """Grant an exact bounded C3 subset only on its newly attested isolated backend."""
+    _validate_local_host(host_addr)
+    if getattr(project_client,'_host_addr',None) != host_addr:
+        raise WriterAdapterError('fresh sample project route mismatch')
+    path=Path(manifest_path).resolve()
+    raw=path.read_bytes(); manifest=json.loads(raw)
+    if manifest.get('kind') != 'FRESH_SAMPLE':
+        raise WriterAdapterError('fresh sample manifest required')
+    target=manifest['target']
+    proof=_prove_backend(backend_session,host_addr,target['project_id'],target['project_name'],contract['namespace'])
+    _check_fresh_target(target,proof)
+    keys=frozenset((n['type'],n['id']) for n in node_specs)
+    tuples=frozenset(tuple(e['tuple']) for e in edge_specs)
+    if (not 1 <= len(keys) <= 128 or len(keys) != len(node_specs)
+            or not 1 <= len(tuples) <= 256 or len(tuples) != len(edge_specs)
+            or keys != frozenset(tuple(k) for k in manifest['selected_node_keys'])
+            or tuples != frozenset(tuple(k) for k in manifest['selected_edge_tuples'])
+            or any(k[:2] not in keys or k[3:] not in keys for k in tuples)):
+        raise WriterAdapterError('fresh sample identities outside the bounded manifest')
+    digest=lambda spec:hashlib.sha256(canonical_json(spec).encode()).hexdigest()
+    scope=_ManifestScope(path,hashlib.sha256(raw).hexdigest(),keys,tuples,_MANIFEST_PROJECT_PROOF,
+        target,{(n['type'],n['id']):digest(n) for n in node_specs},
+        {tuple(e['tuple']):digest(e) for e in edge_specs})
+    project=_VerifiedSmokeProject(target['project_id'],target['project_name'],contract['namespace'],host_addr,_MANIFEST_PROJECT_PROOF)
+    return WriterConfig(host_addr,project,contract['namespace'],contract,scope='FRESH_SAMPLE',
+                        manifest_scope=scope,backend_session=backend_session,backend_proof=proof)
 
 
 def discover_production_project(project_client: Any, settings: ProductionSettings,
@@ -525,7 +585,7 @@ class NativeIntegerKGWriter(KGWriter):
             if (self.config.scope == 'PRODUCTION'
                     and self._verified_node_keys != self.config.production_scope.node_keys):
                 raise WriterAdapterError('production edges require full C3 node readback barrier')
-            if (self.config.scope == 'C4_3A_MANIFEST_SAMPLE'
+            if (self.config.scope in ('C4_3A_MANIFEST_SAMPLE','FRESH_SAMPLE')
                     and self._verified_node_keys != self.config.manifest_scope.node_keys):
                 raise WriterAdapterError('C4.3a edges require full manifest node readback barrier')
             missing = {(edge.from_type, edge.from_id) for edge in input.edges
@@ -566,7 +626,7 @@ def _check_writer_scope(graph: SubGraph, config: WriterConfig, *, deleting: bool
         for spec in edges:
             _validate_edge(spec, config)
         return
-    if config.scope == 'C4_3A_MANIFEST_SAMPLE':
+    if config.scope in ('C4_3A_MANIFEST_SAMPLE','FRESH_SAMPLE'):
         config.manifest_scope.verify_file()
         if deleting:
             raise WriterAdapterError('C4.3a manifest scope does not authorize deletion')
@@ -582,6 +642,26 @@ def _check_writer_scope(graph: SubGraph, config: WriterConfig, *, deleting: bool
             fields = (edge.from_type, edge.from_id, edge.label, edge.to_type, edge.to_id)
             _validate_edge({'tuple': fields, 'application_edge_key': edge.id,
                             'properties': edge.properties}, config)
+        if config.scope == 'FRESH_SAMPLE':
+            from kag.builder.production_scope import _spec_hash
+            from kag.vector_contract import TARGETS, valid_vector
+            for node in graph.nodes:
+                targets=TARGETS.get(node.label.rsplit('.',1)[-1],())
+                permitted={vector for _,vector in targets}
+                if (any(k.startswith('_') and (k not in permitted or not valid_vector(v,3072))
+                        for k,v in node.properties.items())
+                        or any(node.properties.get(prop) and vector not in node.properties
+                               for prop,vector in targets)):
+                    raise WriterAdapterError('fresh sample requires valid declared 3072 vectors')
+                spec={'type':node.label,'id':node.id,'name':node.name,
+                      'properties':{k:v for k,v in node.properties.items() if not k.startswith('_')}}
+                if config.manifest_scope.node_hashes.get((node.label,node.id)) != _spec_hash(spec):
+                    raise WriterAdapterError('fresh sample node content differs from C3')
+            for edge in graph.edges:
+                fields=(edge.from_type,edge.from_id,edge.label,edge.to_type,edge.to_id)
+                spec={'tuple':list(fields),'application_edge_key':edge.id,'properties':edge.properties}
+                if config.manifest_scope.edge_hashes.get(fields) != _spec_hash(spec):
+                    raise WriterAdapterError('fresh sample relation content differs from C3')
         return
     _validate_prefix(config.synthetic_prefix)
     for node in graph.nodes:

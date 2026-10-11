@@ -12,7 +12,7 @@ class Retriever:
         positive_limit(expansion_limit)
         if set(contract['relations'])!=set(APPROVED) or set(contract['node_types'])!=set(TARGETS):
             raise ValueError('retriever requires current three-entity ten-predicate schema')
-        if not callable(embed):
+        if embed is not None and not callable(embed):
             raise ValueError('query embedding callable required')
         self.reader,self.embed,self.contract = reader,embed,contract
         self.search_k,self.expansion_limit = search_k,expansion_limit
@@ -46,7 +46,14 @@ class Retriever:
         positive_limit(top_k,self.search_k)
         if not isinstance(question,str) or not question.strip() or type(expand) is not bool:
             raise ValueError('nonempty exact question and boolean expansion required')
-        vector = self.embed(question)
+        if self.embed is None:
+            raise ValueError('query embedding callable required')
+        return self.retrieve_vector(self.embed(question),top_k=top_k,expand=expand)
+
+    def retrieve_vector(self,vector,*,top_k=10,expand=False):
+        positive_limit(top_k,self.search_k)
+        if type(expand) is not bool:
+            raise ValueError('boolean expansion required')
         if not _valid_vector(vector,3072):
             raise ValueError('query embedding must be finite nonzero 3072-vector')
         hits = {}

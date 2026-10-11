@@ -7,8 +7,12 @@ import vn.luatgt.dto.*;
 import vn.luatgt.service.*;
 @RestController @RequestMapping("/api")
 public class KagController {
-    private final KagSchema schema; private final LegalUnitService units;
-    public KagController(KagSchema schema,LegalUnitService units) { this.schema=schema; this.units=units; }
+    private final KagSchema schema; private final LegalUnitService units; private final InfrastructureService infrastructure;
+    public KagController(KagSchema schema,LegalUnitService units,InfrastructureService infrastructure) { this.schema=schema; this.units=units; this.infrastructure=infrastructure; }
+    @GetMapping("/admin/kag/status") Map<String,Object> status() { return infrastructure.kagStatus(); }
+    @GetMapping("/admin/kag/pipeline") JsonNode pipeline() { return infrastructure.pipelineStatus(); }
+    @GetMapping("/admin/kag/benchmark/datasets") JsonNode datasets() { return infrastructure.benchmarkDatasets(); }
+    @PostMapping("/admin/kag/retrieve") JsonNode retrieve(@Valid @RequestBody KagRetrieveRequest request) { return infrastructure.retrieve(request); }
     @GetMapping("/admin/kag/schema") Map<String,Object> schema() { return Map.of("identity",schema.identity(),"contract",schema.contract()); }
     @GetMapping("/admin/units") List<Map<String,Object>> admin(@RequestParam(required=false) String docId) { return units.list(docId,true); }
     @GetMapping("/units") List<Map<String,Object>> list(@RequestParam String docId) { return units.list(docId,false); }

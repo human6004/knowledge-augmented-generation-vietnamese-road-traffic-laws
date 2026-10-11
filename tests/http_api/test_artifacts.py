@@ -186,6 +186,25 @@ class ArtifactTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             release.records[0].metadata['id'] = 'forged'
 
+    def test_document_content_intent_requires_exact_label_source_and_sample(self):
+        from kag.legal_solver import DOCUMENT_CONTENT_ANSWER
+        props=self.fixture.nodes[NS+'LegalDocument','document-1']['properties']
+        props.update(soHieu='330/2026/NĐ-CP',ngayHieuLucBoPhan='[{"date":"2027-07-01"}]')
+        for record in self.fixture.catalog['records']:
+            if record['entity_type']==NS+'LegalDocument':
+                record['metadata']=decode_properties(props,CONTRACT['node_properties']['LegalDocument'])
+        self.fixture.seal();release=self.load()
+        original=answered()[0]
+        result=AnswerResult(DOCUMENT_CONTENT_ANSWER+'\n\n'.join(c.quote for c in original.citations),original.citations,False)
+        question='Trích nội dung văn bản: Nghị định 330/2026/NĐ-CP quy định gì?'
+        self.api().verify_native_sources(result,release,self.fixture,AS_OF,'synthetic-webapp',question=question)
+        for bad_result,bad_question,bad_release in (
+                (result,None,release),(original,question,release),
+                (result,question.replace('330','999'),release),
+                (result,question,replace(release,release_kind='PRODUCTION'))):
+            self.failure(lambda:self.api().verify_native_sources(bad_result,bad_release,self.fixture,AS_OF,
+                'synthetic-webapp',question=bad_question))
+
     def test_view_cannot_promote_artifact_hashes_to_live_readiness(self):
         view = self.api().release_view(self.load())
         self.assertFalse(view['backend_identity_verified'])
@@ -540,6 +559,7 @@ else:
         self.failure(self.verify)
 
     def test_missing_sign_unit_reference_cannot_be_verified(self):
+        self.fixture.descriptor['release_kind'] = 'PRODUCTION'
         for record in self.fixture.catalog['records']:
             if record['entity_type'] == NS+'TrafficSign':
                 record['unit_id'] = 'missing-unit'

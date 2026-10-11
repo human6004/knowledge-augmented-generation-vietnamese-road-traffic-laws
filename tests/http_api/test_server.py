@@ -34,6 +34,33 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIsNone(app.state.runtime_settings)
         self.assertIsNone(app.openapi_url)
 
+    def test_broker_cannot_mix_database_reader_credentials(self):
+        token=self.root/'broker.token';token.write_text('b'*43)
+        password=self.root/'reader.password';password.write_text('secret-reader-password')
+        os.environ.update(KAG_HTTP_BROKER_URL='http://openspg-server:8899',KAG_HTTP_BROKER_TOKEN_FILE=str(token),
+            KAG_HTTP_READER_USERNAME='sample_reader',KAG_HTTP_READER_PASSWORD_FILE=str(password))
+        with self.assertRaises(server.ConfigurationError):server.create_app()
+
+    def test_proof_pin_file_requires_broker_and_no_static_pin(self):
+        pin=self.root/'sample-proof.sha256';pin.write_text('a'*64)
+        os.environ['KAG_HTTP_SAMPLE_PROOF_SHA256_FILE']=str(pin)
+        with self.assertRaises(server.ConfigurationError):server.create_app()
+        token=self.root/'broker.token';token.write_text('b'*43)
+        os.environ.update(KAG_HTTP_BROKER_URL='http://openspg-server:8899',KAG_HTTP_BROKER_TOKEN_FILE=str(token),
+            KAG_HTTP_SAMPLE_PROOF_SHA256='a'*64)
+        with self.assertRaises(server.ConfigurationError):server.create_app()
+
+    def test_evaluation_root_is_optional_absolute_and_does_not_grant_authority(self):
+        with patch.dict(os.environ, {'KAG_HTTP_EVALUATION_ROOT':str(self.root)}):
+            app = server.create_app()
+        self.assertEqual(app.state.evaluation_root, self.root)
+        self.assertIsNone(app.state.serving_release)
+        self.assertIsNone(app.state.runtime_settings)
+        with patch.dict(os.environ, {'KAG_HTTP_EVALUATION_ROOT':'relative/catalog'}):
+            with self.assertRaises(server.ConfigurationError) as caught:
+                server.create_app()
+        self.assertNotIn('relative/catalog', str(caught.exception))
+
     def test_both_service_scopes_are_required(self):
         for key in self.env:
             with self.subTest(key=key), patch.dict(os.environ, self.env, clear=True):
@@ -243,6 +270,17 @@ class PackagedASGITests(unittest.IsolatedAsyncioTestCase):
         for headers,status in [({},401),({'authorization':'Bearer '+'q'*64},403)]:
             result = await self.client.post('/v1/retrieve',headers=headers,content=b'{')
             self.assertEqual(result.status_code,status)
+
+    async def test_packaged_read_only_inspection_uses_inspect_scope_and_real_lifespan(self):
+        for path in ('/v1/pipeline/status','/v1/benchmark/datasets'):
+            self.assertEqual((await self.client.get(path)).status_code,401)
+            self.assertEqual((await self.client.get(path,headers={'authorization':'Bearer '+'q'*64})).status_code,403)
+            response = await self.client.get(path,headers={'authorization':'Bearer '+'i'*64})
+            self.assertEqual(response.status_code,200)
+            self.assertFalse(response.json()['execution_allowed'])
+            self.assertEqual(response.headers['cache-control'],'no-store')
+        value = (await self.client.get('/v1/pipeline/status',headers={'authorization':'Bearer '+'i'*64})).json()
+        self.assertEqual((value['phase'],value['active_requests'],value['progress']),('idle',0,None))
 
     async def test_valid_retrieve_is_unavailable_without_release(self):
         result = await self.client.post('/v1/retrieve',headers={'authorization':'Bearer '+'i'*64},

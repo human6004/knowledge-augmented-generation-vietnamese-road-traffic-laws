@@ -145,6 +145,8 @@ class PromptTests(unittest.TestCase):
         text = json.loads(deduce.build_prompt({'question':'Xe mô tô?', 'evidence':{}, 'as_of':'2026-10-06'}))
         self.assertIn('conflict=resolved',text['instruction'])
         self.assertIn('phải có support_selections',text['instruction'])
+        self.assertIn('parent_id',text['instruction'])
+        self.assertIn('bắt buộc',text['instruction'])
 
     def test_unicode_and_meaning_pairs(self):
         module = self.module()
@@ -506,6 +508,22 @@ class SafetyTests(unittest.TestCase):
         for flags in ({'conflict': 'unresolved'}, {'conflict': 'resolved'}, {'effectivity': 'uncertain'}):
             result, _, _ = self.render(module, ctx, question, candidate([self.selected(ctx)], **flags))
             self.assertTrue(result.abstained)
+
+    def test_explicit_document_content_keeps_grounding_without_claiming_current_law(self):
+        question='Trích nội dung văn bản: Xe mô tô không đội mũ bảo hiểm theo Nghị định 330/2026/NĐ-CP bị phạt bao nhiêu?'
+        module,reader,retriever,_,_=self.prepare(question=question)
+        reader.nodes['VietRoadTraffic.LegalDocument','văn-bản']['properties']['ngayHieuLucBoPhan']='[{"date":"2027-07-01"}]'
+        ctx=Context();task=Task('Retriever',{'query':question})
+        module.LegalRetrieverExecutor(retriever).invoke(question,task,ctx);ctx.append_task(task)
+        result,_,_=self.render(module,ctx,question,candidate([self.selected(ctx)],effectivity='uncertain'))
+        self.assertFalse(result.abstained)
+        self.assertTrue(result.answer.startswith('Trích nội dung nguồn (không xác nhận hiệu lực hiện hành):\n'))
+        self.assertEqual(result.citations[0].quote,'Xe mô tô không đội mũ bảo hiểm: phạt 30.000.000 đồng.')
+        for override in ({'applicability':'wrong_context'},{'conflict':'unresolved'}):
+            denied,_,_=self.render(module,ctx,question,candidate([self.selected(ctx)],**override))
+            self.assertTrue(denied.abstained)
+        self.assertIsNone(module.document_content_question('Trích nội dung văn bản: pháp luật hiện hành quy định gì?'))
+        self.assertIsNone(module.document_content_question('Nghị định 330/2026/NĐ-CP quy định gì?'))
 
     def test_inactive_metadata_without_dated_authority_abstains(self):
         for props in ({'currentStatus':'Hết hiệu lực'},

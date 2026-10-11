@@ -77,14 +77,42 @@ def create_app():
             raise ConfigurationError()
         reader_user = os.environ.get('KAG_HTTP_READER_USERNAME') or None
         reader_password = _secret('KAG_HTTP_READER_PASSWORD_FILE')
+        broker_url = os.environ.get('KAG_HTTP_BROKER_URL') or None
+        broker_token = _secret('KAG_HTTP_BROKER_TOKEN_FILE')
+        if (bool(broker_url)!=bool(broker_token) or (broker_url and
+                (broker_url!='http://openspg-server:8899' or reader_user or reader_password))):
+            raise ConfigurationError()
         if ((reader_user is None) != (reader_password is None)
                 or (reader_user is not None and (not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}',reader_user)
                     or reader_user.lower() in ('root','admin','neo4j')))):
             raise ConfigurationError()
         provider_keys = {name:_secret('KAG_HTTP_'+name.upper()+'_KEY_FILE') for name in ('embedding','chat')}
         app = h1_app(settings,enable_sample_routes=True)
+        evaluation_root = os.environ.get('KAG_HTTP_EVALUATION_ROOT')
+        if evaluation_root:
+            if not Path(evaluation_root).is_absolute():
+                raise ConfigurationError()
+            app.state.evaluation_root = Path(evaluation_root)
         release_id = os.environ.get('KAG_HTTP_RELEASE_ID')
         root = os.environ.get('KAG_HTTP_RELEASE_ROOT')
+        sample_pin = os.environ.get('KAG_HTTP_SAMPLE_PROOF_SHA256') or None
+        sample_pin_file = _secret('KAG_HTTP_SAMPLE_PROOF_SHA256_FILE')
+        query_pin = _secret('KAG_HTTP_QUERY_PROOF_SHA256_FILE')
+        gateway_token = _secret('KAG_HTTP_PROVIDER_GATEWAY_TOKEN_FILE')
+        gateway = os.environ.get('KAG_HTTP_PROVIDER_GATEWAY') or None
+        ledger = os.environ.get('KAG_HTTP_ATTEMPT_LEDGER') or None
+        if query_pin and (not re.fullmatch('[0-9a-f]{64}',query_pin) or not broker_url
+                or gateway!='http://kag-ingress:8898/v1' or not gateway_token
+                or ledger!='/provider-state/attempts.json'):
+            raise ConfigurationError()
+        if not query_pin and any((gateway_token,gateway,ledger)):
+            raise ConfigurationError()
+        if sample_pin_file is not None:
+            if sample_pin is not None or not broker_url:
+                raise ConfigurationError()
+            sample_pin = sample_pin_file
+        if sample_pin is not None and (not re.fullmatch('[0-9a-f]{64}',sample_pin) or not release_id):
+            raise ConfigurationError()
         if bool(release_id) != bool(root):
             raise ConfigurationError()
         if release_id:
@@ -96,13 +124,18 @@ def create_app():
             if source_id != release.descriptor['source_snapshot_id'] or webapp_id != release.descriptor['webapp_snapshot_id']:
                 raise ConfigurationError()
             app.state.serving_release = release
+            from .sample_query import development_policy
+            development = development_policy(release,query_pin) if query_pin and query_pin!='0'*64 else None
             app.state.runtime_settings = RuntimeSettings(secrets=settings.secrets,release_id=release_id,
                 source_snapshot_id=source_id,webapp_snapshot_id=webapp_id,
                 reader_username=reader_user,reader_password=reader_password,
                 embedding_url=os.environ.get('KAG_HTTP_EMBEDDING_URL') or None,
                 embedding_model=os.environ.get('KAG_HTTP_EMBEDDING_MODEL') or None,embedding_key=provider_keys['embedding'],
                 chat_url=os.environ.get('KAG_HTTP_CHAT_URL') or None,
-                chat_model=os.environ.get('KAG_HTTP_CHAT_MODEL') or None,chat_key=provider_keys['chat'])
+                chat_model=os.environ.get('KAG_HTTP_CHAT_MODEL') or None,chat_key=provider_keys['chat'],
+                sample_proof_sha256=sample_pin,broker_url=broker_url,broker_token=broker_token,
+                query_proof_sha256=query_pin,provider_gateway=gateway,provider_gateway_token=gateway_token,
+                attempt_ledger=ledger,development_policy=development)
         return app
     except (ApiFailure,artifacts.ArtifactFailure,OSError,ValueError,TypeError):
         raise ConfigurationError() from None

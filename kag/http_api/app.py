@@ -76,6 +76,7 @@ class _SafeHTTP:
         if scope['type'] != 'http':
             await self.app(scope, receive, send)
             return
+        from .runtime import RuntimeFailure
         scope.setdefault('state', {})['request_id'] = str(uuid4())
         started = False
 
@@ -130,7 +131,7 @@ class _SafeHTTP:
 
         try:
             await self.app(scope, receive, safe_send)
-        except ApiFailure as exc:
+        except (ApiFailure, RuntimeFailure) as exc:
             if not started:
                 scope['state']['h1_query_verified'] = False
                 scope['state']['h1_retrieve_verified'] = False
@@ -256,7 +257,17 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
     app.state.runtime_factory = runtime_factory
     app.state.serving_release = None
     app.state.runtime_settings = None
+    app.state.evaluation_root = None
     app.add_middleware(_SafeHTTP)
+
+    def sample_guard(request, release, runtime_settings):
+        if (time.monotonic() >= request.state.h1_deadline
+                or app.state.serving_release is not release or app.state.runtime_settings is not runtime_settings
+                or app.state.http_settings.secrets != runtime_settings.secrets):
+            raise ApiFailure('NOT_READY')
+        if request.headers.getlist('x-kag-release-id') != [release.release_id]:
+            raise ApiFailure('RELEASE_MISMATCH')
+        artifacts.load_sample_proof(release,runtime_settings.sample_proof_sha256,runtime_settings.reader_username)
 
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
@@ -281,11 +292,36 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
             return {'contract_version': 'h1-read-v1.0', 'status': 'alive'}
         if (len(params) != 2 or dict(params).get('mode') != 'ready'
                 or set(dict(params)) != {'mode', 'capability'}
-                or dict(params)['capability'] not in ('retrieve', 'query-v1')):
+                or dict(params)['capability'] not in ('retrieve', 'retrieve-vector', 'query-v1')):
             raise ApiFailure('INVALID_REQUEST')
         capability = dict(params)['capability']
-        authorize(principal, 'inspect' if capability == 'retrieve' else 'query', None)
+        authorize(principal, 'query' if capability == 'query-v1' else 'inspect', None)
         supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if capability == 'retrieve-vector' and enable_sample_routes:
+            release, runtime_settings = app.state.serving_release, app.state.runtime_settings
+            if type(release) is not artifacts.ServingRelease or runtime_settings is None or supervisor is None:
+                raise ApiFailure('NOT_READY')
+            result = await supervisor.sample_vector(request,runtime_settings,release,ready=True)
+            sample_guard(request,release,runtime_settings)
+            request.state.h1_authority_guard = lambda:sample_guard(request,release,runtime_settings)
+            request.state.h1_retrieve_verified = True
+            return JSONResponse(result)
+        if capability in ('query-v1','retrieve') and enable_sample_routes:
+            release,runtime_settings=app.state.serving_release,app.state.runtime_settings
+            if (type(release) is artifacts.ServingRelease and runtime_settings is not None
+                    and getattr(runtime_settings,'query_proof_sha256',None) and supervisor is not None):
+                try:
+                    result=await supervisor.sample_ready(request,runtime_settings,release,
+                        capability='query' if capability=='query-v1' else 'retrieve')
+                except ApiFailure as failure:
+                    if failure.code!='NOT_READY':raise
+                    return _failure(request,'NOT_READY',extra={
+                        'status':'unavailable','capability':capability,
+                        'checks':{'auth':'pass',**supervisor.readiness()},
+                        'provider_transport':'not_probed','production_write':'blocked'})
+                sample_guard(request,release,runtime_settings)
+                request.state.h1_authority_guard=lambda:sample_guard(request,release,runtime_settings)
+                return JSONResponse(result)
         checks = supervisor.readiness() if supervisor is not None else {
             'runtime': 'blocked', 'sources': 'unknown'}
         return _failure(request, 'NOT_READY', extra={
@@ -295,6 +331,22 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
 
     if not (settings.secrets.query_tokens or settings.secrets.inspect_tokens):
         return app
+
+    @app.get('/v1/pipeline/status')
+    async def pipeline_status(request: Request):
+        authorize(request_principal(request), 'inspect', None)
+        if request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        from .inspection import pipeline_view
+        return pipeline_view(getattr(app.state, 'runtime_supervisor', None))
+
+    @app.get('/v1/benchmark/datasets')
+    async def benchmark_datasets(request: Request):
+        authorize(request_principal(request), 'inspect', None)
+        if request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        from .inspection import dataset_catalog
+        return await asyncio.to_thread(dataset_catalog, app.state.evaluation_root)
 
     @app.get('/v1/graph/release')
     async def graph_release(request: Request):
@@ -360,7 +412,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                 identity()
                 try:
                     verified = artifacts.verify_native_sources(result,release,instance.reader,
-                        instance.as_of,settings.webapp_snapshot_id)
+                        instance.as_of,settings.webapp_snapshot_id,question=parsed.message)
                 except artifacts.ArtifactFailure as exc:
                     identity()
                     if exc.state is artifacts.VerificationState.UNAVAILABLE:
@@ -434,6 +486,49 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
         return await verified_query(request)
 
     if enable_sample_routes:
+        @app.post('/v1/retrieve/vector')
+        async def sample_vector(request: Request):
+            release, runtime_settings = app.state.serving_release, app.state.runtime_settings
+            supervisor = getattr(app.state,'runtime_supervisor',None)
+            if type(release) is not artifacts.ServingRelease or runtime_settings is None or supervisor is None:
+                await admit_request(request,'inspect',contract.SampleVectorRequest)
+                raise ApiFailure('NOT_READY')
+
+            async def finalize(instance,result,parsed):
+                def verified():
+                    sample_guard(request,release,runtime_settings)
+                    _verify_retrieve_items(result,release,instance.reader)
+                    raw = contract.encode_retrieve({'contract_version':'h1-sample-vector-1.0',
+                        'request_id':request.state.request_id,'release_id':release.release_id,'release_kind':'SAMPLE',
+                        'source_snapshot_id':runtime_settings.source_snapshot_id,
+                        'schema_contract':asdict(release.schema_contract),'evidence_id':parsed.evidence_id,
+                        'production_write':'blocked','items':result})
+                    sample_guard(request,release,runtime_settings)
+                    request.state.h1_authority_guard = lambda:sample_guard(request,release,runtime_settings)
+                    return raw
+                return await asyncio.to_thread(verified)
+
+            operation = asyncio.create_task(supervisor.sample_vector(request,runtime_settings,release,finalize=finalize))
+            async def disconnected():
+                while not operation.done():
+                    if getattr(request,'_stream_consumed',False) and await request.is_disconnected():
+                        return True
+                    await asyncio.sleep(.02)
+                return False
+            watcher = asyncio.create_task(disconnected())
+            try:
+                done,_ = await asyncio.wait({operation,watcher},return_when=asyncio.FIRST_COMPLETED)
+                if watcher in done and watcher.result():
+                    raise asyncio.CancelledError
+                raw = await operation
+                request.state.h1_retrieve_verified = True
+                return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
+            finally:
+                if not operation.done():
+                    operation.cancel()
+                watcher.cancel()
+                await asyncio.gather(operation,watcher,return_exceptions=True)
+
         @app.post('/v1/query/stream')
         async def query_stream(request: Request):
             return await verified_query(request,stream=True)

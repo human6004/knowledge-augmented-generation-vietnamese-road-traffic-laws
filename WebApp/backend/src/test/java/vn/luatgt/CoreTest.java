@@ -48,6 +48,14 @@ class CoreTest {
     @MockitoBean KagClient kag;
     @MockitoBean ObjectStorage storage;
     String admin;
+    @Test void chatStreamDeclaresEventStreamContentType() throws Exception {
+        String user=register();
+        var result=mvc.perform(post("/api/chat/stream").header("Authorization","Bearer "+user)
+            .contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Nguồn thử?\"}"))
+            .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM));
+    }
     @BeforeEach void admin() throws Exception { admin=token("admin@test.vn","TEST-only-admin-password"); }
     String token(String email,String password) throws Exception {
         return body(mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("email",email,"password",password)))).andExpect(status().isOk()).andReturn()).path("accessToken").asText();
@@ -63,6 +71,35 @@ class CoreTest {
         mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+user)).andExpect(status().isOk());
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/questions")).andExpect(status().isUnauthorized());
+    }
+    @Test void kagInspectionIsAdminOnlyAndUsesExistingServiceAdapter() throws Exception {
+        String user=register();
+        mvc.perform(get("/api/admin/kag/status").header("Authorization","Bearer "+user)).andExpect(status().isForbidden());
+        mvc.perform(post("/api/admin/kag/retrieve").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Nguồn thử\",\"top_k\":3,\"expand\":false}")).andExpect(status().isForbidden());
+        verify(kag,never()).status();verify(kag,never()).retrieve(anyString(),anyInt(),anyBoolean());
+        when(kag.status()).thenReturn(Map.of("liveness",Map.of("state","ALIVE","httpStatus",200),"queryReadiness",Map.of("state","NOT_READY","httpStatus",503)));
+        mvc.perform(get("/api/admin/kag/status").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.liveness.state").value("ALIVE")).andExpect(jsonPath("$.queryReadiness.state").value("NOT_READY"));
+        when(kag.retrieve("Nguồn thử",3,false)).thenReturn(json.readTree("{\"items\":[]}"));
+        mvc.perform(post("/api/admin/kag/retrieve").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Nguồn thử\",\"top_k\":3,\"expand\":false}")).andExpect(status().isOk()).andExpect(jsonPath("$.items").isEmpty());
+        verify(kag).retrieve("Nguồn thử",3,false);
+    }
+    @Test void kagRuntimeInspectionIsReadOnlyAndAdminOnly() throws Exception {
+        String user=register();
+        for(String path:List.of("/api/admin/kag/pipeline","/api/admin/kag/benchmark/datasets")) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("Authorization","Bearer "+user)).andExpect(status().isForbidden());
+        }
+        verify(kag,never()).pipelineStatus();verify(kag,never()).benchmarkDatasets();
+        when(kag.pipelineStatus()).thenReturn(json.readTree("{\"phase\":\"idle\",\"execution_allowed\":false}"));
+        when(kag.benchmarkDatasets()).thenReturn(json.readTree("{\"state\":\"NOT_CONFIGURED\",\"datasets\":[]}"));
+        mvc.perform(get("/api/admin/kag/pipeline").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.execution_allowed").value(false));
+        mvc.perform(get("/api/admin/kag/benchmark/datasets").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.datasets").isEmpty());
+        mvc.perform(post("/api/admin/kag/pipeline").header("Authorization","Bearer "+admin)).andExpect(status().isMethodNotAllowed());
+    }
+    @ParameterizedTest @ValueSource(strings={"{\"message\":\"Nguồn thử\",\"top_k\":0,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":11,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":1.5,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":1,\"expand\":\"true\"}","{\"message\":\"Nguồn thử\",\"top_k\":1}","{\"message\":\"Nguồn thử\",\"top_k\":1,\"expand\":false,\"schema_contract\":{}}"})
+    void kagAdminInputRejectsCoercionAndForgedSchema(String body) throws Exception {
+        mvc.perform(post("/api/admin/kag/retrieve").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isBadRequest());
+        verify(kag,never()).retrieve(anyString(),anyInt(),anyBoolean());
     }
     @Test void importsAreAtomicDraftsAndPreserveLegalMetadata() throws Exception {
         String rows="{\"rows\":[{\"sign_id\":\"QCVN 41:2024/BGTVT::DP.127\",\"ma_bien\":\"DP.127\",\"ten\":\"Biển hết tốc độ tối đa\",\"nhom\":\"Biển hết cấm\",\"doc_id\":\"51_2024_TT_BGTVT\",\"mo_ta\":\"Cần kiểm tra nội dung đầy đủ\",\"qcvn\":\"QCVN 41:2024/BGTVT\",\"so_hieu\":\"51/2024/TT-BGTVT\",\"unit_id\":\"D84\",\"ngay_hieu_luc\":\"2025-01-01\",\"ngay_het_hieu_luc\":null}]}";

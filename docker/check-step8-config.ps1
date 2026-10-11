@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-if (!$ComposeFile) { $ComposeFile = Join-Path $taskRoot 'docker-compose.step8.kag.yml' }
+if (!$ComposeFile) { $ComposeFile = Join-Path $taskRoot 'docker-compose.kag.yml' }
 $ComposeFile = [IO.Path]::GetFullPath($ComposeFile)
 $taskEnvPath = [IO.Path]::GetFullPath($EnvFile)
 $taskEnv = @{}
@@ -15,6 +15,12 @@ foreach ($taskLine in [IO.File]::ReadAllLines($taskEnvPath)) {
 }
 $taskProject = $taskEnv['STEP8_KAG_PROJECT']
 if ($taskProject -notmatch '^kag-s8-[a-z0-9][a-z0-9-]*$') { throw 'Independent kag-s8 project required.' }
+$taskRevision = $taskEnv['STEP8_NEO4J_STORAGE_REVISION']
+if ($taskRevision -and $taskRevision -notmatch '^-fresh-[a-z0-9-]{1,40}$') { throw 'Invalid fresh storage revision.' }
+$taskDatabase = if ($taskEnv['STEP8_DATABASE']) { $taskEnv['STEP8_DATABASE'] } else { 'neo4j' }
+if ($taskDatabase -notin @('neo4j','vietroadtraffic') -or ($taskDatabase -eq 'vietroadtraffic' -and !$taskRevision)) { throw 'New default database requires independent fresh storage.' }
+$taskReadOnly = if ($taskEnv['STEP8_READ_ONLY_DATABASES']) { $taskEnv['STEP8_READ_ONLY_DATABASES'] } else { '' }
+if ($taskReadOnly -and ($taskReadOnly -ne 'vietroadtraffic' -or $taskDatabase -ne $taskReadOnly -or !$taskRevision)) { throw 'Read-only seal must bind the fresh default database.' }
 # Include unused resources and inactive profiles so allowlists cannot be bypassed.
 $taskJson = & rtk proxy docker compose --all-resources --profile '*' --project-directory $taskRoot --env-file $taskEnvPath -f $ComposeFile config --format json 2>&1
 if ($LASTEXITCODE) { throw 'Compose configuration invalid; values suppressed to protect credentials.' }
@@ -26,14 +32,21 @@ $taskVolumeNames = @('openspg-mysql-data','openspg-neo4j-data','openspg-neo4j-lo
 if (Compare-Object @($taskConfig.volumes.PSObject.Properties.Name) $taskVolumeNames) { throw 'Unexpected storage scope.' }
 foreach ($taskName in $taskVolumeNames) {
     $taskVolume = $taskConfig.volumes.$taskName
-    if ($taskVolume.name -ne "${taskProject}_$taskName" -or $taskVolume.external -or $taskVolume.driver_opts) { throw 'Volume must be independent project-owned storage.' }
+    $taskExpectedVolume = "${taskProject}_$taskName" + $(if ($taskName -eq 'openspg-neo4j-data') { $taskRevision } else { '' })
+    if ($taskVolume.name -ne $taskExpectedVolume -or $taskVolume.external -or $taskVolume.driver_opts) { throw 'Volume must be independent project-owned storage.' }
 }
-if (Compare-Object @($taskConfig.networks.PSObject.Properties.Name) @('private','ingress')) { throw 'Exactly private and ingress networks required.' }
-foreach ($taskName in @('private','ingress')) {
+if ($taskConfig.services.'openspg-neo4j'.environment.NEO4J_initial_dbms_default__database -ne $taskDatabase) { throw 'Default database configuration mismatch.' }
+if ($taskConfig.services.'openspg-neo4j'.environment.NEO4J_server_databases_read__only -ne $taskReadOnly) { throw 'Read-only seal configuration mismatch.' }
+$taskStoreUrl = "neo4j://openspg-neo4j:7687?user=neo4j&password=$($taskEnv['STEP8_NEO4J_PASSWORD'])&database=$taskDatabase"
+foreach ($taskStore in @('graphstore','searchengine')) {
+    if (@($taskConfig.services.'openspg-server'.command | Where-Object { $_ -like "--cloudext.$taskStore.url=*" }).Count -ne 1 -or "--cloudext.$taskStore.url=$taskStoreUrl" -notin $taskConfig.services.'openspg-server'.command) { throw 'OpenSPG database routing mismatch.' }
+}
+if (Compare-Object @($taskConfig.networks.PSObject.Properties.Name) @('private','readbus','ingress')) { throw 'Exactly private, readbus and ingress networks required.' }
+foreach ($taskName in @('private','readbus','ingress')) {
     $taskNetwork = $taskConfig.networks.$taskName
     if ($taskNetwork.name -ne "${taskProject}_$taskName" -or $taskNetwork.external -or $taskNetwork.driver_opts -or ($taskNetwork.driver -and $taskNetwork.driver -ne 'bridge')) { throw 'Independent project-owned bridge networks required.' }
 }
-if (!$taskConfig.networks.private.internal -or $taskConfig.networks.ingress.internal) { throw 'Private internal network and separate ingress bridge required.' }
+if (!$taskConfig.networks.private.internal -or !$taskConfig.networks.readbus.internal -or $taskConfig.networks.ingress.internal) { throw 'Private/readbus internal networks and separate ingress bridge required.' }
 $taskPorts = @{}
 $taskMemory = @{'openspg-mysql'=402653184;'openspg-neo4j'=2147483648;'openspg-minio'=268435456;'openspg-server'=1610612736;'kag-api'=1073741824;'kag-ingress'=134217728}
 $taskPinnedImages = @{
@@ -50,8 +63,13 @@ foreach ($taskService in $taskConfig.services.PSObject.Properties) {
     if ($taskValue.container_name -or $taskValue.profiles -or $taskValue.privileged -or $taskValue.network_mode -or $taskValue.pid -or $taskValue.ipc -or $taskValue.links -or $taskValue.volumes_from -or $taskValue.extra_hosts -or $taskValue.devices) { throw 'Unsafe or unexpected service coupling.' }
     if ($taskValue.platform -ne 'linux/amd64' -or $taskValue.pull_policy -ne 'never' -or $taskValue.restart -ne 'no') { throw 'No automatic pull/restart; canonical platform required.' }
     if ([int64]$taskValue.mem_limit -ne $taskMemory[$taskService.Name] -or [double]$taskValue.cpus -le 0 -or [double]$taskValue.cpus -gt 1 -or $taskValue.pids_limit -le 0) { throw 'Bounded candidate resource caps required; these are not capacity proof.' }
-    $taskNetworks = if ($taskService.Name -eq 'kag-ingress') { @('private','ingress') } else { @('private') }
-    if (Compare-Object @($taskValue.networks.PSObject.Properties.Name) $taskNetworks) { throw 'Exact private/ingress service network memberships required.' }
+    $taskNetworks = switch ($taskService.Name) {
+        'kag-ingress' { @('readbus','ingress') }
+        'kag-api' { @('readbus') }
+        'openspg-server' { @('private','readbus') }
+        default { @('private') }
+    }
+    if (Compare-Object @($taskValue.networks.PSObject.Properties.Name) $taskNetworks) { throw 'Exact private/readbus/ingress service network memberships required.' }
     foreach ($taskDependency in $taskValue.depends_on.PSObject.Properties.Name) {
         if ($taskDependency -notin $taskServices) { throw 'Cross-stack dependency denied.' }
     }
@@ -60,15 +78,44 @@ foreach ($taskService in $taskConfig.services.PSObject.Properties) {
         $taskPorts[[string]$taskPort.published] = $true
     }
     foreach ($taskMount in $taskValue.volumes) {
-        if ($taskService.Name -notin @('kag-api','kag-ingress') -and ($taskMount.type -ne 'volume' -or $taskMount.source -notin $taskVolumeNames)) { throw 'Data services cannot bind host/legacy storage.' }
+        if ($taskService.Name -notin @('kag-api','kag-ingress','openspg-server') -and ($taskMount.type -ne 'volume' -or $taskMount.source -notin $taskVolumeNames)) { throw 'Data services cannot bind host/legacy storage.' }
     }
-    if ($taskService.Name -notin @('kag-api','kag-ingress')) {
+    if ($taskService.Name -notin @('kag-api','kag-ingress','openspg-server')) {
         $taskActual = @(foreach ($taskMount in $taskValue.volumes) { "$($taskMount.source):$($taskMount.target)" })
         if ($taskActual.Count -ne $taskDataMounts[$taskService.Name].Count -or ($taskActual.Count -and (Compare-Object $taskActual $taskDataMounts[$taskService.Name]))) { throw 'Data volume destination/service binding mismatch.' }
     }
 }
 $taskApi = $taskConfig.services.'kag-api'
 $taskProxy = $taskConfig.services.'kag-ingress'
+$taskServer = $taskConfig.services.'openspg-server'
+if (($taskServer.entrypoint -join '|') -ne '/bin/sh|/opt/sample/sample-server.sh' -or @($taskServer.command | Where-Object { $_ -like '--server.address=*' }).Count -ne 1 -or '--server.address=127.0.0.1' -notin $taskServer.command) { throw 'OpenSPG Java must use the fixed supervisor and loopback-only HTTP bind.' }
+$taskBrokerMounts = @{
+    '/opt/sample/kag'=(Join-Path $taskRoot 'kag')
+    '/opt/sample/sample-server.sh'=(Join-Path $taskRoot 'docker/sample-server.sh')
+    '/run/broker-credentials'=$taskEnv['STEP8_BROKER_CREDENTIALS_DIR']
+}
+if (@($taskServer.volumes).Count -ne 3 -or !$taskEnv['STEP8_BROKER_CREDENTIALS_DIR'] -or $taskEnv['STEP8_BROKER_CREDENTIALS_DIR'] -eq $taskEnv['STEP8_API_CREDENTIALS_DIR']) { throw 'Separate exact read-only broker mounts required.' }
+foreach ($taskMount in $taskServer.volumes) {
+    if ($taskMount.type -ne 'bind' -or !$taskMount.read_only -or $taskMount.bind.create_host_path -or !$taskBrokerMounts.ContainsKey($taskMount.target) -or $taskMount.source.Replace('\','/') -ne $taskBrokerMounts[$taskMount.target].Replace('\','/')) { throw 'Separate exact read-only broker mounts required.' }
+}
+if (Compare-Object @($taskServer.volumes.target) @($taskBrokerMounts.Keys)) { throw 'Separate exact read-only broker mounts required.' }
+$taskBrokerEnv = @{
+    PYTHONPATH='/opt/sample'; PYTHONDONTWRITEBYTECODE='1'; KAG_BROKER_HOST='0.0.0.0'
+    KAG_BROKER_PORT='8899'; KAG_BROKER_DATABASE='vietroadtraffic'
+    KAG_BROKER_NEO4J_ENDPOINT='http://openspg-neo4j:7474'; KAG_BROKER_USERNAME='neo4j'
+    KAG_BROKER_PASSWORD_FILE='/run/broker-credentials/neo4j.password'
+    KAG_BROKER_TOKEN_FILE='/run/broker-credentials/broker.token'
+    KAG_BROKER_DATABASE_ID=[string]$taskEnv['STEP8_BROKER_DATABASE_ID']
+    KAG_BROKER_SERVER_ID=[string]$taskEnv['STEP8_BROKER_SERVER_ID']
+}
+foreach ($taskKey in $taskBrokerEnv.Keys) {
+    if ($taskServer.environment.$taskKey -ne $taskBrokerEnv[$taskKey]) { throw 'Broker process configuration override denied.' }
+}
+if ([bool]$taskBrokerEnv.KAG_BROKER_DATABASE_ID -ne [bool]$taskBrokerEnv.KAG_BROKER_SERVER_ID) { throw 'Broker physical identity must be complete or disabled.' }
+$taskBrokerUrl = [string]$taskEnv['STEP8_BROKER_URL']
+if ($taskBrokerUrl -and ($taskBrokerUrl -ne 'http://openspg-server:8899' -or !$taskBrokerEnv.KAG_BROKER_DATABASE_ID -or $taskDatabase -ne 'vietroadtraffic' -or $taskReadOnly -ne 'vietroadtraffic')) { throw 'Broker URL requires a bound, frozen SAMPLE backend.' }
+if ($taskApi.environment.KAG_HTTP_BROKER_URL -ne $taskBrokerUrl -or $taskApi.environment.KAG_HTTP_BROKER_TOKEN_FILE -ne $(if ($taskBrokerUrl) { '/run/api-credentials/broker.token' } else { '' })) { throw 'Broker API routing override denied.' }
+if ($taskBrokerUrl -and ($taskEnv['STEP8_READER_USERNAME'] -or $taskApi.environment.KAG_HTTP_READER_USERNAME -or $taskApi.environment.KAG_HTTP_READER_PASSWORD_FILE -or (Test-Path -LiteralPath (Join-Path $taskEnv['STEP8_API_CREDENTIALS_DIR'] 'reader.password')))) { throw 'API database credentials denied with broker.' }
 $taskPort = @($taskProxy.ports)
 if ($taskPort.Count -ne 1 -or $taskPort[0].host_ip -ne '127.0.0.1' -or $taskPort[0].target -ne 8080 -or [string]$taskPort[0].published -ne $taskEnv['STEP8_API_PORT'] -or $taskPort[0].protocol -ne 'tcp') { throw 'Exact localhost ingress port mapping required.' }
 foreach ($taskService in @('kag-api','kag-ingress')) {
@@ -77,18 +124,32 @@ foreach ($taskService in @('kag-api','kag-ingress')) {
     if ([int64]$taskValue.memswap_limit -ne $taskMemory[$taskService] -or [double]$taskValue.cpus -ne $(if ($taskService -eq 'kag-api') { 1 } else { 0.25 }) -or $taskValue.pids_limit -ne $(if ($taskService -eq 'kag-api') { 128 } else { 64 })) { throw 'Exact API/ingress CPU/PID bounds and zero swap required.' }
 }
 if ($taskApi.user -ne "$($taskEnv['STEP8_API_UID']):$($taskEnv['STEP8_API_GID'])" -or $taskProxy.user -ne '99:99') { throw 'Exact configured API and non-root ingress users required.' }
-if ($taskProxy.build -or $taskProxy.environment -or $taskProxy.secrets -or $taskProxy.tmpfs -or $taskProxy.healthcheck -or ($taskProxy.entrypoint -join '|') -ne 'haproxy' -or ($taskProxy.command -join '|') -ne '-W|-db|-f|/usr/local/etc/haproxy/haproxy.cfg') { throw 'Ingress must run the fixed native proxy without secrets or command overrides.' }
+if ($taskProxy.build -or $taskProxy.secrets -or $taskProxy.tmpfs -or $taskProxy.healthcheck -or ($taskProxy.entrypoint -join '|') -ne 'haproxy' -or ($taskProxy.command -join '|') -ne '-W|-db|-f|/usr/local/etc/haproxy/haproxy.cfg') { throw 'Ingress must run the fixed native proxy without secrets or command overrides.' }
+if (Compare-Object @($taskProxy.environment.PSObject.Properties.Name) @('KAG_PROVIDER_BIND','KAG_PROVIDER_CLIENT')) { throw 'Only exact provider gateway IP settings permitted.' }
+foreach ($taskPair in @(@('BIND','KAG_PROVIDER_BIND'),@('CLIENT','KAG_PROVIDER_CLIENT'))) {
+    $taskIp = [string]$taskProxy.environment.($taskPair[1])
+    $taskDeclared = $taskEnv['STEP8_PROVIDER_'+$taskPair[0]]
+    if (!$taskDeclared) { $taskDeclared='127.0.0.1' }
+    if ($taskIp -ne $taskDeclared -or $taskIp -notmatch '^(127\.0\.0\.1|10\.(\d{1,3}\.){2}\d{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$' -or ($taskIp.Split('.') | Where-Object { [int]$_ -gt 255 })) { throw 'Exact private provider bind/client IPv4 required.' }
+    if (!$taskEnv['STEP8_QUERY_PROFILE'] -and $taskIp -ne '127.0.0.1') { throw 'Provider gateway must remain loopback when SAMPLE query disabled.' }
+}
 if (@($taskProxy.depends_on.PSObject.Properties.Name).Count -ne 1 -or $taskProxy.depends_on.'kag-api'.condition -ne 'service_healthy' -or @($taskProxy.sysctls.PSObject.Properties.Name).Count -ne 1 -or $taskProxy.sysctls.'net.ipv4.ip_forward' -ne '0') { throw 'Ingress requires healthy API dependency and disabled IP forwarding.' }
 $taskProxyConfig = Join-Path $taskRoot 'docker/kag-ingress/haproxy.cfg'
 $taskMount = @($taskProxy.volumes)
-if ($taskMount.Count -ne 1 -or $taskMount[0].type -ne 'bind' -or !$taskMount[0].read_only -or $taskMount[0].bind.create_host_path -or $taskMount[0].target -ne '/usr/local/etc/haproxy/haproxy.cfg' -or $taskMount[0].source.Replace('\','/') -ne $taskProxyConfig.Replace('\','/')) { throw 'Only the verified read-only ingress config may be mounted.' }
+if ($taskMount.Count -ne 2 -or $taskMount[0].type -ne 'bind' -or !$taskMount[0].read_only -or $taskMount[0].bind.create_host_path -or $taskMount[0].target -ne '/usr/local/etc/haproxy/haproxy.cfg' -or $taskMount[0].source.Replace('\','/') -ne $taskProxyConfig.Replace('\','/')) { throw 'Only verified config and gateway-only token mounts permitted.' }
+if ($taskMount[1].type -ne 'bind' -or !$taskMount[1].read_only -or $taskMount[1].bind.create_host_path -or $taskMount[1].target -ne '/run/egress-credentials' -or $taskMount[1].source.Replace('\','/') -ne $taskEnv['STEP8_EGRESS_CREDENTIALS_DIR'] -or $taskEnv['STEP8_EGRESS_CREDENTIALS_DIR'] -in @($taskEnv['STEP8_API_CREDENTIALS_DIR'],$taskEnv['STEP8_BROKER_CREDENTIALS_DIR'])) { throw 'Separate gateway-only token directory required.' }
+if (Compare-Object @((Get-ChildItem -LiteralPath $taskEnv['STEP8_EGRESS_CREDENTIALS_DIR']).Name) @('egress.token')) { throw 'Only gateway token may enter ingress.' }
 # Normalize checkout line endings, retaining the exact reviewed proxy configuration.
 $taskHash = [Security.Cryptography.SHA256]::Create()
 try { $taskDigest = [BitConverter]::ToString($taskHash.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($taskProxyConfig).Replace("`r`n","`n")))).Replace('-','').ToLowerInvariant() }
 finally { $taskHash.Dispose() }
-if ($taskDigest -ne '1e796024c09a4ff11c73062c9e61f16c4aa77517a8afac077d3b22d9878e10f5') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
+if ($taskDigest -ne '29ec31dbc5975f1f72391a7e37c3fe808e5d4ba96f480d9626f9b76d016e17ba') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
+$taskSamplePin = if ($taskEnv['STEP8_SAMPLE_PROOF_SHA256']) { $taskEnv['STEP8_SAMPLE_PROOF_SHA256'] } else { '' }
+if ($taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256 -ne $taskSamplePin -or ($taskSamplePin -and $taskSamplePin -notmatch '^[0-9a-f]{64}$')) { throw 'Sample serving proof pin mismatch.' }
+if (($taskBrokerUrl -and $taskSamplePin) -or $taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256_FILE -ne $(if ($taskBrokerUrl) { '/run/api-credentials/sample-proof.sha256' } else { '' })) { throw 'Broker SAMPLE proof must use the fixed operator pin file.' }
 if ($taskApi.environment.KAG_OPERATIONAL_PROOF -ne 'DENY' -or $taskApi.environment.KAG_PRODUCTION_WRITE -ne 'BLOCKED' -or $taskApi.environment.KAG_PROVIDER_EGRESS -ne 'DENY' -or $taskApi.environment.KAG_HTTP_WORKERS -ne '1' -or $taskApi.environment.KAG_DEBUG_DUMP_CONFIG -ne '0') { throw 'Serving authority must remain denied.' }
 if ('KAG_PROJECT_ID' -in $taskApi.environment.PSObject.Properties.Name -or 'KAG_PROJECT_HOST_ADDR' -in $taskApi.environment.PSObject.Properties.Name) { throw 'Remote bootstrap configuration denied.' }
+if ('KAG_HTTP_EVALUATION_ROOT' -in $taskApi.environment.PSObject.Properties.Name -and $taskApi.environment.KAG_HTTP_EVALUATION_ROOT -notin @('','/release/evaluation')) { throw 'Evaluation catalog may only read the existing external release mount.' }
 if ($taskApi.command -or $taskApi.entrypoint -or $taskApi.build.network -ne 'none' -or $taskApi.build.pull) { throw 'Entrypoint override or online build denied.' }
 if ($taskApi.build.context -ne $taskRoot -or $taskApi.build.dockerfile -ne 'docker/kag-api/Dockerfile') { throw 'API must package existing pinned source.' }
 if (Compare-Object @($taskApi.build.additional_contexts.PSObject.Properties.Name) @('http_wheels','vendor_objects')) { throw 'Exactly offline wheels and vendor objects build contexts required.' }
@@ -96,14 +157,28 @@ foreach ($taskContext in @('http_wheels','vendor_objects')) {
     $taskKey = if ($taskContext -eq 'http_wheels') { 'STEP8_HTTP_WHEELS_DIR' } else { 'STEP8_VENDOR_OBJECTS_DIR' }
     if ($taskApi.build.additional_contexts.$taskContext.Replace('\','/') -ne $taskEnv[$taskKey]) { throw 'Offline build context source override denied.' }
 }
-if ($taskApi.image -ne "${taskProject}-api:source" -or $taskEnv['STEP8_API_IMAGE_ID'] -ne 'sha256:d854da5ecb3d9e26b110723ffc466e3568b6b8b1ed765fc49265f066c43c8d2a') { throw 'API image must use a distinct Step8 identity and verified cache declaration.' }
+if ($taskApi.image -ne "${taskProject}-api:source" -or $taskEnv['STEP8_API_IMAGE_ID'] -notmatch '^sha256:[0-9a-f]{64}$') { throw 'API image must use a distinct Step8 identity and verified cache declaration.' }
+$taskActualApiImage = & rtk proxy docker image inspect --format '{{.Id}}' $taskApi.image 2>$null
+if ($LASTEXITCODE -or ($taskActualApiImage -join '').Trim() -ne $taskEnv['STEP8_API_IMAGE_ID']) { throw 'API image must use a distinct Step8 identity and verified cache declaration.' }
 if ($taskApi.build.args.KAG_RUNTIME_IMAGE -ne $taskEnv['STEP8_RUNTIME_IMAGE'] -or $taskEnv['STEP8_RUNTIME_IMAGE_ID'] -ne 'sha256:25190ba8f51e8d158db0910858e9de3de1e1324d29d8b236d4d120268fa7bf33') { throw 'Canonical base declaration mismatch; actual cache identity needs build preflight.' }
-if (@($taskApi.volumes).Count -ne 2) { throw 'Exactly release and API-only credential binds required.' }
+if (@($taskApi.volumes).Count -ne 4) { throw 'Exactly release, credentials and two persistent ledger file binds required.' }
 foreach ($taskMount in $taskApi.volumes) {
+    if ($taskMount.target -in @('/provider-state/attempts.json','/provider-state/attempts.json.lock')) {
+        $taskKey = if ($taskMount.target.EndsWith('.lock')) { 'STEP8_ATTEMPT_LOCK_FILE' } else { 'STEP8_ATTEMPT_LEDGER_FILE' }
+        if ($taskMount.type -ne 'bind' -or $taskMount.read_only -or $taskMount.bind.create_host_path -or $taskMount.source.Replace('\','/') -ne $taskEnv[$taskKey] -or !(Test-Path -LiteralPath $taskEnv[$taskKey] -PathType Leaf)) { throw 'Only exact persistent ledger files may be writable.' }
+        continue
+    }
     if ($taskMount.type -ne 'bind' -or !$taskMount.read_only -or $taskMount.bind.create_host_path -or $taskMount.target -notin @('/release','/run/api-credentials')) { throw 'Unexpected writable/host-control API mount.' }
     $taskKey = if ($taskMount.target -eq '/release') { 'STEP8_RELEASE_DIR' } else { 'STEP8_API_CREDENTIALS_DIR' }
     if ($taskMount.source.Replace('\','/') -ne $taskEnv[$taskKey]) { throw 'API bind source override denied.' }
 }
+if (Compare-Object @($taskApi.volumes.target) @('/release','/run/api-credentials','/provider-state/attempts.json','/provider-state/attempts.json.lock')) { throw 'Exact four API targets required.' }
+if ($taskEnv['STEP8_ATTEMPT_LOCK_FILE'] -ne ($taskEnv['STEP8_ATTEMPT_LEDGER_FILE']+'.lock')) { throw 'Ledger lock must share persistent ledger identity.' }
+foreach ($taskPair in @(@('KAG_HTTP_QUERY_PROOF_SHA256_FILE','/run/api-credentials/query-proof.sha256'),@('KAG_HTTP_PROVIDER_GATEWAY','http://kag-ingress:8898/v1'),@('KAG_HTTP_PROVIDER_GATEWAY_TOKEN_FILE','/run/api-credentials/egress.token'),@('KAG_HTTP_ATTEMPT_LEDGER','/provider-state/attempts.json'))) {
+    $taskExpected = if ($taskEnv['STEP8_QUERY_PROFILE']) { $taskPair[1] } else { '' }
+    if ([string]$taskApi.environment.($taskPair[0]) -ne $taskExpected) { throw 'Exact SAMPLE query profile settings required.' }
+}
+if ($taskEnv['STEP8_QUERY_PROFILE'] -and ($taskEnv['STEP8_QUERY_PROFILE'] -ne 'community-query-1.0' -or !$taskBrokerUrl -or $taskEnv['STEP8_EMBEDDING_URL'] -ne 'https://api.vilao.ai/v1' -or $taskEnv['STEP8_EMBEDDING_MODEL'] -ne 'dg/text-embedding-3-large' -or $taskEnv['STEP8_CHAT_URL'] -ne 'http://127.0.0.1:8317/v1' -or $taskEnv['STEP8_CHAT_MODEL'] -ne 'gemini-3.8-flash-high')) { throw 'Only attested SAMPLE provider configuration permitted.' }
 foreach ($taskScope in @('query','inspect')) {
     $taskName = "${taskScope}_token"
     $taskKey = "STEP8_$($taskScope.ToUpperInvariant())_SECRET_FILE"
@@ -118,4 +193,4 @@ foreach ($taskName in @('STEP8_MYSQL_PASSWORD','STEP8_NEO4J_PASSWORD','STEP8_MIN
     if ($taskEnv[$taskName] -notmatch '^[a-f0-9]{64}$') { throw 'Independent random credentials required.' }
 }
 if ($taskConfig.services.'openspg-mysql'.environment.MYSQL_ROOT_PASSWORD -ne $taskEnv['STEP8_MYSQL_PASSWORD'] -or $taskConfig.services.'openspg-neo4j'.environment.NEO4J_AUTH -ne "neo4j/$($taskEnv['STEP8_NEO4J_PASSWORD'])" -or $taskConfig.services.'openspg-minio'.environment.MINIO_ROOT_PASSWORD -ne $taskEnv['STEP8_MINIO_PASSWORD']) { throw 'Process environment overrides independent credentials.' }
-Write-Output 'PASS_STATIC_CONFIG: six services, two isolated networks, localhost-only ingress, private API, bounded security, offline build declaration, auth mounts and DENY policy. No deployment/capacity/image-compatibility proof.'
+Write-Output 'PASS_STATIC_CONFIG: six services, three isolated networks, localhost-only ingress/Java, API without direct DB network, fixed read-only broker mounts, exact cached API identity and DENY policy. No deployment/capacity/image-compatibility proof.'

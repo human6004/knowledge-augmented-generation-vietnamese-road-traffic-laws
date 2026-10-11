@@ -277,7 +277,8 @@ class LegalDeduceExecutor(KagDeduceExecutor):
         else:
             if payload['original_question'] != query:
                 raise ValueError('request evidence belongs to another question')
-            prompt_evidence = dict(payload, subquery=subquery)
+            prompt_evidence = dict(payload, subquery=subquery,
+                authority_scope='DOCUMENT_CONTENT' if document_content_question(query) else 'CURRENT_LAW')
             try:
                 value = self.llm_module.invoke({'question': query, 'evidence': prompt_evidence, 'as_of': as_of.isoformat()},
                                                self.deduce_prompt, with_except=True, reporter=None)
@@ -479,6 +480,20 @@ def _conflict_resolved(query, value, facts, support, payload, as_of):
     return targets <= proven
 
 
+DOCUMENT_CONTENT_PREFIX = 'Trích nội dung văn bản: '
+DOCUMENT_CONTENT_ANSWER = 'Trích nội dung nguồn (không xác nhận hiệu lực hiện hành):\n'
+
+
+def document_content_question(query):
+    """Explicit document lookup intent never asserts applicability at as_of."""
+    if type(query) is not str or not query.startswith(DOCUMENT_CONTENT_PREFIX):return None
+    question=query[len(DOCUMENT_CONTENT_PREFIX):].strip()
+    if (not question or len(material_constraints(question)['documents'])!=1
+            or re.search(r'hiện hành|hiện nay|đang áp dụng|còn hiệu lực|có hiệu lực|ngày hiệu lực',question,re.I)):
+        return None
+    return question
+
+
 class SafeLegalGenerator(GeneratorABC):
     def invoke(self, query, context, **kwargs):
         evidence = context.kwargs.get('legal_evidence')
@@ -494,26 +509,29 @@ class SafeLegalGenerator(GeneratorABC):
         if payload['budget_exceeded']:
             return _abstain('evidence exceeds demo source budget')
         try:
+            content_question=document_content_question(query)
             value = LegalDeducePrompt(language='vi').parse_response(bound['candidate'])
-            if value['abstained'] or value['applicability'] != 'supported' or value['effectivity'] != 'supported' or not value['selections']:
+            if (value['abstained'] or value['applicability'] != 'supported' or not value['selections']
+                    or (value['conflict']!='none' if content_question else value['effectivity']!='supported')):
                 return _abstain('insufficient legal authority')
             index = _span_index(payload)
             facts = [_resolve(span, index) for span in value['selections']]
             support = [_resolve(span, index) for span in value['support_selections']]
-            if any(not _current(item, payload['documents'], as_of)
+            if any((not content_question and not _current(item, payload['documents'], as_of))
                    or not _support_linked(item, citation, facts, payload, value) for item, citation in support):
                 return _abstain('unverified support applicability/effectivity')
             for item, citation in facts:
                 factual = (item['entity_type'].endswith('.LegalUnit') and citation.field == 'text'
                            or item['entity_type'].endswith('.TrafficSign') and citation.field == 'moTa')
-                if not factual or not _current(item, payload['documents'], as_of) or not _applicable(query, item, support, payload):
+                if (not factual or (not content_question and not _current(item, payload['documents'], as_of))
+                        or not _applicable(content_question or query, item, support, payload)):
                     return _abstain('unverified source applicability/effectivity')
-            if not _conflict_resolved(query, value, facts, support, payload, as_of):
+            if not content_question and not _conflict_resolved(query, value, facts, support, payload, as_of):
                 return _abstain('unresolved legal conflict')
         except (CandidateError, KeyError, TypeError, ValueError):
             return _abstain('invalid source selection')
         citations = tuple(dict.fromkeys(c for _, c in facts+support))
-        answer = 'Căn cứ nguồn đã xác nhận:\n'+'\n\n'.join(c.quote for c in citations)
+        answer = (DOCUMENT_CONTENT_ANSWER if content_question else 'Căn cứ nguồn đã xác nhận:\n')+'\n\n'.join(c.quote for c in citations)
         return AnswerResult(answer, citations, False)
 
 

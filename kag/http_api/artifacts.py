@@ -5,6 +5,7 @@ Hashes establish integrity within that trust boundary, not independent live proo
 """
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sqlite3
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -270,7 +272,9 @@ def _catalog(value, descriptor, contract):
         linked_unit = record.unit_id if record.sign_id else record.metadata.get('parent_id')
         if linked_unit:
             unit = entities.get((descriptor['namespace']+'.LegalUnit',linked_unit))
-            if unit is None or unit[0].get('doc_id') != record.doc_id:
+            # Bounded SAMPLE may retain external metadata parents; actual edges stay closed below.
+            if ((unit is None and descriptor['release_kind'] != 'SAMPLE')
+                    or (unit is not None and unit[0].get('doc_id') != record.doc_id)):
                 _invalid()
         for relation in record.graph_context:
             if any(tuple(relation[s]) not in entities for s in ('from','to')):
@@ -508,9 +512,9 @@ def _readback(reader, records, contract):
 
 
 def verify_native_sources(result: AnswerResult, release: ServingRelease, reader,
-                          as_of: date, webapp_snapshot_id: str | None) -> VerifiedSources:
+                          as_of: date, webapp_snapshot_id: str | None, *, question=None) -> VerifiedSources:
     """Verify all actual citation types; never repair or classify native roles."""
-    from kag.legal_solver import AnswerResult, Citation, _META, _current
+    from kag.legal_solver import AnswerResult, Citation, _META, _current, document_content_question, DOCUMENT_CONTENT_ANSWER
 
     if (type(result) is not AnswerResult or type(result.abstained) is not bool
             or not _text(result.answer) or not result.answer.strip()
@@ -533,6 +537,9 @@ def verify_native_sources(result: AnswerResult, release: ServingRelease, reader,
         contract = _json(release.contract_bytes)
         lookup = {r.evidence_id:r for r in release.records}
         documents = {r.entity_id:r for r in release.records if r.entity_type.endswith('.LegalDocument')}
+        content_question=document_content_question(question)
+        if content_question and not result.abstained and (release.release_kind!='SAMPLE' or result.answer!=DOCUMENT_CONTENT_ANSWER+
+                '\n\n'.join(c.quote for c in result.citations)):_invalid('SOURCE_VALIDATION_FAILED')
         resolved = []
         for citation in result.citations:
             record = lookup.get(citation.evidence_id)
@@ -547,7 +554,12 @@ def verify_native_sources(result: AnswerResult, release: ServingRelease, reader,
             if record.field not in allowed:
                 _invalid('SOURCE_VALIDATION_FAILED')
             item = {'doc_id':record.doc_id,'sign_id':record.sign_id,'metadata':record.metadata}
-            if not _current(item,{key:r.metadata for key,r in documents.items()},as_of):
+            if content_question:
+                from kag.legal_prompts import material_constraints
+                requested=material_constraints(content_question)['documents']
+                actual=material_constraints(documents[record.doc_id].metadata.get('so_hieu') or '')['documents']
+                if not requested<=actual:_invalid('SOURCE_VALIDATION_FAILED')
+            elif not _current(item,{key:r.metadata for key,r in documents.items()},as_of):
                 _invalid('SOURCE_VALIDATION_FAILED')
             resolved.append(record)
         read_records = list(resolved)
@@ -587,3 +599,129 @@ def release_view(release: ServingRelease) -> dict:
         'graph_fingerprint':release.descriptor['graph_fingerprint'],
         'backend_identity_verified':False,'source_identity_verified':False,'verified_at':None,
         'query_ready':False,'production_write':'blocked'}
+
+
+def load_sample_proof(release, expected_sha256, reader_username):
+    """Operator pin permits only bounded SAMPLE vector reads; receipts alone never suffice."""
+    try:
+        if (type(release) is not ServingRelease or release.release_kind != 'SAMPLE'
+                or release.descriptor['release_kind'] != 'SAMPLE'
+                or type(expected_sha256) is not str or not re.fullmatch('[0-9a-f]{64}',expected_sha256)):
+            _invalid()
+        _unchanged(release)
+        raw = _read(release.root,'sample-serving.json')
+        if _sha(raw) != expected_sha256:
+            _invalid()
+        proof = _json(raw)
+        from . import community
+        if proof.get('schema') == community.SCHEMA:
+            if reader_username is not None:
+                _invalid()
+            return community.load_proof(release,proof)
+        _keys(proof, ('schema',*_BINDING,'release_descriptor_sha256','expected_graph_sha256',
+                     'provenance_sha256','reader_username','reader_privileges_verified','counts'))
+        _binding(proof,release.descriptor)
+        if (proof['schema'] != 'h1-sample-serving-1.0'
+                or proof['release_descriptor_sha256'] != release.descriptor_sha256
+                or proof['reader_username'] != reader_username or proof['reader_privileges_verified'] is not True):
+            _invalid()
+        _identity(reader_username)
+        _keys(proof['counts'],('nodes','edges','vectors'))
+        for name,minimum,maximum in (('nodes',1,32),('edges',0,22),('vectors',1,42)):
+            value = proof['counts'][name]
+            if type(value) is not int or not minimum <= value <= maximum:
+                _invalid()
+        for filename,key in (('expected.sqlite3','expected_graph_sha256'),('provenance.jsonl','provenance_sha256')):
+            if _sha(_read(release.root,filename)) != proof[key]:
+                _invalid()
+        if any((release.root/('expected.sqlite3'+suffix)).exists() for suffix in ('-wal','-shm','-journal')):
+            _invalid()
+        return _freeze(proof)
+    except (OSError,ValueError,TypeError,KeyError,AttributeError,UnicodeError):
+        raise ArtifactFailure(VerificationState.UNVERIFIED) from None
+
+
+def verify_sample_backend(release, expected_sha256, reader_username, reader):
+    """Verify actual RBAC and complete vector/graph fingerprint on every operation."""
+    try:
+        from kag.verify import verify_graph
+        proof = load_sample_proof(release,expected_sha256,reader_username)
+        from . import community
+        if proof['schema'] == community.SCHEMA:
+            community.verify_backend(release,proof,reader)
+            load_sample_proof(release,expected_sha256,reader_username)
+            return proof
+        _backend(reader,release)
+        principal, privileges = reader.reader_security()
+        roles = principal.get('roles')
+        if (principal.get('user') != reader_username or type(roles) is not list or 'reader' not in roles
+                or set(roles)-{'reader','PUBLIC'} or principal.get('passwordChangeRequired') is not False
+                or principal.get('suspended') is not False or type(privileges) is not list or not privileges):
+            _invalid()
+        # Unknown or boosted privileges fail closed; Community has no verifiable reader roles.
+        allowed = {'access','match','read','traverse','show_index','execute','execute_function','execute_procedure'}
+        grants = set()
+        for row in privileges:
+            if row.get('access') not in ('GRANTED','DENIED') or type(row.get('action')) is not str:
+                _invalid()
+            if row['access'] == 'GRANTED':
+                if row['action'] not in allowed:
+                    _invalid()
+                grants.add(row['action'])
+        if 'access' not in grants or not ('match' in grants or {'read','traverse'} <= grants):
+            _invalid()
+        _verify_sample_graph(release,proof,reader)
+        _readback(reader,release.records,_json(release.contract_bytes))
+        _backend(reader,release)
+        load_sample_proof(release,expected_sha256,reader_username)
+        return proof
+    except Exception:
+        raise ArtifactFailure(VerificationState.UNVERIFIED) from None
+
+
+def _verify_sample_graph(release,proof,reader):
+    from kag.verify import verify_graph
+    db_path = release.root/'expected.sqlite3'
+    with closing(sqlite3.connect(db_path.as_uri()+'?mode=ro',uri=True)) as db:
+        jobs = dict(db.execute('SELECT key,provenance_hash FROM expected_jobs'))
+    seen = set()
+    for line in _read(release.root,'provenance.jsonl').splitlines():
+        job = _json(line)
+        key = canonical_json([job['node_type'],job['node_id'],job['property']])
+        if key in seen or jobs.get(key) != _sha(canonical_json(job).encode()):
+            _invalid()
+        seen.add(key)
+    if seen != set(jobs):
+        _invalid()
+    result = verify_graph(reader,db_path=db_path,contract=_json(release.contract_bytes),batch_size=32)
+    if (result['fingerprint'] != release.descriptor['graph_fingerprint']
+            or dict(proof['counts']) != {'nodes':result['nodes']['total'],'edges':result['edges']['total'],
+                                        'vectors':result['vectors']['nonempty']}):
+        _invalid()
+
+
+def sample_source_vector(release, reader, evidence_id):
+    """Use the sealed node's exact content vector, with source/provenance and payload guards."""
+    record = next((r for r in release.records if r.evidence_id == evidence_id),None)
+    if record is None:
+        raise ApiFailure('INVALID_REQUEST')
+    kind = record.entity_type.rsplit('.',1)[1]
+    field = dict(TARGETS[kind]).get(record.physical_field)
+    if field is None:
+        raise ApiFailure('INVALID_REQUEST')
+    try:
+        from kag.verify import _node
+        nodes = reader.read_nodes([[record.entity_type,record.entity_id]])
+        if len(nodes) != 1:
+            _invalid()
+        key,payload,_ = _node(nodes[0],_json(release.contract_bytes))
+        with closing(sqlite3.connect((release.root/'expected.sqlite3').as_uri()+'?mode=ro',uri=True)) as db:
+            expected = db.execute('SELECT payload_hash FROM expected_nodes WHERE key=?',(key,)).fetchone()
+            job = db.execute('SELECT source_sha256,status FROM expected_jobs WHERE key=?',
+                (canonical_json([record.entity_type,record.entity_id,record.physical_field]),)).fetchone()
+        if (key != canonical_json([record.entity_type,record.entity_id]) or expected != (payload,)
+                or job != (record.source_sha256,'SUCCESS')):
+            _invalid()
+        return nodes[0]['properties'][field]
+    except Exception:
+        raise ArtifactFailure(VerificationState.UNVERIFIED) from None

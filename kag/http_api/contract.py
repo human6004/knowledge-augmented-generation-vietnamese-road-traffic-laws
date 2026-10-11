@@ -121,7 +121,7 @@ class _Request:
     @classmethod
     def from_dict(cls, value):
         required = ('user_id', 'message', 'context_id', 'schema_contract') if cls is QueryV1Request else (
-            'message', 'schema_contract')
+            'evidence_id' if cls is SampleVectorRequest else 'message', 'schema_contract')
         _object(value, required, () if cls is QueryV1Request else ('top_k', 'expand'))
         return cls(**{**value, 'schema_contract': SchemaIdentity.from_dict(value['schema_contract'])})
 
@@ -183,6 +183,21 @@ class RetrieveRequest(_Request):
                 type(self.schema_contract) is not SchemaIdentity):
             raise ApiFailure('INVALID_REQUEST')
         if type(self.top_k) is not int or not 1 <= self.top_k <= 10 or type(self.expand) is not bool:
+            raise ApiFailure('INVALID_REQUEST')
+
+
+@dataclass(frozen=True)
+class SampleVectorRequest(_Request):
+    """Select a sealed SAMPLE source vector; never accept a question or arbitrary vector."""
+    evidence_id: str
+    schema_contract: SchemaIdentity
+    top_k: int = 10
+    expand: bool = False
+
+    def __post_init__(self):
+        if (type(self.evidence_id) is not str or not re.fullmatch('[0-9a-f]{64}',self.evidence_id)
+                or type(self.schema_contract) is not SchemaIdentity or type(self.top_k) is not int
+                or not 1 <= self.top_k <= 10 or type(self.expand) is not bool):
             raise ApiFailure('INVALID_REQUEST')
 
 

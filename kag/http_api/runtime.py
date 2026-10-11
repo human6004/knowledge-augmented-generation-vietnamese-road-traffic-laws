@@ -11,6 +11,7 @@ from datetime import datetime
 import inspect
 import logging
 import math
+import re
 from pathlib import Path
 import platform
 import sys
@@ -23,9 +24,10 @@ import httpx
 
 from .app import ApiSettings
 from .artifacts import (ArtifactFailure, ServingRelease, VerificationState,
-                        _backend, _json, _readback, _unchanged)
-from .contract import ApiFailure, RetrieveRequest
-from .security import admit_request
+                        _backend, _json, _readback, _unchanged, load_sample_proof,
+                        verify_sample_backend, sample_source_vector)
+from .contract import ApiFailure, RetrieveRequest, SampleVectorRequest
+from .security import admit_request, authorize, request_principal
 
 REQUEST_SECONDS = 25.0
 TRANSPORT_SECONDS = 5.0
@@ -64,6 +66,14 @@ class RuntimeSettings(ApiSettings):
     chat_url: str | None = None
     chat_model: str | None = None
     chat_key: str | None = None
+    sample_proof_sha256: str | None = None
+    broker_url: str | None = None
+    broker_token: str | None = None
+    query_proof_sha256: str | None = None
+    provider_gateway: str | None = None
+    provider_gateway_token: str | None = None
+    attempt_ledger: str | None = None
+    development_policy: dict | None = None
 
 
 class _Budget:
@@ -73,6 +83,7 @@ class _Budget:
         self.deadline, self.clock = deadline, clock
         self.stopped = threading.Event()
         self.finished = False
+        self.transport_seconds = TRANSPORT_SECONDS
 
     def remaining(self):
         if self.finished:
@@ -103,7 +114,7 @@ class _ReaderBoundary:
 
 
 def _timeout(request, budget):
-    remaining = min(TRANSPORT_SECONDS,budget.remaining())
+    remaining = min(getattr(budget,'transport_seconds',TRANSPORT_SECONDS),budget.remaining())
     request.extensions['timeout'] = {'connect':min(2.0,remaining),
         'read':remaining,'write':remaining,'pool':remaining}
 
@@ -168,11 +179,34 @@ def _today():
 
 
 def _require_configuration(settings, *, capability='query'):
-    if type(settings) is not RuntimeSettings or capability not in ('query','retrieve'):
+    if type(settings) is not RuntimeSettings or capability not in ('query','retrieve','retrieve-vector'):
         raise ApiFailure('NOT_READY')
+    if settings.development_policy is not None and not settings.query_proof_sha256:
+        raise ApiFailure('NOT_READY')
+    if settings.query_proof_sha256 and capability in ('query','retrieve'):
+        _require_configuration(settings,capability='retrieve-vector')
+        fields=('embedding_url','embedding_model','embedding_key','chat_url','chat_model','chat_key',
+                'provider_gateway','provider_gateway_token','attempt_ledger','query_proof_sha256')
+        for name in fields+(('webapp_snapshot_id',) if capability=='query' else ()):
+            value=getattr(settings,name)
+            if type(value) is not str or not value.strip() or len(value)>4096:raise ApiFailure('NOT_READY')
+        return
+    if capability == 'retrieve-vector':
+        credentials=('broker_url','broker_token') if settings.broker_url else ('reader_username','reader_password')
+        for name in ('release_id','source_snapshot_id','sample_proof_sha256',*credentials):
+            value = getattr(settings,name)
+            if type(value) is not str or not value.strip() or len(value) > 4096:
+                raise ApiFailure('NOT_READY')
+        if settings.broker_url:
+            if settings.reader_username is not None or settings.reader_password is not None:
+                raise ApiFailure('NOT_READY')
+        elif settings.reader_username.lower() in ('neo4j','root','admin') or settings.reader_password.lower() in ('dummy','abc123'):
+            raise ApiFailure('NOT_READY')
+        return
     query_only = {'webapp_snapshot_id','chat_url','chat_model','chat_key'} if capability=='retrieve' else set()
     for name in RuntimeSettings.__dataclass_fields__:
-        if name != 'secrets' and name not in query_only:
+        if name not in ('secrets','sample_proof_sha256','broker_url','broker_token','query_proof_sha256',
+                        'provider_gateway','provider_gateway_token','attempt_ledger','development_policy') and name not in query_only:
             value = getattr(settings,name)
             if type(value) is not str or not value.strip() or len(value) > 4096:
                 raise ApiFailure('NOT_READY')
@@ -185,7 +219,16 @@ def _require_configuration(settings, *, capability='query'):
             raise ApiFailure('NOT_READY')
 
 
-def _require_operational_proof(settings, release):
+def _require_operational_proof(settings, release, *, capability='query'):
+    if capability == 'retrieve-vector':
+        return load_sample_proof(release,settings.sample_proof_sha256,settings.reader_username)
+    if settings.query_proof_sha256:
+        from .sample_query import load_proof
+        from .provider_budget import BudgetError
+        try:
+            return load_proof(settings,release,capability=capability)
+        except BudgetError:
+            raise ApiFailure('NOT_READY') from None
     # shortcut: no independent operational attestation available; authorize it separately before live serving.
     raise ArtifactFailure(VerificationState.UNVERIFIED)
 
@@ -199,7 +242,7 @@ def _identity(request, settings, release, parsed, as_of=None, *, capability='que
         raise RuntimeFailure('RELEASE_MISMATCH')
     if release.descriptor['source_snapshot_id'] != settings.source_snapshot_id:
         raise RuntimeFailure('SOURCE_SNAPSHOT_MISMATCH')
-    if capability=='retrieve':
+    if capability in ('retrieve','retrieve-vector'):
         if request.headers.getlist('x-kag-release-id') != [settings.release_id]:
             raise RuntimeFailure('RELEASE_MISMATCH')
         try:
@@ -262,6 +305,14 @@ class RequestRuntime:
 
 
 def _new_reader(settings, release, budget):
+    if settings.broker_url:
+        from .community import BrokerRetrievalClient
+        proof=load_sample_proof(release,settings.sample_proof_sha256,None)
+        if proof['broker_url']!=settings.broker_url or settings.reader_username or settings.reader_password:
+            raise ApiFailure('NOT_READY')
+        reader=BrokerRetrievalClient(release,proof,settings.broker_token,timeout=TRANSPORT_SECONDS)
+        reader._opener=_ReaderBoundary(reader._opener,budget)
+        return reader
     from kag.retriever.neo4j import Neo4jRetrievalClient
     reader = Neo4jRetrievalClient(release.backend['reader_endpoint'],release.descriptor['database'],
         username=settings.reader_username,password=settings.reader_password,namespace=release.schema_contract.namespace,
@@ -288,18 +339,92 @@ def _sdk_instance(cls, runtime, **kwargs):
     return model
 
 
+def _embedding_response_metadata(response):
+    import base64,json
+    response.read()
+    try:
+        body=response.json()
+        rows=body.get('data') if type(body) is dict else None
+        value=rows[0].get('embedding') if type(rows) is list and rows and type(rows[0]) is dict else None
+        dimension=len(value) if type(value) is list else len(base64.b64decode(value,validate=True))//4 if type(value) is str else None
+    except (ValueError,TypeError):
+        value=None;dimension=None
+    print('SAMPLE_EMBEDDING '+json.dumps(dict(status=response.status_code,
+        embedding_type=type(value).__name__,dimension=dimension)),flush=True)
+
+
 def _new_embedding(settings, runtime):
     from kag.common.vectorize_model.openai_model import OpenAIVectorizeModel
     model = _sdk_instance(OpenAIVectorizeModel,runtime,model=settings.embedding_model,
         api_key=settings.embedding_key,base_url=settings.embedding_url,
         vector_dimensions=3072,timeout=TRANSPORT_SECONDS)
+    if settings.query_proof_sha256:
+        from .sample_query import configure_model
+        configure_model(settings,model,'embedding')
+        _guard_sdk(model,runtime.budget)
+        model.client._client.event_hooks['response'].append(_embedding_response_metadata)
     return model.vectorize
 
 
 def _new_llm(settings, runtime):
     from kag.common.llm.openai_client import OpenAIClient
-    return _sdk_instance(OpenAIClient,runtime,name='h1-'+uuid4().hex,model=settings.chat_model,
+    model = _sdk_instance(OpenAIClient,runtime,name='h1-'+uuid4().hex,model=settings.chat_model,
         api_key=settings.chat_key,base_url=settings.chat_url,enable_check=False,timeout=TRANSPORT_SECONDS)
+    if settings.query_proof_sha256:
+        from .sample_query import configure_model, provider_budget, response_model_matches
+        configure_model(settings,model,'chat')
+        _guard_sdk(model,runtime.budget)
+        responses=[]
+        def response_metadata(response):
+            import json
+            response.read()
+            content=None
+            try:
+                body=response.json();observed_model=body.get('model')
+                content=body.get('choices',[{}])[0].get('message',{}).get('content')
+            except (ValueError,AttributeError,IndexError,TypeError):observed_model=None
+            if type(content) is str:
+                for secret in (settings.chat_key,settings.embedding_key,settings.provider_gateway_token,
+                               settings.broker_token,*settings.secrets.query_tokens,*settings.secrets.inspect_tokens):
+                    if secret:content=content.replace(secret,'[REDACTED]')
+                content=content[:131072]
+            else:content=None
+            accepted=response_model_matches(settings,observed_model)
+            safe_model=observed_model if observed_model in (settings.chat_model,'gemini-3.8-flash-n') else 'UNVERIFIED'
+            responses.append({'status':response.status_code,'model_matches_config':observed_model==settings.chat_model,
+                'observed_model':safe_model,'route_version_matches_policy':accepted,
+                'content':content,'attempts':provider_budget(settings).counts()})
+            Path('/tmp/sample-provider-responses.json').write_text(json.dumps(responses,ensure_ascii=False),encoding='utf-8')
+            print('SAMPLE_PROVIDER '+json.dumps({'status':response.status_code,
+                'model_matches_config':observed_model==settings.chat_model,'observed_model':safe_model,
+                'route_version_matches_policy':accepted,
+                'attempts':provider_budget(settings).counts()}),flush=True)
+            if response.is_success and not accepted:
+                from .provider_budget import BudgetError
+                raise BudgetError('PROVIDER_RESPONSE_MODEL_MISMATCH')
+        model.client._client.event_hooks['response'].append(response_metadata)
+        async def async_response_metadata(response):
+            await response.aread()
+            response_metadata(response)
+        model.aclient._client.event_hooks['response'].append(async_response_metadata)
+        original=model.invoke
+        def observed(variables,prompt_op,**kwargs):
+            import json
+            name=type(prompt_op).__name__
+            print('SAMPLE_STAGE '+json.dumps({'stage':name,'state':'start','attempts':provider_budget(settings).counts()}),flush=True)
+            try:
+                result=original(variables,prompt_op,**kwargs)
+            except Exception as exc:
+                print('SAMPLE_STAGE '+json.dumps({'stage':name,'state':'error','type':type(exc).__name__,
+                    'attempts':provider_budget(settings).counts()}),flush=True)
+                raise
+            print('SAMPLE_STAGE '+json.dumps({'stage':name,'state':'parsed','result_type':type(result).__name__,
+                'executors':[getattr(task,'executor',None) if getattr(task,'executor',None) in ('Retriever','Deduce','Finish')
+                             else 'UNVERIFIED' for task in result] if type(result) is list else None,
+                'attempts':provider_budget(settings).counts()}),flush=True)
+            return result
+        model.invoke=observed
+    return model
 
 
 def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float) -> RequestRuntime:
@@ -314,7 +439,18 @@ def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float
     runtime.budget.remaining()
     _unchanged(release)
     from kag.retriever.retriever import Retriever
-    embed = _new_embedding(settings,runtime)
+    if settings.query_proof_sha256:
+        from .sample_query import load_proof,cached_vector
+        _,cache,_=load_proof(settings,release,capability=runtime.capability)
+        fallback=None
+        def embed(question):
+            nonlocal fallback
+            vector=cached_vector(cache,question)
+            if vector is not None:return vector
+            if fallback is None:fallback=_new_embedding(settings,runtime)
+            return fallback(question)
+    else:
+        embed = _new_embedding(settings,runtime)
     runtime.budget.remaining()
     if runtime.capability=='query':
         from kag.legal_solver import build_pipeline
@@ -323,6 +459,9 @@ def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float
     runtime.retriever = Retriever(runtime.reader,embed,_json(release.contract_bytes))
     if runtime.capability=='query':
         runtime.pipeline = build_pipeline(runtime.retriever,llm)
+        if settings.query_proof_sha256:
+            from .provider_budget import disable_instance_retries
+            disable_instance_retries(runtime.pipeline,llm)
     return runtime
 
 
@@ -333,7 +472,12 @@ async def run_query(runtime: RequestRuntime, question: str, as_of):
     from kag.legal_solver import aanswer
     try:
         result = await aanswer(question,pipeline=runtime.pipeline,as_of=as_of)
-    except Exception:
+    except Exception as exc:
+        import json,traceback
+        frames=[dict(file=frame.filename.removeprefix('/workspace/'),line=frame.lineno,function=frame.name)
+                for frame in traceback.extract_tb(exc.__traceback__)
+                if frame.filename.startswith(('/workspace/kag/','/workspace/vendor/KAG/kag/'))]
+        print('SAMPLE_QUERY_FAILURE '+json.dumps(dict(error_type=type(exc).__name__,frames=frames[-12:])),flush=True)
         runtime.budget.remaining()
         raise RuntimeFailure('PROVIDER_ERROR') from None
     runtime.budget.remaining()
@@ -369,6 +513,29 @@ class RuntimeSupervisor:
 
     def readiness(self):
         return {'runtime':'blocked','sources':'unknown','admission':'blocked' if self.busy or self.closed else 'pass'}
+
+    async def sample_ready(self, request, settings, release, *, capability):
+        deadline=time.monotonic()+REQUEST_SECONDS
+        request.state.h1_deadline=deadline
+        _require_configuration(settings,capability=capability)
+        async def operation():
+            reader=None
+            try:
+                proof,_,_=await asyncio.to_thread(_require_operational_proof,settings,release,capability=capability)
+                initialize_runtime()
+                reader=await asyncio.to_thread(_new_reader,settings,release,self._budget)
+                await asyncio.to_thread(verify_sample_backend,release,settings.sample_proof_sha256,None,reader)
+                from .sample_query import verify_gateway
+                await asyncio.to_thread(verify_gateway,settings,proof)
+                _unchanged(release)
+                return {'status':'ready','capability':'query-v1' if capability=='query' else 'retrieve',
+                    'checks':dict(auth='pass',runtime='pass',sources='pass',admission='pass'),
+                    'release_kind':'SAMPLE','release_id':release.release_id,'provider_transport':'metadata_verified',
+                    'production_write':'blocked'}
+            finally:
+                if reader is not None:
+                    (reader if callable(getattr(reader,'close',None)) else reader._opener).close()
+        return await self.supervise(operation,deadline)
 
     def _done(self, task):
         if not task.cancelled():
@@ -410,7 +577,7 @@ class RuntimeSupervisor:
 
     async def query(self, request, settings, release, *, finalize=None, factory=None):
         # Entry precedes body consumption, so upload and every subsequent gate share 25s.
-        deadline = time.monotonic()+REQUEST_SECONDS
+        deadline = time.monotonic()+(180.0 if settings.query_proof_sha256 else REQUEST_SECONDS)
         received_date = _today()
         request.state.h1_deadline = deadline
         parsed = await admit_request(request,'query')
@@ -430,6 +597,7 @@ class RuntimeSupervisor:
             try:
                 as_of = await asyncio.to_thread(_identity,request,settings,release,parsed,received_date)
                 runtime.as_of = as_of
+                if settings.query_proof_sha256:runtime.budget.transport_seconds=60.0
                 runtime.budget.remaining()
                 _require_operational_proof(settings,release)
                 initialize_runtime()
@@ -439,6 +607,11 @@ class RuntimeSupervisor:
                 runtime.reader = await asyncio.to_thread(_new_reader,settings,release,runtime.budget)
                 def preflight():
                     runtime.budget.remaining()
+                    if settings.query_proof_sha256:
+                        verify_sample_backend(release,settings.sample_proof_sha256,None,runtime.reader)
+                        from .sample_query import load_proof,verify_gateway
+                        proof,_,_=load_proof(settings,release)
+                        verify_gateway(settings,proof)
                     _backend(runtime.reader,release)
                     _readback(runtime.reader,release.records,_json(release.contract_bytes))
                     _backend(runtime.reader,release)
@@ -452,6 +625,11 @@ class RuntimeSupervisor:
                 if _today() != as_of:
                     raise ApiFailure('DATE_BOUNDARY_CHANGED')
                 result = await run_query(runtime,parsed.message,as_of)
+                if settings.query_proof_sha256:
+                    await asyncio.to_thread(verify_sample_backend,release,settings.sample_proof_sha256,None,runtime.reader)
+                    from dataclasses import asdict
+                    import json
+                    Path('/tmp/sample-answer.json').write_text(json.dumps(asdict(result),ensure_ascii=False),encoding='utf-8')
                 return result if finalize is None else await finalize(runtime,result,parsed)
             finally:
                 if token is not None:
@@ -489,11 +667,13 @@ class RuntimeSupervisor:
             try:
                 await asyncio.to_thread(_identity,request,settings,release,parsed,capability='retrieve')
                 runtime.budget.remaining()
-                _require_operational_proof(settings,release)
+                _require_operational_proof(settings,release,capability='retrieve')
                 initialize_runtime()
                 runtime.reader = await asyncio.to_thread(_new_reader,settings,release,runtime.budget)
                 def integrity():
                     runtime.budget.remaining()
+                    if settings.query_proof_sha256:
+                        verify_sample_backend(release,settings.sample_proof_sha256,None,runtime.reader)
                     _backend(runtime.reader,release)
                     _readback(runtime.reader,release.records,_json(release.contract_bytes))
                     _backend(runtime.reader,release)
@@ -514,6 +694,55 @@ class RuntimeSupervisor:
                     self.closed = True
                     raise ApiFailure('INTERNAL_ERROR') from None
 
+        return await self.supervise(operation,deadline)
+
+    async def sample_vector(self, request, settings, release, *, ready=False, finalize=None):
+        deadline = time.monotonic()+REQUEST_SECONDS
+        request.state.h1_deadline = deadline
+        if ready:
+            authorize(request_principal(request),'inspect',None)
+        parsed = None if ready else await admit_request(request,'inspect',SampleVectorRequest)
+        if not ready and request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        _require_configuration(settings,capability='retrieve-vector')
+        if settings.secrets != request.app.state.http_settings.secrets:
+            raise ApiFailure('NOT_READY')
+
+        async def operation():
+            runtime = RequestRuntime(None,None,None,deadline,self._budget,'',None,capability='retrieve-vector')
+            try:
+                if ready:
+                    if (type(release) is not ServingRelease or release.release_id != settings.release_id
+                            or release.descriptor['source_snapshot_id'] != settings.source_snapshot_id
+                            or request.headers.getlist('x-kag-release-id') != [settings.release_id]):
+                        raise ApiFailure('NOT_READY')
+                else:
+                    _identity(request,settings,release,parsed,capability='retrieve-vector')
+                _require_operational_proof(settings,release,capability='retrieve-vector')
+                initialize_runtime()
+                runtime.reader = await asyncio.to_thread(_new_reader,settings,release,runtime.budget)
+                def integrity():
+                    runtime.budget.response_remaining()
+                    verify_sample_backend(release,settings.sample_proof_sha256,settings.reader_username,runtime.reader)
+                    runtime.budget.response_remaining()
+                await asyncio.to_thread(integrity)
+                if ready:
+                    result = {'status':'ready','capability':'retrieve-vector','release_kind':'SAMPLE',
+                              'release_id':release.release_id,'provider_transport':'not_probed','production_write':'blocked'}
+                else:
+                    from kag.retriever.retriever import Retriever
+                    vector = await asyncio.to_thread(sample_source_vector,release,runtime.reader,parsed.evidence_id)
+                    runtime.retriever = Retriever(runtime.reader,None,_json(release.contract_bytes))
+                    result = await asyncio.to_thread(runtime.retriever.retrieve_vector,vector,
+                                                    top_k=parsed.top_k,expand=parsed.expand)
+                    await asyncio.to_thread(integrity)
+                return result if finalize is None else await finalize(runtime,result,parsed)
+            finally:
+                try:
+                    await runtime.close()
+                except Exception:
+                    self.closed = True
+                    raise ApiFailure('INTERNAL_ERROR') from None
         return await self.supervise(operation,deadline)
 
     async def close(self):
