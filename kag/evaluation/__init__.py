@@ -4,7 +4,9 @@ from .dataset import load_dataset, validate_dataset, dataset_from_records, freez
 from .evaluate import evaluate_g1, evaluate_g2, aevaluate_g2
 from .report import summarize, write_report
 from .legacy import import_legacy
+from .generation import generate_questions, validate_generated
 
 __all__ = ['EvaluationRecord','EvaluationProtocol','EvaluationRun','MetricValue','ValidationError',
            'load_dataset','validate_dataset','dataset_from_records','freeze_dataset',
-           'evaluate_g1','evaluate_g2','aevaluate_g2','summarize','write_report','import_legacy']
+           'evaluate_g1','evaluate_g2','aevaluate_g2','summarize','write_report','import_legacy',
+           'generate_questions','validate_generated']

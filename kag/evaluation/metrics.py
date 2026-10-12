@@ -93,13 +93,38 @@ def citation_metrics(record, citations):
     return result
 
 
-def answer_metrics(record, answer_result, judge=None):
+def source_span_metrics(record, evidence, ks):
+    """Legacy recall/precision/rank formulas, opt-in exact public-source span support."""
+    gold = unique([g.to_dict() for g in record.citation_gold if g.field is not None])
+    required = [g for g in gold if g['required']]
+    target = required or gold
+    def supports(item, g):
+        return identity_match(item,g) and g['quote'] in item['source_texts'].get(g['field'],'')
+    def recall(targets, items):
+        return fraction(sum(any(supports(item,g) for item in items) for g in targets),len(targets),applicable=bool(targets))
+    result = {'evidence_recall':recall(gold,evidence), 'evidence_recall_required':recall(required,evidence),
+              'context_precision':fraction(sum(any(supports(item,g) for g in gold) for item in evidence),len(evidence),
+                                            empty='NO_CONTEXTS',applicable=bool(gold))}
+    rank = next((i for i,item in enumerate(evidence,1) if any(supports(item,g) for g in target)),None)
+    result['returned_top_k_MRR'] = (MetricValue(1/rank if rank else 0,'OK',1 if rank else 0,rank or 1)
+                                   if target else unavailable('NO_GOLD','NOT_APPLICABLE'))
+    for k in ks:
+        result[f'Hit@{k}'] = fraction(int(rank is not None and rank <= k),1,applicable=bool(target))
+        result[f'Recall@{k}'] = recall(gold,evidence[:k])
+    return result
+
+
+def answer_metrics(record, answer_result, judge=None, *, metric_policy_version='1.0'):
     actual, expected = answer_result['abstained'], record.expected_abstain
     result = {'abstention_accuracy':fraction(int(actual == expected),1),
               'correct_abstention':fraction(int(actual),1,applicable=expected),
               'false_answer_rate':fraction(int(not actual),1,applicable=expected),
               'wrong_abstention_rate':fraction(int(actual),1,applicable=not expected),
               'grounding':unavailable('FULL_TRACE_NOT_EXPOSED')}
+    if metric_policy_version == '1.1' and not actual and not answer_result['answer'].strip():
+        for name in ('abstention_accuracy','correct_abstention','false_answer_rate','wrong_abstention_rate'):
+            if result[name].status != 'NOT_APPLICABLE':
+                result[name] = unavailable('UNANSWERED')
     reference = record.answer_reference
     markers = reference.markers if reference else ()
     def presentation(value):

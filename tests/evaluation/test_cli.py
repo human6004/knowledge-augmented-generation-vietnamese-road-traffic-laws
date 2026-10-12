@@ -9,6 +9,20 @@ from test_legacy import legacy
 
 
 class CLITests(unittest.TestCase):
+    def test_source_first_generation_cli_validation_and_no_overwrite(self):
+        from test_generation import sources,config,draft
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for name,value in (('catalog',sources()),('config',config()),('drafts',[draft()])):
+                (root/(name+'.json')).write_bytes(module('dataset').canonical_line(value))
+            args=('generate','--catalog',root/'catalog.json','--drafts',root/'drafts.json','--config',root/'config.json','--output-dir',root/'out')
+            result=self.cli(*args);self.assertEqual(result.returncode,0,result.stderr.decode())
+            ds=root/'out/eval_questions.jsonl';manifest=root/'out/generation-manifest.json'
+            result=self.cli('validate-generated',ds,'--catalog',root/'catalog.json','--generation-manifest',manifest)
+            self.assertEqual(result.returncode,0,result.stderr.decode())
+            before=ds.read_bytes();self.assertEqual(self.cli(*args).returncode,1);self.assertEqual(ds.read_bytes(),before)
+            self.assertEqual(self.cli('freeze',ds,'--output-root',root/'f','--dataset-version','frozen').returncode,2)
+
     def cli(self,*args):
         script = """import runpy,sys
 def deny(event,args):

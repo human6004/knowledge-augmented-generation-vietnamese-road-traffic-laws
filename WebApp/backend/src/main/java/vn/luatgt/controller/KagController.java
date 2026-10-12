@@ -10,6 +10,10 @@ public class KagController {
     private final KagSchema schema; private final LegalUnitService units; private final InfrastructureService infrastructure;
     public KagController(KagSchema schema,LegalUnitService units,InfrastructureService infrastructure) { this.schema=schema; this.units=units; this.infrastructure=infrastructure; }
     @GetMapping("/admin/kag/status") Map<String,Object> status() { return infrastructure.kagStatus(); }
+    @GetMapping("/admin/kag/sample") JsonNode sample(@RequestParam Map<String,String> parameters) {
+        if(!parameters.isEmpty())throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Inspection không nhận truy vấn tùy ý");
+        return infrastructure.sampleInspection();
+    }
     @GetMapping("/admin/kag/pipeline") JsonNode pipeline() { return infrastructure.pipelineStatus(); }
     @GetMapping("/admin/kag/benchmark/datasets") JsonNode datasets() { return infrastructure.benchmarkDatasets(); }
     @PostMapping("/admin/kag/retrieve") JsonNode retrieve(@Valid @RequestBody KagRetrieveRequest request) { return infrastructure.retrieve(request); }

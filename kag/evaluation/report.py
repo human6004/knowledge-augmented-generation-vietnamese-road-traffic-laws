@@ -100,13 +100,23 @@ def summarize(run):
     attempted = [row for row in run.rows if row.status in ('SUCCESS','ERROR')]
     success = [row for row in run.rows if row.status == 'SUCCESS']
     failed = sum(row.status == 'ERROR' for row in run.rows)
-    return dict(requested_count=len(run.context.dataset.records),completed_count=len(run.rows),attempted_count=len(attempted),
+    result = dict(requested_count=len(run.context.dataset.records),completed_count=len(run.rows),attempted_count=len(attempted),
                 failed_count=failed,ineligible_count=sum(row.status == 'INELIGIBLE' for row in run.rows),
                 scored_count=sum(row.status == 'SUCCESS' and any(v.status == 'OK' for v in row.metrics.values()) for row in run.rows),
                 failure_rate=dict(value=failed/len(attempted) if attempted else None,numerator=failed,denominator=len(attempted),status='OK' if attempted else 'UNAVAILABLE'),
                 overall=aggregate(run.rows),by_category={cat:aggregate([row for row in run.rows if row.category == cat]) for cat in CATEGORIES},
                 by_source={source:aggregate([row for row in run.rows if (row.source_group or '') == source]) for source in sorted({row.source_group or '' for row in run.rows})},
                 latency_ms=dict(successful=latency(success),all_attempted=latency(attempted)))
+    if getattr(getattr(run.context,'protocol',None),'metric_policy_version',None) == '1.1':
+        result['macro'] = {}
+        for name in names:
+            category_means = [group[name]['value'] for group in result['by_category'].values() if group[name]['value'] is not None]
+            result['macro'][name] = dict(value=statistics.mean(category_means) if category_means else None,
+                                        scored_category_count=len(category_means))
+        result['execution_outcomes'] = dict(answered=sum('ANSWERED' in row.reasons for row in run.rows),
+            abstained=sum('ABSTAINED' in row.reasons for row in run.rows),
+            unanswered=sum('UNANSWERED' in row.reasons for row in run.rows),error=failed)
+    return result
 
 
 def write_report(run, output_dir):
@@ -138,6 +148,10 @@ def write_report(run, output_dir):
             'Paper eligibility: runtime/release identity not attested by this offline adapter.','']
     for name,item in summary['overall'].items():
         body.append(f"{name}: {item['value']}; scored_count={item['scored_count']}; status_counts={item['status_counts']}")
+    if context.protocol.metric_policy_version == '1.1':
+        body.extend(['','Metric policy 1.1: source_span metrics use exact public identity and source-text containment; mixed returned-list ranks.',
+                     'Macro: mean of available category means. No composite score or automatic quality PASS threshold.',
+                     f"Native answer outcomes: {summary['execution_outcomes']}"])
     artifacts = {'results.jsonl':b''.join(canonical_line(row) for row in rows),
                  'metrics.json':canonical_line(metrics),'report.md':('\n'.join(body)+'\n').encode('utf-8')}
     for name in artifacts:

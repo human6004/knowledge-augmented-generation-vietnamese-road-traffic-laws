@@ -363,6 +363,22 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
             raise ApiFailure('RELEASE_UNAVAILABLE') from None
         return artifacts.release_view(release)
 
+    if enable_sample_routes:
+        @app.get('/v1/operations/sample')
+        async def sample_inspection(request: Request):
+            authorize(request_principal(request),'inspect',None)
+            if request.query_params:raise ApiFailure('INVALID_REQUEST')
+            release,settings=app.state.serving_release,app.state.runtime_settings
+            supervisor=getattr(app.state,'runtime_supervisor',None)
+            if type(release) is not artifacts.ServingRelease or settings is None or supervisor is None:
+                raise ApiFailure('NOT_READY')
+            value=await supervisor.sample_inspect(request,settings,release)
+            sample_guard(request,release,settings)
+            request.state.h1_authority_guard=lambda:sample_guard(request,release,settings)
+            raw=artifacts.canonical_json(value).encode('utf-8')
+            if len(raw)>245760:raise ApiFailure('RESULT_LIMIT_EXCEEDED')
+            return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
+
     async def verified_query(request: Request, *, stream=False):
         from . import runtime as core
         release, settings = app.state.serving_release, app.state.runtime_settings

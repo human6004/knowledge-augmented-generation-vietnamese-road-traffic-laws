@@ -38,6 +38,7 @@ class KagInspectionTest {
         volatile int retrieveStatus=200,delay; volatile JsonNode received; volatile String retrieveBody,media="application/json";
         volatile boolean wrongScope,healthLie,releaseAvailable;
         volatile String readyBody;
+        volatile String sampleBody;
         volatile String pipelineBody="{\"contract_version\":\"h1-inspect-v1.0\",\"phase\":\"idle\",\"active_requests\":0,\"draining\":false,\"closed\":false,\"progress\":null,\"execution_allowed\":false,\"operational_proof\":\"DENY\",\"production_write\":\"BLOCKED\",\"provider_egress\":\"DENY\"}";
         volatile String benchmarkBody="{\"contract_version\":\"h1-inspect-v1.0\",\"state\":\"NOT_CONFIGURED\",\"datasets\":[],\"execution_allowed\":false,\"execution_blockers\":[\"OPERATIONAL_PROOF_REQUIRED\",\"BENCHMARK_EXECUTION_NOT_AUTHORIZED\"],\"metrics\":null}";
         Fixture() throws Exception {
@@ -53,6 +54,7 @@ class KagInspectionTest {
                 } else if(path.equals("/v1/graph/release")) { status=releaseAvailable?200:503; body=releaseAvailable?releaseView().toString():failure("RELEASE_UNAVAILABLE"); }
                 else if(path.equals("/v1/pipeline/status")) body=pipelineBody;
                 else if(path.equals("/v1/benchmark/datasets")) body=benchmarkBody;
+                else if(path.equals("/v1/operations/sample")) body=sampleBody==null?sampleView().toString():sampleBody;
                 else if(path.contains("mode=ready")) {
                     status=wrongScope?403:healthLie||readyBody!=null?200:503;
                     String capability=path.endsWith("retrieve")?"retrieve":"query-v1";
@@ -88,11 +90,84 @@ class KagInspectionTest {
             .put("backend_identity_verified",false).put("source_identity_verified",false).putNull("verified_at").put("query_ready",false).put("production_write","blocked");
         v.set("schema_contract",json.valueToTree(schema.identity()));return v;
     }
+    com.fasterxml.jackson.databind.node.ObjectNode sampleView() {
+        var v=json.createObjectNode().put("contract_version","h1-sample-inspection-1.0").put("release_id",release).put("release_kind","SAMPLE")
+            .put("source_snapshot_id","synthetic-source").put("source_catalog_sha256","a".repeat(64)).put("graph_fingerprint","c".repeat(64))
+            .put("verified_at","2026-10-11T00:00:00+00:00").put("execution_allowed",false).put("production_write","BLOCKED");
+        v.set("schema_contract",json.valueToTree(schema.identity()));
+        v.putObject("backend").put("database","vietroadtraffic").put("namespace","VietRoadTraffic").put("database_id","fixture-db").put("server_id","fixture-server").put("read_only",true).put("verified",true);
+        v.putObject("counts").put("nodes",1).put("edges",0).put("vectors",1);
+        var n=v.putArray("nodes").addObject().put("entity_type","VietRoadTraffic.LegalDocument").put("entity_id","test-doc");
+        n.putObject("properties").put("id","test-doc").put("name","test-doc").put("title","TEST ONLY").put("so_hieu","fixture");
+        n.putArray("sources").addObject().put("evidence_id","d".repeat(64)).put("field","title").put("source_sha256","e".repeat(64));
+        v.putArray("edges");v.putObject("sample_receipt").put("stage","GRAPH_VERIFIED").put("sealed_at","2026-10-11T00:00:00Z").put("receipt_sha256","f".repeat(64)).putNull("build_run_id").putNull("progress");
+        v.putObject("providers").put("state","NOT_CONFIGURED").putNull("attempts").putNull("receipt_window").putNull("configured_chat_model").putNull("configured_embedding_model")
+            .putNull("policy_response_version").put("exact_backend_identity_verified",false).putNull("upstream_attempts").putNull("proxy_retries");
+        v.putObject("datasets").put("contract_version","h1-inspect-v1.0").put("state","NOT_CONFIGURED").putArray("datasets");
+        var d=(com.fasterxml.jackson.databind.node.ObjectNode)v.path("datasets");d.put("execution_allowed",false).putNull("metrics");d.putArray("execution_blockers").add("OPERATIONAL_PROOF_REQUIRED").add("BENCHMARK_EXECUTION_NOT_AUTHORIZED");
+        return v;
+    }
+    @Test void verifiedSampleInspectionUsesInspectScopeAndPreservesActualGraph() throws Exception {
+        try(var f=new Fixture()) {
+            var value=client(f,Map.of()).sampleInspection();
+            assertEquals("test-doc",value.at("/nodes/0/entity_id").asText());assertEquals(1,value.at("/counts/nodes").asInt());
+            assertTrue(value.at("/backend/read_only").asBoolean());assertFalse(value.path("execution_allowed").asBoolean());
+            assertEquals("Bearer "+inspect,f.tokens.get("/v1/operations/sample"));
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"graph","write","counts","property","identity","secret","model"})
+    void sampleInspectionRejectsUnverifiedOrSensitivePayload(String change) throws Exception {
+        try(var f=new Fixture()) {
+            var body=sampleView();
+            switch(change) {
+                case "graph" -> ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("backend")).put("verified",false);
+                case "write" -> body.put("execution_allowed",true);
+                case "counts" -> ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("counts")).put("nodes",32);
+                case "property" -> ((com.fasterxml.jackson.databind.node.ObjectNode)body.at("/nodes/0/properties")).put("password","PRIVATE");
+                case "identity" -> body.put("release_id","foreign");
+                case "secret" -> ((com.fasterxml.jackson.databind.node.ObjectNode)body.at("/nodes/0/properties")).put("title",query);
+                case "model" -> ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("providers")).put("exact_backend_identity_verified",true);
+            }
+            f.sampleBody=body.toString();var error=assertThrows(ResponseStatusException.class,()->client(f,Map.of()).sampleInspection());
+            assertEquals(503,error.getStatusCode().value());assertFalse(error.toString().contains("PRIVATE"));
+        }
+    }
     KagClient client(Fixture f,Map<String,Object> override) {
         var props=new HashMap<String,Object>(Map.of("app.kag-url",f.url(),"app.kag-token-file",queryFile.toString(),"app.kag-inspect-token-file",inspectFile.toString(),"app.kag-release-id",release)); props.putAll(override);
         try(var context=new AnnotationConfigApplicationContext()) {
             context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test-only",props)); context.registerBean(ObjectMapper.class,()->json);context.registerBean(KagSchema.class,()->schema);
             context.register(KagClient.class);context.refresh();return context.getBean(KagClient.class);
+        }
+    }
+    @Test void provisionalSmokeDoesNotAuthorizeOfficialBenchmarkOrHumanReview() throws Exception {
+        try(var f=new Fixture()) {
+            var body=sampleView();((com.fasterxml.jackson.databind.node.ObjectNode)body.path("datasets")).put("state","AVAILABLE");
+            var row=((com.fasterxml.jackson.databind.node.ArrayNode)body.at("/datasets/datasets")).addObject();
+            row.put("id","sample/eval_questions.jsonl").put("dataset_status","PROVISIONAL").put("dataset_eligibility","BLOCKED").put("reason","PROVISIONAL_DATASET")
+                .put("dataset_hash","a".repeat(64)).put("record_count",1).put("official_benchmark",false).put("eligible_count",0).put("ineligible_count",1).put("invalid_count",0).put("gold_count",1).put("eligibility_scope","G1_RETRIEVAL_GOLD_COVERAGE");
+            var missing=row.putObject("missing_gold");for(String kind:List.of("document","unit","sign"))missing.putArray(kind);
+            var smoke=row.putObject("smoke").put("state","NOT_RUN").put("review_status","PROVISIONAL").put("g1_eligible_count",1).put("graph_fingerprint",body.path("graph_fingerprint").asText()).put("official_benchmark",false);
+            smoke.putObject("runs").putNull("G1").putNull("G2");f.sampleBody=body.toString();
+            assertEquals(1,client(f,Map.of()).sampleInspection().at("/datasets/datasets/0/smoke/g1_eligible_count").asInt());
+            var metadata=row.putObject("metadata").put("dataset_version","fixture-v2").putNull("generation_method");
+            metadata.putObject("category_counts").put("definition",1);f.sampleBody=body.toString();
+            assertEquals("fixture-v2",client(f,Map.of()).sampleInspection().at("/datasets/datasets/0/metadata/dataset_version").asText());
+            ((com.fasterxml.jackson.databind.node.ObjectNode)metadata.path("category_counts")).put("definition",2);f.sampleBody=body.toString();
+            assertThrows(ResponseStatusException.class,()->client(f,Map.of()).sampleInspection());
+            ((com.fasterxml.jackson.databind.node.ObjectNode)metadata.path("category_counts")).put("definition",1);
+            smoke.put("review_status","HUMAN_REVIEWED");f.sampleBody=body.toString();assertThrows(ResponseStatusException.class,()->client(f,Map.of()).sampleInspection());
+            smoke.put("review_status","PROVISIONAL").put("graph_fingerprint","0".repeat(64));f.sampleBody=body.toString();assertThrows(ResponseStatusException.class,()->client(f,Map.of()).sampleInspection());
+            row.put("dataset_status","FROZEN").put("dataset_eligibility","ELIGIBLE").putNull("reason").put("record_count",5).put("eligible_count",5).put("ineligible_count",0).put("gold_count",5);
+            ((com.fasterxml.jackson.databind.node.ObjectNode)metadata.path("category_counts")).put("definition",5);
+            smoke.put("review_status","FROZEN").put("state","AVAILABLE").put("g1_eligible_count",5).put("graph_fingerprint",body.path("graph_fingerprint").asText());
+            var run=((com.fasterxml.jackson.databind.node.ObjectNode)smoke.path("runs")).putObject("G1").put("status","COMPLETE").put("started_at","2026-10-12T00:00:00Z").put("finished_at","2026-10-12T00:01:00Z")
+                .put("requested_count",5).put("attempted_count",5).put("failed_count",0).put("ineligible_count",0);
+            run.putObject("metrics");var latency=run.putObject("latency_ms");
+            for(String scope:List.of("successful","all_attempted"))latency.putObject(scope).put("count",5).put("min",1).put("mean",1).put("median",1).put("p95",1).put("max",1);
+            var config=run.putObject("configuration").put("protocol_version","1.0").put("eval_version","1.0").put("metric_policy_version","1.1").put("top_k",1).put("expand",false).put("rank_semantics","channel_projected_returned_top_k").putNull("identity_catalog_hash").put("release_id",release);
+            config.putArray("ks").add(1);config.putObject("judge_config").put("name","synthetic-judge").put("version","v1").put("model","fixture-model").put("prompt_version","p1").put("temperature",0).putNull("seed").put("calibrated",false);
+            f.sampleBody=body.toString();assertEquals(5,client(f,Map.of()).sampleInspection().at("/datasets/datasets/0/smoke/runs/G1/requested_count").asInt());
+            smoke.put("review_status","PROVISIONAL");f.sampleBody=body.toString();assertThrows(ResponseStatusException.class,()->client(f,Map.of()).sampleInspection());
         }
     }
     JsonNode status(KagClient client){return json.valueToTree(client.status());}

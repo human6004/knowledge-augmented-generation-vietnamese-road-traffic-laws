@@ -14,6 +14,7 @@ public class InfrastructureService {
     public Map<String,Object> kagStatus() { return kag.status(); }
     public JsonNode pipelineStatus() { return kag.pipelineStatus(); }
     public JsonNode benchmarkDatasets() { return kag.benchmarkDatasets(); }
+    public JsonNode sampleInspection() { return kag.sampleInspection(); }
     public JsonNode retrieve(KagRetrieveRequest request) { return kag.retrieve(request.message(),request.top_k(),request.expand()); }
     public Map<String,String> status() {
         var result=new LinkedHashMap<String,String>();

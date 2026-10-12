@@ -85,7 +85,7 @@ class CoreTest {
     }
     @Test void kagRuntimeInspectionIsReadOnlyAndAdminOnly() throws Exception {
         String user=register();
-        for(String path:List.of("/api/admin/kag/pipeline","/api/admin/kag/benchmark/datasets")) {
+        for(String path:List.of("/api/admin/kag/pipeline","/api/admin/kag/benchmark/datasets","/api/admin/kag/sample")) {
             mvc.perform(get(path)).andExpect(status().isUnauthorized());
             mvc.perform(get(path).header("Authorization","Bearer "+user)).andExpect(status().isForbidden());
         }
@@ -95,6 +95,10 @@ class CoreTest {
         mvc.perform(get("/api/admin/kag/pipeline").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.execution_allowed").value(false));
         mvc.perform(get("/api/admin/kag/benchmark/datasets").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.datasets").isEmpty());
         mvc.perform(post("/api/admin/kag/pipeline").header("Authorization","Bearer "+admin)).andExpect(status().isMethodNotAllowed());
+        when(kag.sampleInspection()).thenReturn(json.readTree("{\"release_kind\":\"SAMPLE\",\"execution_allowed\":false}"));
+        mvc.perform(get("/api/admin/kag/sample").header("Authorization","Bearer "+admin)).andExpect(status().isOk()).andExpect(jsonPath("$.release_kind").value("SAMPLE"));
+        mvc.perform(get("/api/admin/kag/sample?cypher=MATCH").header("Authorization","Bearer "+admin)).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/admin/kag/sample").header("Authorization","Bearer "+admin)).andExpect(status().isMethodNotAllowed());
     }
     @ParameterizedTest @ValueSource(strings={"{\"message\":\"Nguồn thử\",\"top_k\":0,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":11,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":1.5,\"expand\":false}","{\"message\":\"Nguồn thử\",\"top_k\":1,\"expand\":\"true\"}","{\"message\":\"Nguồn thử\",\"top_k\":1}","{\"message\":\"Nguồn thử\",\"top_k\":1,\"expand\":false,\"schema_contract\":{}}"})
     void kagAdminInputRejectsCoercionAndForgedSchema(String body) throws Exception {

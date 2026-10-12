@@ -281,6 +281,7 @@ class RequestRuntime:
     sdk_models: list = field(default_factory=list,repr=False)
     closed: bool = False
     capability: str = 'query'
+    request_id: str | None = None
 
     async def close(self):
         if self.closed:
@@ -360,10 +361,26 @@ def _new_embedding(settings, runtime):
         vector_dimensions=3072,timeout=TRANSPORT_SECONDS)
     if settings.query_proof_sha256:
         from .sample_query import configure_model
-        configure_model(settings,model,'embedding')
+        configure_model(settings,model,'embedding',component='kag.'+getattr(runtime,'capability','query'),request_id=getattr(runtime,'request_id',None))
         _guard_sdk(model,runtime.budget)
         model.client._client.event_hooks['response'].append(_embedding_response_metadata)
-    return model.vectorize
+    def embed(question):
+        # Vendor vectorize swallows SDK errors and logs source text; keep its guarded client.
+        import json
+        from kag.vector_contract import valid_vector
+        try:
+            runtime.budget.remaining()
+            response=model.client.embeddings.create(input=question,model=settings.embedding_model)
+            vector=response.data[0].embedding if len(response.data)==1 else None
+            if not valid_vector(vector,3072):
+                raise ValueError('INVALID_VECTOR')
+            runtime.budget.remaining()
+            return vector
+        except Exception as exc:
+            print('SAMPLE_EMBEDDING_FAILURE '+json.dumps({'error_type':type(exc).__name__}),flush=True)
+            runtime.budget.remaining()
+            raise RuntimeFailure('PROVIDER_ERROR') from None
+    return embed
 
 
 def _new_llm(settings, runtime):
@@ -372,28 +389,20 @@ def _new_llm(settings, runtime):
         api_key=settings.chat_key,base_url=settings.chat_url,enable_check=False,timeout=TRANSPORT_SECONDS)
     if settings.query_proof_sha256:
         from .sample_query import configure_model, provider_budget, response_model_matches
-        configure_model(settings,model,'chat')
+        configure_model(settings,model,'chat',component='kag.query',request_id=runtime.request_id)
         _guard_sdk(model,runtime.budget)
         responses=[]
         def response_metadata(response):
             import json
             response.read()
-            content=None
             try:
                 body=response.json();observed_model=body.get('model')
-                content=body.get('choices',[{}])[0].get('message',{}).get('content')
             except (ValueError,AttributeError,IndexError,TypeError):observed_model=None
-            if type(content) is str:
-                for secret in (settings.chat_key,settings.embedding_key,settings.provider_gateway_token,
-                               settings.broker_token,*settings.secrets.query_tokens,*settings.secrets.inspect_tokens):
-                    if secret:content=content.replace(secret,'[REDACTED]')
-                content=content[:131072]
-            else:content=None
             accepted=response_model_matches(settings,observed_model)
             safe_model=observed_model if observed_model in (settings.chat_model,'gemini-3.8-flash-n') else 'UNVERIFIED'
             responses.append({'status':response.status_code,'model_matches_config':observed_model==settings.chat_model,
                 'observed_model':safe_model,'route_version_matches_policy':accepted,
-                'content':content,'attempts':provider_budget(settings).counts()})
+                'attempts':provider_budget(settings).counts()})
             Path('/tmp/sample-provider-responses.json').write_text(json.dumps(responses,ensure_ascii=False),encoding='utf-8')
             print('SAMPLE_PROVIDER '+json.dumps({'status':response.status_code,
                 'model_matches_config':observed_model==settings.chat_model,'observed_model':safe_model,
@@ -514,6 +523,33 @@ class RuntimeSupervisor:
     def readiness(self):
         return {'runtime':'blocked','sources':'unknown','admission':'blocked' if self.busy or self.closed else 'pass'}
 
+    async def sample_inspect(self, request, settings, release):
+        authorize(request_principal(request),'inspect',None)
+        deadline=time.monotonic()+REQUEST_SECONDS
+        request.state.h1_deadline=deadline
+        _require_configuration(settings,capability='retrieve-vector')
+        if (type(release) is not ServingRelease or release.release_kind!='SAMPLE'
+                or release.release_id!=settings.release_id or settings.secrets!=request.app.state.http_settings.secrets):
+            raise ApiFailure('NOT_READY')
+        if request.headers.getlist('x-kag-release-id')!=[release.release_id]:raise RuntimeFailure('RELEASE_MISMATCH')
+        async def operation():
+            reader=None
+            try:
+                _require_operational_proof(settings,release,capability='retrieve-vector')
+                initialize_runtime()
+                reader=await asyncio.to_thread(_new_reader,settings,release,self._budget)
+                proof=await asyncio.to_thread(verify_sample_backend,release,settings.sample_proof_sha256,settings.reader_username,reader)
+                from .inspection import sample_graph_view,dataset_readiness,provider_view
+                value=await asyncio.to_thread(sample_graph_view,release,reader,proof)
+                value['datasets']=await asyncio.to_thread(dataset_readiness,request.app.state.evaluation_root,release)
+                value['providers']=provider_view(settings)
+                await asyncio.to_thread(verify_sample_backend,release,settings.sample_proof_sha256,settings.reader_username,reader)
+                _unchanged(release)
+                return value
+            finally:
+                if reader is not None:(reader if callable(getattr(reader,'close',None)) else reader._opener).close()
+        return await self.supervise(operation,deadline)
+
     async def sample_ready(self, request, settings, release, *, capability):
         deadline=time.monotonic()+REQUEST_SECONDS
         request.state.h1_deadline=deadline
@@ -592,6 +628,7 @@ class RuntimeSupervisor:
 
         async def operation():
             runtime = RequestRuntime(None,None,None,deadline,self._budget,parsed.message,None)
+            runtime.request_id=getattr(request.state,'request_id',None)
             token = None
             meter_context = None
             try:
@@ -663,6 +700,7 @@ class RuntimeSupervisor:
         async def operation():
             runtime = RequestRuntime(None,None,None,deadline,self._budget,parsed.message,None,
                                      capability='retrieve')
+            runtime.request_id=getattr(request.state,'request_id',None)
             token = None
             try:
                 await asyncio.to_thread(_identity,request,settings,release,parsed,capability='retrieve')

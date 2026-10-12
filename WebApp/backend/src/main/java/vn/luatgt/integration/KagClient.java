@@ -61,10 +61,100 @@ public class KagClient {
         return Map.of("liveness",probe("/v1/health","either"),
             "queryReadiness",probe("/v1/health?mode=ready&capability=query-v1","query"),
             "retrievalReadiness",probe("/v1/health?mode=ready&capability=retrieve","inspect"),
+            "vectorRetrievalReadiness",probe("/v1/health?mode=ready&capability=retrieve-vector","inspect"),
             "release",probe("/v1/graph/release","either"));
     }
     public JsonNode pipelineStatus() { return inspectView("/v1/pipeline/status",true); }
     public JsonNode benchmarkDatasets() { return inspectView("/v1/benchmark/datasets",false); }
+    public JsonNode sampleInspection() {
+        try {
+            headerIdentity(release);String token=inspectionToken();
+            return inspectionClient.get().uri("/v1/operations/sample").header(HttpHeaders.AUTHORIZATION,"Bearer "+token)
+                .header("X-KAG-Release-ID",release).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                    if(res.getStatusCode().value()!=200) throw new IOException("Sample inspection unavailable");
+                    var body=inspectionBody(res,token);validateSample(body);return body;
+                });
+        } catch(Exception e) { throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Inspection SAMPLE chưa đủ bằng chứng hoặc chưa khả dụng"); }
+    }
+    private void validateSample(JsonNode body) throws IOException {
+        if(!fields(body).equals(Set.of("contract_version","release_id","release_kind","source_snapshot_id","source_catalog_sha256","schema_contract","graph_fingerprint","backend","counts","nodes","edges","verified_at","execution_allowed","production_write","sample_receipt","datasets","providers"))||
+            !body.path("contract_version").asText().equals("h1-sample-inspection-1.0")||!body.path("release_id").asText().equals(release)||
+            !body.path("release_kind").asText().equals("SAMPLE")||!body.path("schema_contract").equals(json.valueToTree(schema.identity()))||
+            !text(body.path("source_snapshot_id"),512,true)||!body.path("execution_allowed").equals(json.valueToTree(false))||!body.path("production_write").asText().equals("BLOCKED")) throw new IOException("Invalid sample authority");
+        for(String field:List.of("source_catalog_sha256","graph_fingerprint")) if(!body.path(field).asText().matches("[0-9a-f]{64}")) throw new IOException("Invalid sample hash");
+        try {java.time.OffsetDateTime.parse(body.path("verified_at").asText());} catch(Exception e){throw new IOException("Invalid verification time");}
+        var backend=body.path("backend");
+        if(!fields(backend).equals(Set.of("database","namespace","database_id","server_id","read_only","verified"))||!backend.path("database").asText().equals("vietroadtraffic")||
+            !backend.path("namespace").asText().equals("VietRoadTraffic")||!text(backend.path("database_id"),512,true)||!text(backend.path("server_id"),512,true)||
+            !backend.path("read_only").equals(json.valueToTree(true))||!backend.path("verified").equals(json.valueToTree(true))) throw new IOException("Unverified backend");
+        var counts=body.path("counts");var nodes=body.path("nodes");var edges=body.path("edges");
+        if(!fields(counts).equals(Set.of("nodes","edges","vectors"))||!bounded(counts.path("nodes"),1,32)||!bounded(counts.path("edges"),0,22)||!bounded(counts.path("vectors"),1,42)||
+            !nodes.isArray()||nodes.size()!=counts.path("nodes").asInt()||!edges.isArray()||edges.size()!=counts.path("edges").asInt()) throw new IOException("Invalid graph limits");
+        var seen=new HashSet<String>();var sources=new HashSet<String>();
+        for(var node:nodes) {
+            String kind=node.path("entity_type").asText(),id=node.path("entity_id").asText();
+            if(!fields(node).equals(Set.of("entity_type","entity_id","properties","sources"))||!Set.of("VietRoadTraffic.LegalDocument","VietRoadTraffic.LegalUnit","VietRoadTraffic.TrafficSign").contains(kind)||
+                !text(node.path("entity_id"),512,true)||!seen.add(json.valueToTree(List.of(kind,id)).toString())||!node.path("properties").isObject()||!node.path("sources").isArray()||node.path("sources").isEmpty()||node.path("sources").size()>2) throw new IOException("Invalid graph node");
+            var props=node.path("properties");var approved=new HashMap<String,String>();
+            for(var row:schema.contract().path("node_properties").path(kind.substring(kind.lastIndexOf('.')+1))) approved.put(row.path("logical_name").asText(),row.path("contract_type").asText());
+            if(!approved.keySet().containsAll(fields(props))||!props.path("id").asText().equals(id)||!props.path("name").asText().equals(id)) throw new IOException("Invalid node properties");
+            for(var property:fields(props)) {
+                var value=props.path(property);String type=approved.get(property);
+                if(value.isNull())continue;
+                if((type.equals("INTEGER")||type.equals("OPTIONAL_INTEGER"))?!value.isIntegralNumber():type.equals("JSON_TEXT")?false:!text(value,131072,false)) throw new IOException("Invalid property type");
+            }
+            for(var source:node.path("sources")) if(!fields(source).equals(Set.of("evidence_id","field","source_sha256"))||!source.path("evidence_id").asText().matches("[0-9a-f]{64}")||
+                !source.path("source_sha256").asText().matches("[0-9a-f]{64}")||!approved.containsKey(source.path("field").asText())||!props.has(source.path("field").asText())||!sources.add(source.path("evidence_id").asText())) throw new IOException("Invalid provenance");
+        }
+        var seenEdges=new HashSet<String>();
+        for(var edge:edges) {
+            var rule=schema.contract().path("relations").path(edge.path("predicate").asText());
+            if(!fields(edge).equals(Set.of("from","predicate","to","properties"))||rule.isMissingNode()||!edge.path("properties").isObject()||!seenEdges.add(edge.toString())) throw new IOException("Invalid edge");
+            for(String side:List.of("from","to")) {
+                var endpoint=edge.path(side);
+                if(!endpoint.isArray()||endpoint.size()!=2||!seen.contains(endpoint.toString())||!endpoint.path(0).asText().equals("VietRoadTraffic."+rule.path(side+"_type").asText())) throw new IOException("Invalid edge endpoint");
+            }
+            var approved=new HashSet<String>();for(var row:schema.contract().path("relation_properties").path(edge.path("predicate").asText()))approved.add(row.path("logical_name").asText());
+            if(!approved.containsAll(fields(edge.path("properties"))))throw new IOException("Invalid relation properties");
+        }
+        var receipt=body.path("sample_receipt");
+        if(!fields(receipt).equals(Set.of("stage","sealed_at","receipt_sha256","build_run_id","progress"))||!receipt.path("stage").asText().equals("GRAPH_VERIFIED")||
+            !receipt.path("receipt_sha256").asText().matches("[0-9a-f]{64}")||!receipt.path("build_run_id").isNull()||!receipt.path("progress").isNull()) throw new IOException("Invalid sample receipt");
+        try{java.time.Instant.parse(receipt.path("sealed_at").asText());}catch(Exception e){throw new IOException("Invalid seal time");}
+        validateDatasets(body.path("datasets"),true);validateProviders(body.path("providers"));
+        for(var row:body.at("/datasets/datasets")) if(row.has("smoke")&&!row.at("/smoke/graph_fingerprint").equals(body.path("graph_fingerprint"))) throw new IOException("Smoke graph mismatch");
+    }
+    private static boolean bounded(JsonNode value,int min,int max) {return value.isIntegralNumber()&&value.canConvertToInt()&&value.asInt()>=min&&value.asInt()<=max;}
+    private void validateProviders(JsonNode body) throws IOException {
+        if(!fields(body).equals(Set.of("state","attempts","receipt_window","configured_chat_model","configured_embedding_model","policy_response_version","exact_backend_identity_verified","upstream_attempts","proxy_retries"))||
+            !body.path("exact_backend_identity_verified").equals(json.valueToTree(false))||!body.path("upstream_attempts").isNull()||!body.path("proxy_retries").isNull()||
+            !Set.of("NOT_CONFIGURED","OBSERVED").contains(body.path("state").asText()))throw new IOException("Invalid provider claims");
+        if(body.path("state").asText().equals("NOT_CONFIGURED")) {
+            if(!body.path("attempts").isNull()||!body.path("receipt_window").isNull())throw new IOException("Unobserved provider counts");return;
+        }
+        if(!body.path("configured_chat_model").asText().equals("gemini-3.8-flash-high")||!body.path("configured_embedding_model").asText().equals("dg/text-embedding-3-large")||
+            (!body.path("policy_response_version").isNull()&&!body.path("policy_response_version").asText().equals("gemini-3.8-flash-n")))throw new IOException("Invalid model route");
+        var counts=body.path("attempts");if(!fields(counts).equals(Set.of("embedding","chat")))throw new IOException("Invalid request counts");
+        for(var count:counts)if(!count.isIntegralNumber()||!count.canConvertToLong()||count.asLong()<0)throw new IOException("Invalid request count");
+        var window=body.path("receipt_window");
+        if(!fields(window).equals(Set.of("since","outcomes","recent"))||!window.path("recent").isArray()||window.path("recent").size()>50||!fields(window.path("outcomes")).equals(Set.of("embedding","chat")))throw new IOException("Invalid receipt window");
+        try{java.time.OffsetDateTime.parse(window.path("since").asText());}catch(Exception e){throw new IOException("Invalid receipt time");}
+        for(var outcome:window.path("outcomes")) {
+            if(!fields(outcome).equals(Set.of("http_success","http_error","transport_error","cancelled")))throw new IOException("Invalid outcome counts");
+            for(var count:outcome)if(!count.isIntegralNumber()||!count.canConvertToLong()||count.asLong()<0)throw new IOException("Invalid outcome count");
+        }
+        for(var row:window.path("recent")) {
+            if(!fields(row).equals(Set.of("kind","attempt","outbound_id","request_id","source_component","configured_model","timestamp","outcome","status","provider_request_id","latency_ms","client_retry","proxy_retries","upstream_attempts"))||
+                !Set.of("embedding","chat").contains(row.path("kind").asText())||!row.path("attempt").isIntegralNumber()||row.path("attempt").asLong()<1||
+                !row.path("outbound_id").asText().matches("[0-9a-f]{32}")||!Set.of("kag.query","kag.retrieve","direct_runner").contains(row.path("source_component").asText())||
+                !Set.of("attempted","http_success","http_error","transport_error","cancelled").contains(row.path("outcome").asText())||
+                !row.path("client_retry").equals(json.valueToTree(false))||!row.path("proxy_retries").isNull()||!row.path("upstream_attempts").isNull()||
+                !row.path("configured_model").asText().equals(body.path(row.path("kind").asText().equals("chat")?"configured_chat_model":"configured_embedding_model").asText()))throw new IOException("Invalid provider receipt");
+            for(String id:List.of("request_id","provider_request_id"))if(!row.path(id).isNull()&&!row.path(id).asText().matches("[A-Za-z0-9_.:-]{1,128}"))throw new IOException("Invalid request identity");
+            if(!row.path("status").isNull()&&!bounded(row.path("status"),100,599)||!row.path("latency_ms").isNull()&&(!row.path("latency_ms").isNumber()||!Double.isFinite(row.path("latency_ms").asDouble())||row.path("latency_ms").asDouble()<0))throw new IOException("Invalid receipt measurement");
+            try{java.time.OffsetDateTime.parse(row.path("timestamp").asText());}catch(Exception e){throw new IOException("Invalid receipt timestamp");}
+        }
+    }
     private JsonNode inspectView(String path,boolean pipeline) {
         try {
             String token=inspectionToken();
@@ -89,7 +179,8 @@ public class KagClient {
         String observed=body.path("closed").asBoolean()?"closed":body.path("draining").asBoolean()?"draining":active.asInt()==1?"running":"idle";
         if(!phase.equals(observed)) throw new IOException("Inconsistent runtime state");
     }
-    private void validateDatasets(JsonNode body) throws IOException {
+    private void validateDatasets(JsonNode body) throws IOException { validateDatasets(body,false); }
+    private void validateDatasets(JsonNode body,boolean sample) throws IOException {
         if(!fields(body).equals(Set.of("contract_version","state","datasets","execution_allowed","execution_blockers","metrics"))||!body.path("metrics").isNull()||
             !body.path("execution_blockers").equals(json.valueToTree(List.of("OPERATIONAL_PROOF_REQUIRED","BENCHMARK_EXECUTION_NOT_AUTHORIZED")))||
             !Set.of("AVAILABLE","NOT_CONFIGURED","UNAVAILABLE","LIMIT_EXCEEDED").contains(body.path("state").asText())||!body.path("datasets").isArray()||body.path("datasets").size()>20||
@@ -97,16 +188,91 @@ public class KagClient {
         var seen=new HashSet<String>();
         for(var row:body.path("datasets")) {
             String id=row.path("id").asText(),status=row.path("dataset_status").asText(),eligibility=row.path("dataset_eligibility").asText();
-            if(!fields(row).equals(Set.of("id","dataset_status","dataset_eligibility","reason","dataset_hash","record_count","official_benchmark"))||!id.matches("[A-Za-z0-9_.-]{1,128}(?:/eval_questions\\.jsonl)?")||
+            var expected=new HashSet<String>(Set.of("id","dataset_status","dataset_eligibility","reason","dataset_hash","record_count","official_benchmark"));
+            if(sample)expected.addAll(Set.of("eligible_count","ineligible_count","invalid_count","gold_count","missing_gold","eligibility_scope"));
+            if(sample&&row.has("smoke"))expected.add("smoke");
+            if(sample&&row.has("metadata"))expected.add("metadata");
+            if(!fields(row).equals(expected)||!id.matches("[A-Za-z0-9_.-]{1,128}(?:/eval_questions\\.jsonl)?")||
                 id.startsWith("../")||!seen.add(id)||!row.path("official_benchmark").isBoolean()||!Set.of("ELIGIBLE","BLOCKED").contains(eligibility)) throw new IOException("Invalid dataset identity");
             if(!row.path("dataset_status").isNull()&&!Set.of("PROVISIONAL","FROZEN").contains(status)) throw new IOException("Invalid dataset status");
             if(!row.path("dataset_hash").isNull()&&!row.path("dataset_hash").asText().matches("[0-9a-f]{64}")) throw new IOException("Invalid dataset hash");
-            if(!row.path("record_count").isNull()&&(!row.path("record_count").isIntegralNumber()||!row.path("record_count").canConvertToLong()||row.path("record_count").asLong()<1)) throw new IOException("Invalid dataset count");
+            if(!row.path("record_count").isNull()&&(!row.path("record_count").isIntegralNumber()||!row.path("record_count").canConvertToLong()||row.path("record_count").asLong()<(sample?0:1))) throw new IOException("Invalid dataset count");
             if(eligibility.equals("ELIGIBLE")) {
                 if(!status.equals("FROZEN")||row.path("dataset_hash").isNull()||row.path("record_count").isNull()||!row.path("reason").isNull()) throw new IOException("Unverified dataset eligibility");
-            } else if(!Set.of("PROVISIONAL_DATASET","NO_GOLD","INVALID_DATASET","DATASET_TOO_LARGE").contains(row.path("reason").asText())) throw new IOException("Invalid blocked dataset");
+            } else if(!Set.of("PROVISIONAL_DATASET","NO_GOLD","INVALID_DATASET","DATASET_TOO_LARGE").contains(row.path("reason").asText())&&!(sample&&row.path("reason").asText().equals("NO_ELIGIBLE_QUESTIONS"))) throw new IOException("Invalid blocked dataset");
             if(row.path("official_benchmark").asBoolean()&&!status.equals("FROZEN")) throw new IOException("Unverified official dataset");
+            if(sample) {
+                if(row.has("metadata")) {
+                    var meta=row.path("metadata");
+                    if(!fields(meta).equals(Set.of("dataset_version","category_counts","generation_method"))||!meta.path("category_counts").isObject()||
+                        (!meta.path("dataset_version").isNull()&&!text(meta.path("dataset_version"),512,true))||
+                        (!meta.path("generation_method").isNull()&&!meta.path("generation_method").asText().equals("legacy-b2-evidence-first-adapted")))throw new IOException("Invalid dataset metadata");
+                    long totalCategories=0;
+                    var categories=meta.path("category_counts").fields();
+                    while(categories.hasNext()) {var entry=categories.next();if(!Set.of("definition","obligation","sanction_numeric","effectiveness_metadata","inter_document","multi_hop","unanswerable","traffic_sign").contains(entry.getKey())||!bounded(entry.getValue(),1,1000000))throw new IOException("Invalid question category");totalCategories+=entry.getValue().asLong();}
+                    if(!row.path("record_count").isNull()&&(totalCategories!=row.path("record_count").asLong()-row.path("invalid_count").asLong()||
+                        (meta.path("dataset_version").isNull()!=(totalCategories==0))))throw new IOException("Inconsistent category counts");
+                }
+                if(row.has("smoke"))validateSmoke(row.path("smoke"),row.path("record_count"),row);
+                if(!row.path("eligibility_scope").asText().equals("G1_RETRIEVAL_GOLD_COVERAGE")||!bounded(row.path("eligible_count"),0,1000000)||!bounded(row.path("ineligible_count"),0,1000000)||
+                    !fields(row.path("missing_gold")).equals(Set.of("document","unit","sign")))throw new IOException("Invalid sample coverage");
+                for(var ids:row.path("missing_gold")) {if(!ids.isArray()||ids.size()>10000)throw new IOException("Invalid missing gold");for(var idValue:ids)if(!text(idValue,512,true))throw new IOException("Invalid gold identity");}
+                if(!row.path("record_count").isNull()&&(!bounded(row.path("invalid_count"),0,1000000)||!bounded(row.path("gold_count"),0,row.path("record_count").asInt())||
+                    row.path("eligible_count").asLong()+row.path("ineligible_count").asLong()+row.path("invalid_count").asLong()!=row.path("record_count").asLong()))throw new IOException("Inconsistent coverage counts");
+            }
         }
+    }
+    private void validateSmoke(JsonNode smoke,JsonNode total,JsonNode dataset) throws IOException {
+        if(!fields(smoke).equals(Set.of("state","review_status","g1_eligible_count","graph_fingerprint","official_benchmark","runs"))||
+            !Set.of("NOT_RUN","AVAILABLE","INVALID_RECEIPT").contains(smoke.path("state").asText())||
+            !Set.of("PROVISIONAL","FROZEN","NOT_ATTESTED").contains(smoke.path("review_status").asText())||
+            (!smoke.path("review_status").asText().equals("NOT_ATTESTED")&&!smoke.path("review_status").equals(dataset.path("dataset_status")))||
+            !bounded(smoke.path("g1_eligible_count"),0,total.isIntegralNumber()?total.asInt():0)||
+            !smoke.path("graph_fingerprint").asText().matches("[0-9a-f]{64}")||!smoke.path("official_benchmark").isBoolean()||!smoke.path("official_benchmark").equals(dataset.path("official_benchmark"))||
+            !fields(smoke.path("runs")).equals(Set.of("G1","G2")))throw new IOException("Invalid smoke proof");
+        boolean available=smoke.path("state").asText().equals("AVAILABLE"),hasRun=false;
+        for(var run:smoke.path("runs")) {
+            if(run.isNull())continue;hasRun=true;
+            var runFields=new HashSet<String>(Set.of("status","started_at","finished_at","requested_count","attempted_count","failed_count","ineligible_count","metrics","latency_ms"));
+            if(run.has("configuration"))runFields.add("configuration");
+            if(!available||!Set.of("PROVISIONAL","FROZEN").contains(smoke.path("review_status").asText())||!fields(run).equals(runFields)||
+                !run.path("status").asText().equals("COMPLETE")||!bounded(run.path("requested_count"),1,1000000)||!run.path("requested_count").equals(total)||
+                !bounded(run.path("attempted_count"),0,total.asInt())||!bounded(run.path("failed_count"),0,run.path("attempted_count").asInt())||
+                !bounded(run.path("ineligible_count"),0,total.asInt())||run.path("attempted_count").asInt()+run.path("ineligible_count").asInt()!=total.asInt()||
+                !run.path("metrics").isObject()||run.path("metrics").size()>128||!fields(run.path("latency_ms")).equals(Set.of("successful","all_attempted")))throw new IOException("Invalid smoke run");
+            if(run.has("configuration")) {
+                var config=run.path("configuration");
+                if(!fields(config).equals(Set.of("protocol_version","eval_version","metric_policy_version","ks","top_k","expand","rank_semantics","identity_catalog_hash","release_id","judge_config"))||
+                    !config.path("protocol_version").asText().equals("1.0")||!config.path("eval_version").asText().equals("1.0")||!Set.of("1.0","1.1").contains(config.path("metric_policy_version").asText())||
+                    !bounded(config.path("top_k"),1,10)||!config.path("ks").isArray()||config.path("ks").isEmpty()||config.path("ks").size()>10||
+                    !config.path("expand").equals(json.valueToTree(false))||!config.path("rank_semantics").asText().equals("channel_projected_returned_top_k")||
+                    (!config.path("identity_catalog_hash").isNull()&&!config.path("identity_catalog_hash").asText().matches("[0-9a-f]{64}"))||
+                    (!config.path("release_id").isNull()&&!config.path("release_id").asText().equals(release)))throw new IOException("Invalid benchmark configuration");
+                int previous=0;for(var k:config.path("ks")){if(!bounded(k,1,config.path("top_k").asInt())||k.asInt()<=previous)throw new IOException("Invalid benchmark cutoffs");previous=k.asInt();}
+                var judge=config.path("judge_config");
+                if(!judge.isNull()) {
+                    if(!fields(judge).equals(Set.of("name","version","model","prompt_version","temperature","seed","calibrated"))||!text(judge.path("name"),512,true)||
+                        !judge.path("version").isTextual()||!judge.path("model").isTextual()||!judge.path("prompt_version").isTextual()||!judge.path("temperature").isNumber()||!Double.isFinite(judge.path("temperature").asDouble())||
+                        !judge.path("calibrated").isBoolean()||!judge.path("seed").isNull()&&(!judge.path("seed").isIntegralNumber()||!judge.path("seed").canConvertToLong()))throw new IOException("Invalid judge configuration");
+                }
+            }
+            try {if(java.time.Instant.parse(run.path("finished_at").asText()).isBefore(java.time.Instant.parse(run.path("started_at").asText())))throw new IOException("Invalid smoke timestamps");}
+            catch(java.time.format.DateTimeParseException invalid){throw new IOException("Invalid smoke timestamps");}
+            for(var metric:run.path("metrics")) {
+                if(!fields(metric).equals(Set.of("value","scored_count","status_counts","eligible_count","excluded_count","failed_count"))||
+                    !fields(metric.path("status_counts")).equals(Set.of("OK","NOT_APPLICABLE","UNAVAILABLE","UNKNOWN"))||
+                    (!metric.path("value").isNull()&&(!metric.path("value").isNumber()||!Double.isFinite(metric.path("value").asDouble())||metric.path("value").asDouble()<0)))throw new IOException("Invalid smoke metric");
+                for(String k:List.of("scored_count","eligible_count","excluded_count","failed_count"))if(!bounded(metric.path(k),0,total.asInt()))throw new IOException("Invalid smoke metric count");
+                int statusCount=0;for(var count:metric.path("status_counts")){if(!bounded(count,0,total.asInt()))throw new IOException("Invalid metric status");statusCount+=count.asInt();}
+                if(statusCount!=total.asInt()||metric.path("eligible_count").asInt()+metric.path("excluded_count").asInt()!=total.asInt()||
+                    metric.path("scored_count").asInt()!=metric.at("/status_counts/OK").asInt()||(metric.path("value").isNull()!=(metric.path("scored_count").asInt()==0)))throw new IOException("Inconsistent smoke metrics");
+            }
+            for(var latency:run.path("latency_ms")) {
+                if(!fields(latency).equals(Set.of("count","min","mean","median","p95","max"))||!bounded(latency.path("count"),0,total.asInt()))throw new IOException("Invalid smoke latency");
+                for(String k:List.of("min","mean","median","p95","max"))if(latency.path("count").asInt()==0?!latency.path(k).isNull():!latency.path(k).isNumber()||!Double.isFinite(latency.path(k).asDouble())||latency.path(k).asDouble()<0)throw new IOException("Invalid smoke latency");
+            }
+        }
+        if(available!=hasRun)throw new IOException("Missing smoke execution");
     }
     private String inspectionToken() throws IOException {
         if(inspectTokenFile.isBlank()||!Path.of(inspectTokenFile).isAbsolute()) throw new IOException("Inspection credentials unavailable");
@@ -132,7 +298,7 @@ public class KagClient {
                 if(code!=200) {
                     String error=errorCode(body);
                     if(code==503&&error.equals("NOT_READY")&&path.contains("mode=ready")) {
-                        String capability=scope.equals("inspect")?"retrieve":"query-v1";
+                        String capability=path.endsWith("retrieve-vector")?"retrieve-vector":scope.equals("inspect")?"retrieve":"query-v1";
                         if(!body.path("capability").asText().equals(capability)||!body.path("status").asText().equals("unavailable")||!body.path("checks").isObject()||
                             !fields(body.path("checks")).containsAll(Set.of("auth","runtime","sources"))||!Set.of("auth","runtime","sources","admission").containsAll(fields(body.path("checks")))||
                             !body.path("production_write").asText().equals("blocked")||!body.path("provider_transport").asText().equals("not_probed")) throw new IOException("Invalid readiness");
@@ -150,7 +316,14 @@ public class KagClient {
                     // H1 release_view verifies artifacts only; it cannot certify live graph readiness.
                     return Map.<String,Object>of("state","NOT_READY","httpStatus",200,"code","ARTIFACTS_ONLY","evidence",body);
                 }
-                String capability=scope.equals("inspect")?"retrieve":"query-v1";
+                String capability=path.endsWith("retrieve-vector")?"retrieve-vector":scope.equals("inspect")?"retrieve":"query-v1";
+                if(capability.equals("retrieve-vector")) {
+                    if(!fields(body).equals(Set.of("status","capability","release_kind","release_id","provider_transport","production_write"))||
+                        !body.path("status").asText().equals("ready")||!body.path("capability").asText().equals(capability)||
+                        !body.path("release_kind").asText().equals("SAMPLE")||!body.path("release_id").asText().equals(release)||
+                        !body.path("provider_transport").asText().equals("not_probed")||!body.path("production_write").asText().equals("blocked"))throw new IOException("Invalid vector readiness");
+                    return Map.<String,Object>of("state","READY","httpStatus",200,"evidence",body);
+                }
                 if(!fields(body).equals(Set.of("status","capability","release_kind","release_id","checks","provider_transport","production_write"))||
                     !body.path("status").asText().equals("ready")||!body.path("capability").asText().equals(capability)||
                     !body.path("release_kind").asText().equals("SAMPLE")||!body.path("release_id").asText().equals(release)||release.isBlank()||

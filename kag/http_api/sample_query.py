@@ -164,8 +164,12 @@ class AsyncGatewayTransport(httpx.AsyncBaseTransport):
     async def aclose(self):await self.transport.aclose()
 
 
-def configure_model(settings, model, kind):
+def configure_model(settings, model, kind, *, component='direct_runner', request_id=None):
     budget=provider_budget(settings)
+    if component not in ('direct_runner','kag.query','kag.retrieve') or (request_id is not None and
+            (type(request_id) is not str or not re.fullmatch('[0-9a-f-]{32,36}',request_id))):
+        raise BudgetError('PROVIDER_BINDING_INVALID')
+    budget.source_component,budget.request_id=component,request_id
     for name,cls,transport in (('client',GatewayTransport,httpx.HTTPTransport(retries=0)),
                                ('aclient',AsyncGatewayTransport,httpx.AsyncHTTPTransport(retries=0))):
         client=getattr(model,name)._client

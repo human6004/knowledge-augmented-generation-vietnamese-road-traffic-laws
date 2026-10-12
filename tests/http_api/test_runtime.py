@@ -69,6 +69,49 @@ def action(executor):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_embedding_sdk_errors_propagate_safely_without_source_logging(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        module=api()
+        runtime=SimpleNamespace(budget=module._Budget(time.monotonic()+10),sdk_models=[])
+        embed=module._new_embedding(self.settings(),runtime)
+        model=runtime.sdk_models[0]
+        model.client.max_retries=0
+        model.client._client._transport=httpx.MockTransport(lambda request:httpx.Response(503,json={'error':{'message':'PRIVATE_BODY'}}))
+        output=io.StringIO()
+        try:
+            with redirect_stdout(output):
+                with self.assertRaises(module.RuntimeFailure) as caught: embed('PRIVATE_SOURCE')
+            self.assertEqual(caught.exception.code,'PROVIDER_ERROR')
+            self.assertNotIn('PRIVATE',output.getvalue()+str(caught.exception))
+            self.assertIn('SAMPLE_EMBEDDING_FAILURE',output.getvalue())
+        finally:
+            model.client.close();await model.aclient.close()
+
+    async def test_embedding_rejects_malformed_dimensions_nonfinite_and_zero_without_retry(self):
+        from types import SimpleNamespace
+        module=api()
+        for vector in ([1.0]*3071,[0.0]*3072,[1.0]*3071+[float('inf')]):
+            runtime=SimpleNamespace(budget=module._Budget(time.monotonic()+10),sdk_models=[])
+            embed=module._new_embedding(self.settings(),runtime);model=runtime.sdk_models[0];calls=[]
+            model.client._client._transport=httpx.MockTransport(lambda request:calls.append(True) or httpx.Response(200,content=json.dumps({'data':[{'embedding':vector}]}).encode(),headers={'Content-Type':'application/json'}))
+            try:
+                with self.assertRaises(module.RuntimeFailure):embed('TEST ONLY')
+                self.assertEqual(len(calls),1)
+            finally:
+                model.client.close();await model.aclient.close()
+
+    async def test_embedding_keeps_sdk_base64_decoding_and_exact_valid_vector(self):
+        import base64,struct
+        from types import SimpleNamespace
+        module=api();runtime=SimpleNamespace(budget=module._Budget(time.monotonic()+10),sdk_models=[])
+        embed=module._new_embedding(self.settings(),runtime);model=runtime.sdk_models[0]
+        encoded=base64.b64encode(struct.pack('<3072f',1.0,*([0.0]*3071))).decode()
+        model.client._client._transport=httpx.MockTransport(lambda request:httpx.Response(200,json={'data':[{'embedding':encoded}]}))
+        try:self.assertEqual(embed('TEST ONLY'),[1.0]+[0.0]*3071)
+        finally:model.client.close();await model.aclient.close()
+
     async def test_embedding_diagnostics_exclude_provider_body_and_input(self):
         import io
         from contextlib import redirect_stdout
@@ -494,12 +537,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 embed=module._new_embedding(self.settings(),runtime)
                 llm=module._new_llm(self.settings(),runtime)
                 self.assertFalse(llm.enable_check)
-                self.assertEqual(embed.__self__.get_vector_dimensions(),3072)
+                self.assertEqual(runtime.sdk_models[0].get_vector_dimensions(),3072)
                 self.assertTrue(all(isinstance(model.client._client._transport,module._DeadlineTransport)
                                     for model in runtime.sdk_models))
                 self.assertTrue(all(isinstance(model.aclient._client._transport,module._AsyncDeadlineTransport)
                                     for model in runtime.sdk_models))
-                models.append((embed.__self__,llm))
+                models.append((runtime.sdk_models[0],llm))
             finally:
                 await runtime.close()
             self.assertTrue(all(model.client.is_closed() and model.aclient.is_closed()
@@ -624,7 +667,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200,json={'object':'list','model':'synthetic-3072',
                     'data':[{'object':'embedding','index':0,'embedding':[1.0]+[0.0]*3071}],
                     'usage':{'prompt_tokens':1,'total_tokens':1}})
-            replace_transport(embed.__self__,runtime,reply)
+            replace_transport(runtime.sdk_models[-1],runtime,reply)
             return embed
         def llm(settings,runtime):
             model=original_llm(settings,runtime)

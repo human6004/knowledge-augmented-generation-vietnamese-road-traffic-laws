@@ -6,6 +6,7 @@ import sys
 
 from .dataset import canonical_line, dataset_from_records, freeze_dataset, load_dataset, sha256, strict_json
 from .legacy import import_legacy
+from .generation import generate_questions, validate_generated
 from .models import ValidationError, fail
 from .report import write_new
 
@@ -43,6 +44,16 @@ def main(argv=None):
     freeze.add_argument('path',type=Path)
     freeze.add_argument('--output-root',type=Path,required=True)
     freeze.add_argument('--dataset-version',required=True)
+    freeze.add_argument('--review',type=Path)
+    generate=sub.add_parser('generate')
+    generate.add_argument('--catalog',type=Path,required=True)
+    generate.add_argument('--drafts',type=Path,required=True)
+    generate.add_argument('--config',type=Path,required=True)
+    generate.add_argument('--output-dir',type=Path,required=True)
+    generated=sub.add_parser('validate-generated')
+    generated.add_argument('path',type=Path)
+    generated.add_argument('--catalog',type=Path,required=True)
+    generated.add_argument('--generation-manifest',type=Path,required=True)
     legacy=sub.add_parser('import-legacy')
     legacy.add_argument('path',type=Path)
     legacy.add_argument('--output-dir',type=Path,required=True)
@@ -56,8 +67,23 @@ def main(argv=None):
         if args.command == 'validate':
             ds=load_dataset(args.path,args.manifest)
             print(canonical_line({'status':'VALID','dataset_hash':ds.dataset_hash,'record_count':len(ds.records)}).decode(),end='')
+        elif args.command == 'validate-generated':
+            catalog,raw=_read(args.catalog)
+            ds=load_dataset(args.path)
+            validate_generated(ds,catalog,_read(args.generation_manifest)[0],source_catalog_sha256=sha256(raw))
+            print(canonical_line({'status':'SOURCE_VALIDATED','dataset_hash':ds.dataset_hash,'human_reviewed':False}).decode(),end='')
+        elif args.command == 'generate':
+            catalog,raw=_read(args.catalog)
+            result=generate_questions(catalog,_read(args.drafts)[0],_read(args.config)[0],source_catalog_sha256=sha256(raw))
+            args.output_dir.mkdir(parents=True,exist_ok=False)
+            write_new(args.output_dir/'generation-manifest.json',canonical_line(result['manifest']))
+            if result['records']:
+                write_new(args.output_dir/'eval_questions.jsonl',dataset_from_records(result['records']).canonical_bytes)
+            print(canonical_line({k:result['manifest'][k] for k in ('requested_count','generated_count','category_counts','deferred','duplicates','review_status')}).decode(),end='')
+            return 2 if result['manifest']['deferred'] or not result['records'] else 0
         elif args.command == 'freeze':
-            path=freeze_dataset(args.path,args.output_root,args.dataset_version)
+            review=_read(args.review)[0] if args.review else None
+            path=freeze_dataset(args.path,args.output_root,args.dataset_version,review_receipt=review)
             print(canonical_line({'manifest_path':str(path),'official_benchmark':False}).decode(),end='')
         else:
             payload,raw=_read(args.path)

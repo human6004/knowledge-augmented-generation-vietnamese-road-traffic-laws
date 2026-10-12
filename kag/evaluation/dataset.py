@@ -189,7 +189,7 @@ def verify_frozen(dataset_bytes, manifest):
     return replace(ds,official_benchmark=manifest['official_benchmark'],manifest_verified=True)
 
 
-def freeze_dataset(source, output_root, dataset_version, official_benchmark=False):
+def freeze_dataset(source, output_root, dataset_version, official_benchmark=False, *, review_receipt=None):
     source, output_root = Path(source), Path(output_root)
     text(dataset_version,'dataset_version',identity=True)
     boolean(official_benchmark,'official_benchmark')
@@ -198,10 +198,18 @@ def freeze_dataset(source, output_root, dataset_version, official_benchmark=Fals
         fail('dataset_status','PROVISIONAL_REQUIRED')
     if dataset_version == ds.records[0].dataset_version:
         fail('dataset_version','NEW_VERSION_REQUIRED')
+    from .generation import generation_notes
+    generated = any('EVIDENCE_FIRST' in r.tags or generation_notes(r) is not None for r in ds.records)
+    payloads = [r.to_dict() for r in ds.records]
+    if generated:
+        if review_receipt is None:
+            fail('review','HUMAN_REVIEW_REQUIRED')
+        from .generation import reviewed_records
+        payloads = reviewed_records(ds,review_receipt)
     target = output_root / ('dataset-'+sha256(dataset_version.encode('utf-8')))
     if source.resolve() in (target.resolve(),(target/'eval_questions.jsonl').resolve()):
         fail('source','SOURCE_TARGET_COLLISION')
-    frozen = dataset_from_records([dict(r.to_dict(),dataset_status='FROZEN',dataset_version=dataset_version) for r in ds.records])
+    frozen = dataset_from_records([dict(r,dataset_status='FROZEN',dataset_version=dataset_version) for r in payloads])
     manifest = dict(schema_version='1.0',dataset_version=dataset_version,dataset_status='FROZEN',
                     sha256=frozen.dataset_hash,record_count=len(frozen.records),
                     category_counts=dict(Counter(r.category for r in frozen.records)),frozen_at=utc_now(),

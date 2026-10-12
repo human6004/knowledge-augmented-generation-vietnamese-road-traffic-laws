@@ -1,5 +1,8 @@
 """Persistent, provider-specific attempt limits for an authorized direct runner."""
 from contextlib import contextmanager
+from collections import Counter, deque
+from datetime import datetime, timezone
+import asyncio
 import hashlib
 import json
 import os
@@ -7,9 +10,25 @@ from pathlib import Path
 import re
 import tempfile
 from types import MethodType
+from threading import Lock
+import time
+from uuid import uuid4
 
 import httpx
 import portalocker
+
+_RECEIPTS = deque(maxlen=50)
+_OUTCOMES = Counter()
+_RECEIPT_LOCK = Lock()
+_STARTED_AT = datetime.now(timezone.utc).isoformat()
+
+
+def receipt_view(binding):
+    with _RECEIPT_LOCK:
+        return {'since':_STARTED_AT,'outcomes':{kind:{outcome:_OUTCOMES[binding,kind,outcome]
+                    for outcome in ('http_success','http_error','transport_error','cancelled')}
+                for kind in ('embedding','chat')},
+                'recent':[dict(row) for key,row in _RECEIPTS if key==binding]}
 
 
 class BudgetError(RuntimeError):
@@ -43,6 +62,8 @@ class ProviderBudget:
                 or type(in_place) is not bool):
             raise BudgetError('PROVIDER_BINDING_INVALID')
         self.in_place = in_place
+        self.source_component = 'direct_runner'
+        self.request_id = None
         self.providers = {}
         for kind, endpoint, model in (('embedding',embedding_url,embedding_model),
                                        ('chat',chat_url,chat_model)):
@@ -153,7 +174,21 @@ class ProviderBudget:
             valid = False
         if not valid:
             raise BudgetError('PROVIDER_REQUEST_DENIED')
-        self.reserve(kind)
+        return self.reserve(kind)
+
+    def _receipt(self, kind, attempt, outbound_id, outcome, started, response=None):
+        request_id=response.headers.get('x-request-id') or response.headers.get('request-id') if response is not None else None
+        if request_id is not None and not re.fullmatch('[A-Za-z0-9_.:-]{1,128}',request_id):request_id=None
+        row={'kind':kind,'attempt':attempt,'outbound_id':outbound_id,'request_id':self.request_id,
+             'source_component':self.source_component,'configured_model':self.providers[kind][1],
+             'timestamp':datetime.now(timezone.utc).isoformat(),'outcome':outcome,
+             'status':response.status_code if response is not None else None,'provider_request_id':request_id,
+             'latency_ms':round((time.monotonic()-started)*1000,3) if outcome!='attempted' else None,
+             'client_retry':False,'proxy_retries':None,'upstream_attempts':None}
+        with _RECEIPT_LOCK:
+            _RECEIPTS.append((self.binding,row))
+            if outcome!='attempted':_OUTCOMES[self.binding,kind,outcome]+=1
+        print('PROVIDER_REQUEST '+json.dumps(row,separators=(',',':')),flush=True)
 
     def guard_sync(self, kind, transport):
         return _SyncTransport(self,kind,transport)
@@ -183,8 +218,13 @@ class _SyncTransport(httpx.BaseTransport):
         self.budget,self.kind,self.transport = budget,kind,transport
 
     def handle_request(self, request):
-        self.budget._admit(self.kind,request)
-        response = self.transport.handle_request(request)
+        attempt=self.budget._admit(self.kind,request);started=time.monotonic();outbound_id=uuid4().hex
+        self.budget._receipt(self.kind,attempt,outbound_id,'attempted',started)
+        try:response = self.transport.handle_request(request)
+        except Exception:
+            self.budget._receipt(self.kind,attempt,outbound_id,'transport_error',started)
+            raise
+        self.budget._receipt(self.kind,attempt,outbound_id,'http_success' if response.is_success else 'http_error',started,response)
         if 300<=response.status_code<400:
             response.close()
             raise BudgetError('PROVIDER_REDIRECT_DENIED')
@@ -199,8 +239,13 @@ class _AsyncTransport(httpx.AsyncBaseTransport):
         self.budget,self.kind,self.transport = budget,kind,transport
 
     async def handle_async_request(self, request):
-        self.budget._admit(self.kind,request)
-        response = await self.transport.handle_async_request(request)
+        attempt=self.budget._admit(self.kind,request);started=time.monotonic();outbound_id=uuid4().hex
+        self.budget._receipt(self.kind,attempt,outbound_id,'attempted',started)
+        try:response = await self.transport.handle_async_request(request)
+        except (Exception,asyncio.CancelledError) as exc:
+            self.budget._receipt(self.kind,attempt,outbound_id,'cancelled' if isinstance(exc,asyncio.CancelledError) else 'transport_error',started)
+            raise
+        self.budget._receipt(self.kind,attempt,outbound_id,'http_success' if response.is_success else 'http_error',started,response)
         if 300<=response.status_code<400:
             await response.aclose()
             raise BudgetError('PROVIDER_REDIRECT_DENIED')

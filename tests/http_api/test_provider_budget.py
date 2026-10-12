@@ -30,6 +30,41 @@ class ProviderBudgetTests(unittest.TestCase):
         return httpx.Request('POST', kwargs.get('url',endpoint),
             json={'model':kwargs.get('model','fixture-'+kind), 'input':'fixture'})
 
+    def test_receipts_attribute_attempt_outcome_without_payload_or_billed_count_claims(self):
+        import io
+        from contextlib import redirect_stdout
+        budget=self.budget(); output=io.StringIO()
+        def reply(request):
+            if budget.counts()['chat']==1:raise httpx.ReadTimeout('PRIVATE_EXCEPTION',request=request)
+            return httpx.Response(200,headers={'x-request-id':'fixture-request-2'},json={'private':'PRIVATE_BODY'})
+        guard=budget.guard_sync('chat',httpx.MockTransport(reply))
+        with redirect_stdout(output):
+            with self.assertRaises(httpx.ReadTimeout):guard.handle_request(self.request())
+            guard.handle_request(self.request())
+        rows=[json.loads(line.removeprefix('PROVIDER_REQUEST ')) for line in output.getvalue().splitlines()]
+        self.assertEqual([r['outcome'] for r in rows],['attempted','transport_error','attempted','http_success'])
+        self.assertEqual([r['attempt'] for r in rows],[1,1,2,2])
+        self.assertEqual(rows[-1]['provider_request_id'],'fixture-request-2')
+        self.assertEqual(rows[-1]['configured_model'],'fixture-chat')
+        self.assertIsNone(rows[-1]['upstream_attempts'])
+        self.assertIsNone(rows[-1]['proxy_retries'])
+        self.assertFalse(rows[-1]['client_retry'])
+        self.assertGreaterEqual(rows[-1]['latency_ms'],0)
+        self.assertNotIn('PRIVATE',output.getvalue())
+
+    def test_async_receipts_record_cancellation_and_safe_request_id(self):
+        import io
+        from contextlib import redirect_stdout
+        output=io.StringIO();budget=self.budget()
+        async def reply(request):raise asyncio.CancelledError('PRIVATE_EXCEPTION')
+        async def run():
+            guard=budget.guard_async('embedding',httpx.MockTransport(reply))
+            with self.assertRaises(asyncio.CancelledError):await guard.handle_async_request(self.request('embedding'))
+        with redirect_stdout(output):asyncio.run(run())
+        rows=[json.loads(line.removeprefix('PROVIDER_REQUEST ')) for line in output.getvalue().splitlines()]
+        self.assertEqual([r['outcome'] for r in rows],['attempted','cancelled'])
+        self.assertNotIn('PRIVATE',output.getvalue())
+
     def test_shared_instances_count_failure_timeout_and_success_before_send(self):
         budget = self.budget()
         seen = []

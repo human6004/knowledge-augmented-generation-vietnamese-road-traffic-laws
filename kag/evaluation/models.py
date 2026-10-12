@@ -267,9 +267,11 @@ class EvaluationProtocol:
         if type(self.top_k) is not int or self.top_k < max(self.ks):
             fail('top_k','INVALID_CUTOFF')
         object.__setattr__(self,'ks',tuple(sorted(self.ks)))
-        for name in ('protocol_version','eval_version','metric_policy_version'):
+        for name in ('protocol_version','eval_version'):
             if getattr(self,name) != '1.0':
                 fail(name,'UNSUPPORTED_VERSION')
+        if self.metric_policy_version not in ('1.0','1.1'):
+            fail('metric_policy_version','UNSUPPORTED_VERSION')
         if self.expand is not False or self.rank_semantics != 'channel_projected_returned_top_k':
             fail('rank_semantics','INVALID_RANK_POLICY')
         if self.identity_catalog_hash is not None and (type(self.identity_catalog_hash) is not str or not re.fullmatch('[0-9a-f]{64}',self.identity_catalog_hash)):

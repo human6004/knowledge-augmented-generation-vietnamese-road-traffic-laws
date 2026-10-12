@@ -143,7 +143,7 @@ if (Compare-Object @((Get-ChildItem -LiteralPath $taskEnv['STEP8_EGRESS_CREDENTI
 $taskHash = [Security.Cryptography.SHA256]::Create()
 try { $taskDigest = [BitConverter]::ToString($taskHash.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($taskProxyConfig).Replace("`r`n","`n")))).Replace('-','').ToLowerInvariant() }
 finally { $taskHash.Dispose() }
-if ($taskDigest -ne '29ec31dbc5975f1f72391a7e37c3fe808e5d4ba96f480d9626f9b76d016e17ba') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
+if ($taskDigest -ne '588a97495ec84e273ca0b31935d905634afc54a0302d638b42716a52cdc88211') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
 $taskSamplePin = if ($taskEnv['STEP8_SAMPLE_PROOF_SHA256']) { $taskEnv['STEP8_SAMPLE_PROOF_SHA256'] } else { '' }
 if ($taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256 -ne $taskSamplePin -or ($taskSamplePin -and $taskSamplePin -notmatch '^[0-9a-f]{64}$')) { throw 'Sample serving proof pin mismatch.' }
 if (($taskBrokerUrl -and $taskSamplePin) -or $taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256_FILE -ne $(if ($taskBrokerUrl) { '/run/api-credentials/sample-proof.sha256' } else { '' })) { throw 'Broker SAMPLE proof must use the fixed operator pin file.' }

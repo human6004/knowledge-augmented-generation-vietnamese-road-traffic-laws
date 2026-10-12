@@ -6,7 +6,7 @@ from datetime import date
 from time import perf_counter
 
 from .dataset import canonical_line, sha256, validate_catalog, strict_json
-from .metrics import ranking_metrics, unavailable, answer_metrics, citation_metrics, citation_targets
+from .metrics import ranking_metrics, unavailable, answer_metrics, citation_metrics, citation_targets, source_span_metrics
 from .models import EvaluationRun, QuestionResult, fail, text, boolean
 from .report import start_run, validate_inputs, verify_snapshot, mark_run_error, write_report
 
@@ -50,11 +50,12 @@ def _evidence(values, top_k):
     return {channel:list(dict.fromkeys(v)) for channel,v in projected.items()}
 
 
-def _error(row, exc):
+def _error(row, exc, *, preserve_applicability=False):
     row.status = 'ERROR'
     row.error = {'type':type(exc).__name__,'code':'EXECUTION_ERROR'}
     row.eligibility['metric_eligibility'] = {name:metric.status != 'NOT_APPLICABLE' for name,metric in row.metrics.items()}
-    row.metrics = {name:unavailable('EXECUTION_ERROR') for name in row.metrics}
+    row.metrics = {name:metric if preserve_applicability and metric.status == 'NOT_APPLICABLE' else unavailable('EXECUTION_ERROR')
+                   for name,metric in row.metrics.items()}
 
 
 def evaluate_g1(dataset, retriever, protocol, *, output_dir, identity_catalog=None):
@@ -78,6 +79,13 @@ def evaluate_g1(dataset, retriever, protocol, *, output_dir, identity_catalog=No
             reason = 'NO_GOLD' if not gold else 'GOLD_OUTSIDE_CATALOG' if missing else None
             row.eligibility[channel] = {'eligible':bool(gold) and not missing,'reason':reason,'missing_gold':missing,'declared_gold_count':len(gold)}
             row.metrics.update({channel+'.'+name:unavailable(reason or 'NOT_EXECUTED','NOT_APPLICABLE' if reason else 'UNAVAILABLE') for name in ranking_metrics((),(),protocol.ks)})
+        if protocol.metric_policy_version == '1.1':
+            span_outside = catalog is not None and any(
+                g.doc_id not in catalog['document'] or g.unit_id is not None and g.unit_id not in catalog['unit']
+                or g.sign_id is not None and g.sign_id not in catalog['sign'] for g in record.citation_gold if g.field is not None)
+            row.metrics.update({'source_span.'+name:unavailable('GOLD_OUTSIDE_CATALOG','NOT_APPLICABLE') if span_outside
+                                else unavailable('NOT_EXECUTED') if metric.status == 'OK' else metric
+                                for name,metric in source_span_metrics(record,[],protocol.ks).items()})
         if any(v['eligible'] for v in row.eligibility.values()):
             verify_snapshot(context)
             started = perf_counter()
@@ -87,12 +95,14 @@ def evaluate_g1(dataset, retriever, protocol, *, output_dir, identity_catalog=No
                 values = strict_json(canonical_line(values))
                 row.retrieval = {'evidence':values,'returned_count':len(values),'projections':projections,
                                  'channel_counts':{k:len(v) for k,v in projections.items()},'rank_semantics':protocol.rank_semantics}
+                if protocol.metric_policy_version == '1.1' and not span_outside:
+                    row.metrics.update({'source_span.'+name:metric for name,metric in source_span_metrics(record,values,protocol.ks).items()})
                 for channel,field in CHANNELS.items():
                     if row.eligibility[channel]['eligible']:
                         row.metrics.update({channel+'.'+name:metric for name,metric in ranking_metrics(getattr(record,field),tuple(projections[channel]),protocol.ks).items()})
                 row.status = 'SUCCESS'
             except Exception as exc:
-                _error(row,exc)
+                _error(row,exc,preserve_applicability=protocol.metric_policy_version == '1.1')
             row.latency_ms = (perf_counter()-started)*1000
         else:
             row.reasons = [v['reason'] for v in row.eligibility.values()]
@@ -117,12 +127,13 @@ def _g2_setup(dataset, pipeline, protocol, output_dir, judge):
     return start_run(dataset,protocol,'G2',output_dir)
 
 
-def _g2_row(record):
+def _g2_row(record,protocol):
     row = QuestionResult(record.qid,record.category,record.source_group)
     row.eligibility = {'g2':{'eligible':record.as_of is not None,'reason':None if record.as_of else 'AS_OF_REQUIRED'}}
     empty = {'answer':'','abstained':False}
     names = dict(answer_metrics(record,empty),**citation_metrics(record,()))
-    row.metrics = {name:unavailable('NOT_EXECUTED' if record.as_of else 'AS_OF_REQUIRED') for name in names}
+    row.metrics = {name:metric if protocol.metric_policy_version == '1.1' and metric.status == 'NOT_APPLICABLE'
+                   else unavailable('NOT_EXECUTED' if record.as_of else 'AS_OF_REQUIRED') for name,metric in names.items()}
     if record.as_of is None:
         row.reasons = ['AS_OF_REQUIRED']
     return row
@@ -153,10 +164,12 @@ def _native(result):
     return dict(answer=result.answer,abstained=result.abstained,citations=citations,reason=result.reason)
 
 
-def _g2_success(record,row,result,judge):
+def _g2_success(record,row,result,judge,protocol):
     native = _native(result)
     citations = tuple(native['citations'])
-    row.metrics = dict(answer_metrics(record,native,judge),**citation_metrics(record,citations))
+    row.metrics = dict(answer_metrics(record,native,judge,metric_policy_version=protocol.metric_policy_version),**citation_metrics(record,citations))
+    if protocol.metric_policy_version == '1.1':
+        row.reasons.append('ABSTAINED' if native['abstained'] else 'ANSWERED' if native['answer'].strip() else 'UNANSWERED')
     row.eligibility.update(citation_targets(record,citations))
     row.answer_result = native
     row.status = 'SUCCESS'
@@ -172,16 +185,16 @@ def evaluate_g2(dataset, pipeline, protocol, *, output_dir, judge=None):
     context = _g2_setup(dataset,pipeline,protocol,output_dir,judge)
     rows = []
     for record in dataset.records:
-        row = _g2_row(record)
+        row = _g2_row(record,protocol)
         if record.as_of:
             from kag.legal_solver import answer
             verify_snapshot(context)
             started = perf_counter()
             try:
                 result = answer(record.question,pipeline=pipeline,as_of=date.fromisoformat(record.as_of))
-                _g2_success(record,row,result,judge)
+                _g2_success(record,row,result,judge,protocol)
             except Exception as exc:
-                _error(row,exc)
+                _error(row,exc,preserve_applicability=protocol.metric_policy_version == '1.1')
             row.latency_ms = (perf_counter()-started)*1000
         rows.append(row)
     return _complete(context,rows)
@@ -191,19 +204,19 @@ async def aevaluate_g2(dataset, pipeline, protocol, *, output_dir, judge=None):
     context = _g2_setup(dataset,pipeline,protocol,output_dir,judge)
     rows = []
     for record in dataset.records:
-        row = _g2_row(record)
+        row = _g2_row(record,protocol)
         if record.as_of:
             from kag.legal_solver import aanswer
             verify_snapshot(context)
             started = perf_counter()
             try:
                 result = await aanswer(record.question,pipeline=pipeline,as_of=date.fromisoformat(record.as_of))
-                _g2_success(record,row,result,judge)
+                _g2_success(record,row,result,judge,protocol)
             except asyncio.CancelledError:
                 mark_run_error(context,'CANCELLED')
                 raise
             except Exception as exc:
-                _error(row,exc)
+                _error(row,exc,preserve_applicability=protocol.metric_policy_version == '1.1')
             row.latency_ms = (perf_counter()-started)*1000
         rows.append(row)
     return _complete(context,rows)
