@@ -187,6 +187,30 @@ class CoreTest {
         mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Mức phạt là gì?\"}")).andExpect(status().isServiceUnavailable());
         mvc.perform(get("/api/chat").header("Authorization","Bearer "+user)).andExpect(status().isOk()).andExpect(jsonPath("$[0].state").value("UNAVAILABLE")).andExpect(jsonPath("$[0].answer").value(""));
     }
+    @Test @Transactional void verifiedNativeAbstentionPersistsRestSseAndHistoryWithoutReclassifyingLegacyRows() throws Exception {
+        String user=register(); UUID owner=UUID.fromString(body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn()).path("id").asText());
+        var legacy=new ChatMessage(); legacy.ownerId=owner; legacy.question="Không đủ căn cứ trong lần gọi lịch sử"; legacy.state="UNAVAILABLE"; chats.saveAndFlush(legacy);
+        var wire=streamWire();
+        try(var fixture=wire.new Fixture()) {
+            fixture.status=503; fixture.body=KagClientTest.nativeAbstention(); fixture.identityHeaders=false; var actual=wire.client(fixture);
+            when(kag.query(any())).thenAnswer(call->actual.query(call.getArgument(0))); bridge(wire,fixture);
+            var rest=body(mvc.perform(post("/api/chat").header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"message\":\"Graph thiếu căn cứ?\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("KAG_ABSTAINED")).andExpect(jsonPath("$.answer").value("")).andExpect(jsonPath("$.citations").isEmpty()).andReturn());
+            var output=new ByteArrayOutputStream(); chat.stream(owner,new ChatRequest("Câu hỏi ngoài phạm vi chưa được phân loại","")).writeTo(output);
+            String stream=output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(stream.startsWith("event: done\n")); assertFalse(stream.contains("event: error")); assertFalse(stream.contains("event: delta"));
+            var done=json.readTree(stream.split("data: ",2)[1].strip());
+            assertEquals("KAG_ABSTAINED",done.path("state").asText()); assertEquals("",done.path("answer").asText()); assertTrue(done.path("citations").isEmpty());
+            var rows=body(mvc.perform(get("/api/chat").header("Authorization","Bearer "+user)).andExpect(status().isOk()).andReturn());
+            assertEquals(3,rows.size()); int abstained=0;
+            for(var row:rows) {
+                if(row.path("id").asText().equals(legacy.id.toString())) assertEquals("UNAVAILABLE",row.path("state").asText());
+                else {assertEquals("KAG_ABSTAINED",row.path("state").asText());assertEquals("",row.path("answer").asText());assertTrue(row.path("citations").isEmpty());abstained++;}
+            }
+            assertEquals(2,abstained); assertEquals(2,fixture.calls.get());
+            assertEquals("KAG_ABSTAINED",chats.findById(UUID.fromString(rest.path("id").asText())).orElseThrow().state);
+        }
+    }
     @ParameterizedTest @ValueSource(ints={401,403,422,503})
     @Transactional void realH1ErrorsNeverPersistAnsweredChatOrEmitDone(int status) throws Exception {
         var owner=streamOwner(); var wire=streamWire();

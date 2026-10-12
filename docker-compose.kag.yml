@@ -235,8 +235,10 @@ services:
     sysctls:
       net.ipv4.ip_forward: "0"
     environment:
-      KAG_PROVIDER_BIND: ${STEP8_PROVIDER_BIND:-127.0.0.1}
-      KAG_PROVIDER_CLIENT: ${STEP8_PROVIDER_CLIENT:-127.0.0.1}
+      KAG_PROVIDER_ENABLED: ${STEP8_QUERY_PROFILE:+1}
+      KAG_CHAT_PROXY_HOST: ${STEP8_CHAT_PROXY_HOST:-host.docker.internal}
+      KAG_CHAT_PROXY_PORT: ${STEP8_CHAT_PROXY_PORT:-8317}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
       - type: bind
         source: ./docker/kag-ingress/haproxy.cfg

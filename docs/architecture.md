@@ -2,10 +2,10 @@
 
 Core Python chuyển nguồn pháp lý thành graph có provenance, truy hồi evidence
 và trả kết quả pháp lý có kiểm chứng nguồn. Evaluation đo Retriever/Solver
-hiện tại. WebApp là ứng dụng nghiệp vụ React/Spring riêng, đã có HTTP client
-nhưng chưa có query adapter Python để nối end to end.
+hiện tại. WebApp là ứng dụng nghiệp vụ React/Spring riêng, nối qua KagClient,
+HAProxy và Python HTTP API tại `kag/http_api/`.
 
-Tài liệu mô tả code hiện hữu và policy đề xuất riêng. Production WRITE vẫn
+Tài liệu mô tả code hiện hữu và giới hạn SAMPLE. Production WRITE vẫn
 BLOCKED. Bootstrap hiện xử lý initialize-first, preload-builder và preload local
 solver; [regression import-order](../tests/runtime/test_bootstrap.py) kiểm origins/
 registry và idempotence của cả ba thứ tự.
@@ -16,21 +16,22 @@ Implementation, offline checks, graph live và benchmark pháp lý là bằng ch
 | Package/module | Trách nhiệm và ranh giới |
 | --- | --- |
 | `kag/builder/` | Kiểm source/contract, deterministic graph plan, codec, scope; adapter writer và resilient vectorizer trên API upstream. Không tự cấp quyền production WRITE. |
-| `kag/runner.py` | Điều phối bounded batches, replay/provider policy tường minh, barriers và run/verify. Public runner hiện chặn mọi WRITE. |
+| `kag/runner.py` | Điều phối bounded batches, replay/provider policy tường minh, barriers và run/verify. WRITE chỉ có nhánh FRESH_SAMPLE được kiểm soát; production vẫn chặn. |
 | `kag/run_state.py` | State, SQLite ledger/outbox, append-only evidence, resume và lock. Không blind resend INTENT chưa chắc hoàn tất. |
 | `kag/backend_identity.py` | Session/proof live: project, route, container/network và physical database identity. Receipt không thay active authority. |
 | `kag/verify.py` | Parameterized direct Neo4j readback và exact graph verification; có thể ghi verification artifacts ngoài repo. |
 | `kag/retriever/` | Query embedding qua callable do caller cung cấp, bốn vector targets, exact hydration, bounded one-hop expansion. Không gọi Solver. |
 | `kag/legal_solver.py` | Public legal answering, evidence/candidate binding, legal executors và safe generator; dùng orchestrator upstream. |
 | `kag/legal_prompts.py` | Planning/deduction prompts, parser và validation legal candidate. Prompt nội dung giữ nguyên. |
-| `kag/evaluation/` | Typed dataset, freeze/import, G1/G2, eligibility, metrics và báo cáo. Không tự tạo runtime/provider. |
+| `kag/evaluation/` | Typed dataset, generation từ draft/source span, review/freeze/import, G1/G2, eligibility, metrics và báo cáo. Không tự tạo runtime/provider. |
+| `kag/http_api/` | HTTP contract/auth, serving proof, runtime admission/cleanup, broker, provider budget và inspection SAMPLE. |
 | `kag/bootstrap.py` | Một boundary kiểm interpreter/vendor và ghép namespace local/upstream. |
 | `kag/schema/`, `kag/config/` | Schema/contract chuẩn và config examples default DENY/NO_OP. Config không chứa proof cấp WRITE. |
-| `WebApp/` | Nghiệp vụ, publication, auth, MySQL/Redis/MinIO, chat HTTP client; query adapter còn thiếu. |
+| `WebApp/` | Nghiệp vụ, publication, auth, MySQL/Redis/MinIO, chat/citations và Admin inspection qua API thật. |
 | `vendor/KAG/` | Source OpenSPG KAG đã pin; không chỉnh sửa hoặc đặt code ứng dụng vào vendor. |
 
-`benchmark/` và root `scripts/` là workspace reserved có tài liệu dẫn tới code
-hoạt động; không phải bằng chứng evaluation/runtime chưa được triển khai.
+Implementation benchmark nằm tại `kag/evaluation/`; `benchmark/README.md` hướng
+dẫn sử dụng. Các thư mục reserved con và root `scripts/` hiện không có implementation.
 
 ## Luồng dữ liệu và transport
 
@@ -42,7 +43,7 @@ data + schema/contract + protected relation inputs
 
 question → pinned iterative planner/pipeline
             ├→ LegalRetrieverExecutor → Retriever → query embedding
-            │                                    → direct Neo4j vector/readback
+            │                                    → Neo4j vector/readback (SAMPLE qua broker)
             │                                    → exact source evidence
             ├→ LegalDeduceExecutor → evidence-bound legal candidate
             └→ SafeLegalGenerator → AnswerResult / safe abstention
@@ -50,15 +51,18 @@ question → pinned iterative planner/pipeline
 typed evaluation dataset → existing Retriever or public answer/aanswer
                          → eligible metrics + immutable reports outside repo
 
-React → Spring monolith → KagClient → query HTTP adapter [absent] → legal API
+React → Spring monolith → KagClient → HAProxy → Python HTTP API → legal API
 ```
 
 OpenSPG SDK phục vụ project/schema và writer transport. Local
 [`Neo4jRetrievalClient`](../kag/retriever/neo4j.py) kế thừa
 [`Neo4jReadClient`](../kag/verify.py), POST trực tiếp tới Neo4j
 `/db/{database}/tx/commit` với allowlisted read statements; không đi qua
-OpenSPG Server cho mọi read. Hai stack Compose độc lập: OpenSPG có metadata
-MySQL, Neo4j, MinIO; WebApp có MySQL nghiệp vụ, Redis, MinIO riêng.
+OpenSPG Server cho mọi read. SAMPLE Community dùng `BrokerRetrievalClient`:
+API gửi operation DTO allowlisted tới broker trong OpenSPG server, không giữ
+DB credential hoặc truy cập trực tiếp DB. Hai Compose khai báo 11 services:
+OpenSPG MySQL/Neo4j/MinIO/server + Python API/HAProxy; WebApp MySQL/Redis/MinIO/
+Spring/frontend. Storage hai stack tách biệt.
 
 Builder kiểm required/enum/native Integer, ghi node trước cạnh và gộp provenance
 xác định. Writer giữ transport upstream nhưng phục hồi Integer và kiểm scope,
@@ -151,10 +155,12 @@ không là benchmark quality hoặc production release. Xem [runner](runner.md).
 Library answering: `kag.legal_solver.build_pipeline(retriever, llm)`,
 `answer(question, pipeline=..., as_of=...)`, `await aanswer(...)`.
 Retriever là `kag.retriever.retriever.Retriever.retrieve`.
-Đây là library API cần dependencies/backend do caller cung cấp; không có
-HTTP query server hoặc lệnh `serve` hiện hữu.
+Library API cần dependencies/backend do caller cung cấp. HTTP server hiện hữu:
+`python -B -m kag.http_api.server`, chạy bằng API image/Compose với external
+secrets, sealed release và proof. Khởi động server không tự cấp serving authority.
 
-Evaluation CLI chỉ xử lý dataset; lệnh validate/freeze/import-legacy và quy ước
+Evaluation CLI chỉ xử lý dataset; lệnh validate/freeze/import-legacy/generate/
+validate-generated và quy ước
 workspace được duy trì tại [benchmark](../benchmark/README.md#lệnh-dataset-offline).
 
 Freeze/import ghi output mới, không overwrite input. Library G1/G2 nhận runtime
@@ -166,7 +172,9 @@ graph khi start Compose.
 
 [`kag/evaluation`](../kag/evaluation/__init__.py) cung cấp `load_dataset`,
 `validate_dataset`, `freeze_dataset`, `import_legacy`, `evaluate_g1`,
-`evaluate_g2`, `aevaluate_g2`, `summarize`, `write_report`.
+`evaluate_g2`, `aevaluate_g2`, `summarize`, `write_report`; generation ở
+`generation.py` lấy gold từ exact source span, không dùng model tự tạo gold.
+Bộ câu hỏi chính thức chưa hoàn thành; dữ liệu SAMPLE vẫn PROVISIONAL.
 
 - **G1 retrieval** dùng Retriever hiện tại, exact identities và ranking theo
   channel; gold/QID/category nằm trong evaluation accounting, không gửi vào retrieval.
@@ -208,50 +216,46 @@ trong `docs/superpowers/specs/` và Git giữ lịch sử. Product-facing names 
 Builder, Retrieval, Legal Answering, Evaluation, Runtime Verification; serialized
 scope/stage/gate names như `C4_3A_MANIFEST_SAMPLE`/`SOURCE_ONLY_DRY_RUN` không đổi.
 
-## Hợp đồng HTTP và chính sách tương thích đề xuất
+## Hợp đồng HTTP và chính sách tương thích
 
-**Hiện hữu:** Java `KagClient` POST `/v1/query` hoặc `/v1/query/stream` tới
-`KAG_BASE_URL` (mặc định local8000/Compose host.docker.internal8000). Request
-là `{user_id,message,context_id,schema_contract:{namespace,schema_sha256,contract_sha256}}`.
-REST cần answer nonblank≤20000 và 1..20 citations `{doc_id,unit_id,quote}`.
-ChatService kiểm toàn bộ: document published/effective, unit published thuộc
-đúng doc, quote nonblank exact substring `LegalUnit.text`. SSE upstream chỉ
-delta/done; done mang full REST result. Unknown/error event hoặc thiếu done
-bị reject; Java tự tạo downstream error. Frontend hiện dùng REST.
+Python API đã triển khai tại [app.py](../kag/http_api/app.py),
+[contract.py](../kag/http_api/contract.py) và [runtime.py](../kag/http_api/runtime.py).
+Java KagClient dùng ingress: local `http://127.0.0.1:38000`, Docker
+`http://host.docker.internal:38000`; không gọi cổng OpenSPG.
 
-**Native:** `AnswerResult` có answer, tuple Citation, abstained và reason.
-`to_dict()` hiện xuất answer/citations/abstained, không xuất reason. Citation
-giữ doc_id, optional unit_id/sign_id, evidence_id, field, start/end và quote.
-Abstention có empty citations; document/sign support có thể không có unit_id
-hoặc quote thuộc field khác text. Toàn miền kết quả này không tương thích
-Java unit-only contract. Native answer cũng có thể vượt Java size/count bounds.
+- Query REST/SSE nhận `{user_id,message,context_id,schema_contract}`, context_id
+  phải rỗng. Backend gửi query token và headers release/snapshot/as_of; browser
+  chỉ dùng JWT WebApp. Inspect dùng token riêng, không được delegate user.
+- API kiểm auth, schema, release, physical backend, graph/source hashes,
+  publication và ngày truy vấn; admission/cleanup có deadline và slot chung.
+  SAMPLE Community cần sealed broker/query proof; production không được mở
+  bằng biến môi trường.
+- Native Solver giữ `AnswerResult` cùng document/unit/sign citations. Projection
+  v1 chỉ trả non-abstained và mọi citation là LegalUnit.text whole-field,
+  exact span/evidence identity và đủ publication. Không bỏ support citations,
+  gán unit_id giả hoặc cắt nguồn để ép response thành công.
+- REST success: `answer` tối đa 20.000 UTF-16 units, 1..20 citations với
+  `doc_id,unit_id,sign_id,evidence_id,field,start,end,quote`.
+  `sign_id=null`, `field=text`, `start=0`; end dùng Unicode code points.
+  Native abstention → `KAG_ABSTAINED`; không biểu diễn được →
+  `V1_RESULT_UNREPRESENTABLE`. Java quy lỗi thành UNAVAILABLE và không lưu
+  câu trả lời chưa qua publication/citation validation.
+- SSE hiện phát `done` từ kết quả đã kiểm; Java còn nhận legacy `delta/done`.
+  Không stream candidate LLM chưa xác minh. Frontend hiện dùng REST.
+- `/v1/health` liveness riêng với readiness query/retrieve/vector.
+  `/v1/operations/sample`, `/v1/pipeline/status`, `/v1/benchmark/datasets`
+  phục vụ Admin inspection; không có endpoint chạy builder/benchmark.
 
-**Policy đề xuất, chưa triển khai:**
+SAMPLE graph 32 nodes / 22 edges / 42 vectors, nguồn/proof/publication có scope
+và thời hạn riêng. Chat/citations và Admin SAMPLE đã nghiệm thu trong các lượt
+11–12/10/2026; bằng chứng lưu ngoài repo, không tự xác nhận runtime hiện tại.
+Hai Compose khai báo 11 services, không đồng nghĩa tất cả đang healthy.
 
-1. Giữ public Solver/metrics/prompts nguyên trạng; adapter là projection được
-   kiểm chứng, không sửa semantics để Java chấp nhận. So khớp schema identity
-   trước inference; user_id/context_id không tự là authorization/evidence authority.
-2. Legacy v1 chỉ trả success nếu native non-abstained và **mọi** citation là
-   LegalUnit.text có unit/doc mapping, exact quote và whole-field span hợp lệ,
-   được WebApp xác nhận publication/effectivity; answer/citations không vượt bounds.
-   Không drop support citation, gán giả unit_id, truncate nguồn hoặc rerun để ép PASS.
-3. Abstained, unsupported citation kind/source mismatch hoặc vượt bounds phải
-   fail closed toàn câu trả lời. Đề xuất adapter trả non-2xx có code riêng;
-   Java hiện gộp non-2xx thành 503/UNAVAILABLE, không có trạng thái abstention.
-   Đây là giới hạn compatibility có chủ ý, chưa phải hành vi adapter hiện hữu.
-4. Để hỗ trợ đầy đủ kết quả native, một contract version tiếp theo cần typed
-   answered/abstained/unavailable và citation kinds/source snapshots có kiểm chứng.
-   Chỉ triển khai sau quyết định H1 riêng với Java/frontend tests; không đổi v1 im lặng.
-5. SSE chỉ phát nội dung đã validated; không stream unverified LLM candidates.
-   Legacy stream chỉ delta/done, done bắt buộc; không thêm upstream error event
-   mà Java chưa hiểu. Health/auth/context/as_of policy cần chốt riêng; adapter
-   health path hiện chưa tồn tại, không suy readiness từ actuator/MySQL/Redis/MinIO.
-
-Source references: [`KagClient`](../WebApp/backend/src/main/java/vn/luatgt/integration/KagClient.java),
-[`ChatService`](../WebApp/backend/src/main/java/vn/luatgt/service/ChatService.java),
-[`LegalUnitService`](../WebApp/backend/src/main/java/vn/luatgt/service/LegalUnitService.java),
-[`native Solver`](../kag/legal_solver.py), [`schema packaging`](../WebApp/backend/pom.xml).
-OpenSPG cổng28887 không cung cấp các query endpoints này. **H1/H2 NOT_STARTED.**
+Xem [KagClient](../WebApp/backend/src/main/java/vn/luatgt/integration/KagClient.java),
+[ChatService](../WebApp/backend/src/main/java/vn/luatgt/service/ChatService.java),
+[Docker](../docker/README.md) và [benchmark](../benchmark/README.md).
+Full native contract cho document/sign/abstention trên WebApp chưa triển khai;
+không thay semantics v1 trong cleanup.
 
 ## Giới hạn kiểm chứng và structural debt
 
@@ -273,8 +277,7 @@ official legal-domain benchmark không được gộp thành PASS. Xem
 [runtime checks](runtime.md#kiểm-tra-offline).
 
 Hướng dẫn chạy và ràng buộc fixtures: [tests](../tests/README.md).
-Debt còn lại: lazy import cycles; shared vector
-contract đặt trong resilient vectorizer; private upstream coupling; index
+Debt còn lại: lazy import cycles; private upstream coupling; index
 verifier/retriever gates khác nhau; Solver metadata support và G2 field allowlist
 khác nhau; native answer/Java contract gap. Không xử lý các thay đổi behavior
 hoặc package trong cleanup tài liệu. Data/schema/gold/prompts/vendor giữ nguyên;

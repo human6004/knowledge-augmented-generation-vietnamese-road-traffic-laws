@@ -37,6 +37,8 @@ foreach ($taskStack in $taskStacks) {
         $taskVolumes[$taskVolume.Value.name] = $true
     }
     if ($taskStack -eq 'webapp') {
+        if ($taskConfig.services.backend.environment.KAG_BASE_URL -ne 'http://kag-ingress:8080') { throw 'WebApp must use the KAG ingress Docker service name.' }
+        if ((Compare-Object @($taskConfig.services.backend.networks.PSObject.Properties.Name) @('default','kag-ingress')) -or !$taskConfig.networks.'kag-ingress'.external -or $taskConfig.networks.'kag-ingress'.name -notmatch '^kag-s8-[a-z0-9][a-z0-9-]*_ingress$') { throw 'Backend must reuse the selected external KAG ingress network.' }
         if ($taskConfig.services.backend.environment.DB_URL -notmatch '^jdbc:mysql://mysql:3306/luatgt\?') { throw 'Backend phải kết nối MySQL của WebApp.' }
         if ($taskConfig.services.mysql.environment.MYSQL_USER -ne 'luatgt') { throw 'Backend phải dùng tài khoản luatgt, không dùng root.' }
         if ($taskConfig.volumes.'kag-data'.name -ne 'webapp_kag-data') { throw 'MySQL WebApp phải giữ volume webapp_kag-data.' }

@@ -475,6 +475,40 @@ def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float
     return runtime
 
 
+def _query_failure_diagnostic(exc):
+    """Keep exception provenance without messages, prompts, responses or locals."""
+    import traceback
+    root = Path(__file__).resolve().parents[2]
+    def frames(error):
+        result = []
+        for frame in traceback.extract_tb(error.__traceback__):
+            try:
+                filename = Path(frame.filename).relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if filename.startswith(('kag/', 'vendor/KAG/kag/')):
+                result.append(dict(file=filename, line=frame.lineno, function=frame.name))
+        return result[-12:]
+    value = dict(error_type=type(exc).__name__, frames=frames(exc), inner_errors=[])
+    seen = {id(exc)}
+    inner = exc.__cause__ if exc.__cause__ is not None else exc.__context__
+    while inner is not None and id(inner) not in seen and len(value['inner_errors']) < 4:
+        seen.add(id(inner))
+        locations = frames(inner)
+        stage, category = 'invocation', 'INVOCATION_FAILED'
+        if any(f['file'] == 'kag/legal_prompts.py' for f in locations):
+            stage = 'legal_parse'
+            category = ('LEGAL_SUBQUERY_REJECTED' if any(f['function'] == 'validate_subquery' for f in locations)
+                        else 'LEGAL_RESPONSE_INVALID')
+        elif any(f['file'].startswith('vendor/KAG/kag/common/llm/') for f in locations):
+            stage, category = 'model_call', 'MODEL_CALL_FAILED'
+        elif any(f['function'] in ('call_with_json_parse', 'acall_with_json_parse') for f in locations):
+            stage, category = 'json_parse', 'JSON_PARSE_FAILED'
+        value['inner_errors'].append(dict(type=type(inner).__name__, stage=stage, category=category, frames=locations))
+        inner = inner.__cause__ if inner.__cause__ is not None else inner.__context__
+    return value
+
+
 async def run_query(runtime: RequestRuntime, question: str, as_of):
     runtime.budget.remaining()
     if runtime.closed or question != runtime.question or as_of != runtime.as_of:
@@ -483,11 +517,8 @@ async def run_query(runtime: RequestRuntime, question: str, as_of):
     try:
         result = await aanswer(question,pipeline=runtime.pipeline,as_of=as_of)
     except Exception as exc:
-        import json,traceback
-        frames=[dict(file=frame.filename.removeprefix('/workspace/'),line=frame.lineno,function=frame.name)
-                for frame in traceback.extract_tb(exc.__traceback__)
-                if frame.filename.startswith(('/workspace/kag/','/workspace/vendor/KAG/kag/'))]
-        print('SAMPLE_QUERY_FAILURE '+json.dumps(dict(error_type=type(exc).__name__,frames=frames[-12:])),flush=True)
+        import json
+        print('SAMPLE_QUERY_FAILURE '+json.dumps(_query_failure_diagnostic(exc)),flush=True)
         runtime.budget.remaining()
         raise RuntimeFailure('PROVIDER_ERROR') from None
     runtime.budget.remaining()

@@ -1,6 +1,6 @@
 # LuậtGT
 
-Ứng dụng tra cứu giao thông, quản lý văn bản/biển báo và ôn thi hạng B. Frontend React dùng API Spring Boot thật; backend là monolith/MVC. Core KAG Python đã có Builder, Legal Retriever/Solver và Evaluation Framework. HTTP query adapter chưa được triển khai; chat báo chưa khả dụng khi không có dịch vụ tương thích. Xem [kiến trúc sản phẩm](../docs/architecture.md).
+Ứng dụng tra cứu giao thông, quản lý văn bản/biển báo và ôn thi hạng B. Frontend React dùng API Spring Boot thật; backend là monolith/MVC. Core Python có Builder, KAGIterativePlanner/Pipeline, Legal Retriever/Deduce/Safe Generator, Question Generation/Evaluation và HTTP API. Chat/citations và Admin SAMPLE đã có nghiệm thu 11–12/10/2026; không phải production acceptance. Xem [kiến trúc sản phẩm](../docs/architecture.md).
 
 ## Cấu trúc
 
@@ -14,9 +14,9 @@
 
 Bạn tự chạy các lệnh dưới đây từ thư mục gốc repository (thư mục cha của `WebApp`). Nghiệp vụ WebApp chạy độc lập với engine OpenSPG/core Python.
 
-Nếu `.env` đã tồn tại từ cấu hình cũ, chạy `./docker/init-env.ps1 -Update` để bổ sung biến WebApp còn thiếu. WebApp dùng project `webapp` và `.env`; engine OpenSPG dùng Compose riêng, project `kag` và `.env.kag`, xem [hướng dẫn Docker](../docker/README.md#chạy-kag--openspg-độc-lập). API chat Python vẫn cần triển khai riêng. Các tính năng WebApp khác chạy được khi KAG tắt.
+Nếu `.env` đã tồn tại, `./docker/init-env.ps1 -Update` chỉ bổ sung biến WebApp còn thiếu. WebApp dùng project `webapp`; KAG dùng project `kag-s8-*` và external Step8 env, không dùng `.env.kag` lịch sử. Hai Compose khai báo 5 + 6 = 11 services. Cần image cache, graph/release/proof, provider/proxy và publication hợp lệ trước khi phục vụ SAMPLE; clone repo chưa đủ. Các tính năng WebApp khác chạy được khi KAG tắt.
 
-Khởi tạo môi trường/build stack theo [Docker WebApp](../docker/README.md#chạy-webapp-độc-lập).
+Điều kiện chạy và kiểm cấu hình tại [Docker WebApp](../docker/README.md#webapp) và [KAG primary Compose](../docker/README.md#kag-primary-compose).
 Sau khi stack đã chạy, từ root repository thực hiện workflow nghiệp vụ:
 
 ```powershell
@@ -42,14 +42,15 @@ Script kiểm tra tạo tài khoản thử và giữ lịch sử học/thi của
 - Biển báo: nhập JSON/CSV/XLSX hàng loạt, giữ metadata pháp lý, ghép ZIP PNG/JPEG theo mã biển. Chưa có bộ dữ liệu/ảnh biển báo đầy đủ do người dùng cung cấp; ảnh trong bộ câu hỏi không tự trở thành thư viện biển báo.
 - Văn bản: metadata, PDF nguồn, nháp/xuất bản, lịch sử sửa và quan hệ thay thế/sửa đổi có ngày hiệu lực; mức phạt có cấu trúc gắn với văn bản đã xuất bản/còn hiệu lực.
 - Ôn tập, tiến độ và thi thử chấm bằng đáp án server đã kiểm duyệt, bản chụp bất biến khi tạo bài và thời gian server. Hạng B ghim cấu hình bộ mẫu `B-2025-06`.
-- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Trang cấu hình KAG đọc contract chung tại [`kag/schema/schema_contract.json`](../kag/schema/schema_contract.json), namespace `VietRoadTraffic`; schema có 75 thuộc tính logical, 69 thuộc tính khai báo và `id/name` kế thừa OpenSPG `Thing`. Backend đóng gói contract/schema, kiểm tra fingerprint schema theo `runtime_contract.schema_sha256` và gửi identity `{namespace, schema_sha256, contract_sha256}` cho adapter KAG. Quản lý đơn vị pháp lý theo `unit_id`, `doc_id`, `parent_id` và giữ metadata nguồn. Các trang pipeline/graph/benchmark KAG chưa có management integration; điều này không có nghĩa core Builder/Retriever/Solver/evaluation chưa tồn tại.
+- Quản trị: tài khoản, nhập dữ liệu, báo cáo, phản hồi/chat cần xử lý và kiểm tra kết nối hạ tầng thật. Trang cấu hình KAG đọc contract chung tại [`kag/schema/schema_contract.json`](../kag/schema/schema_contract.json), namespace `VietRoadTraffic`; schema có 75 thuộc tính logical, 69 thuộc tính khai báo và `id/name` kế thừa OpenSPG `Thing`. Backend đóng gói contract/schema, kiểm tra fingerprint schema theo `runtime_contract.schema_sha256` và gửi identity `{namespace, schema_sha256, contract_sha256}` cho adapter KAG. Quản lý đơn vị pháp lý theo `unit_id`, `doc_id`, `parent_id` và giữ metadata nguồn. Admin Graph đọc graph SAMPLE; Pipeline hiển thị slot runtime/receipt; Benchmark đọc dataset eligibility và kết quả đã có. Các trang không chạy build/benchmark.
 
 Native `AnswerResult` có abstention và document/sign support citations, còn Java
 chỉ chấp nhận 1..20 LegalUnit citations đã xuất bản/còn hiệu lực với exact quote.
 Không thể nối bằng cách serialize trực tiếp hoặc bỏ citations không vừa schema.
-[Chính sách HTTP đề xuất](../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích-đề-xuất)
-giữ fail-closed và tách legacy v1 với full native contract tương lai.
-H1/H2 chưa bắt đầu; health MySQL/Redis/MinIO không chứng minh KAG readiness.
+[Hợp đồng HTTP](../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích)
+giữ fail-closed và tách v1 với full native contract tương lai.
+Health MySQL/Redis/MinIO không chứng minh KAG readiness. SAMPLE gồm 32 nodes /
+22 edges / 42 vectors; bộ câu hỏi chính thức chưa hoàn thành. Production WRITE BLOCKED.
 
 ## Phát triển local
 

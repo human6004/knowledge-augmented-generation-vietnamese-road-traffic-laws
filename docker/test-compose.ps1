@@ -18,6 +18,7 @@ try {
     [IO.File]::WriteAllText($taskInspectFile, ('i' * 64), [Text.Encoding]::ASCII)
     Add-Content -LiteralPath "$taskTempRoot/.env" -Value "KAG_TOKEN_FILE=$($taskTokenFile.Replace('\', '/'))"
     Add-Content -LiteralPath "$taskTempRoot/.env" -Value "KAG_INSPECT_TOKEN_FILE=$($taskInspectFile.Replace('\', '/'))"
+    Add-Content -LiteralPath "$taskTempRoot/.env" -Value 'STEP8_KAG_PROJECT=kag-s8-init-test'
     $taskWebappHash = (Get-FileHash "$taskTempRoot/.env").Hash
     $taskKagHash = (Get-FileHash "$taskTempRoot/.env.kag").Hash
     & "$taskTempRoot/docker/init-env.ps1" -Update
@@ -28,6 +29,9 @@ try {
         & $Docker compose --project-directory $taskRoot --env-file "$taskTempRoot/$($taskPair[1])" -f "$taskRoot/$($taskPair[0])" config --quiet
         Assert-Task ($LASTEXITCODE -eq 0) "$($taskPair[0]) phải kiểm tra được với env riêng, không cần env của stack còn lại."
     }
+    $taskWebappConfig = (& rtk proxy docker compose --project-directory $taskRoot --env-file "$taskTempRoot/.env" -f "$taskRoot/docker-compose.yml" config --format json) -join "`n" | ConvertFrom-Json
+    Assert-Task ($taskWebappConfig.services.backend.environment.KAG_BASE_URL -eq 'http://kag-ingress:8080') 'WebApp must use the Docker service name, not the host gateway.'
+    Assert-Task ($taskWebappConfig.networks.'kag-ingress'.external -and $taskWebappConfig.networks.'kag-ingress'.name -eq 'kag-s8-init-test_ingress') 'WebApp must reuse the selected KAG ingress network.'
     $taskFixtureEnv = Join-Path $taskTempRoot 'kag.env'
     $taskGenerated = Join-Path $taskTempRoot 'step8-init'
     $taskWheelEnv = ([IO.File]::ReadAllLines($KagEnvFile) | Where-Object { $_ -match "^STEP8_HTTP_WHEELS_DIR='([^']+)'$" })
@@ -47,7 +51,7 @@ try {
         $taskFixtureText = $taskFixtureText -replace "(?m)^$taskKey='[^']*'\r?\n?", ''
     }
     $taskFixtureText += "`nSTEP8_BROKER_CREDENTIALS_DIR='$($taskBrokerFixture.Replace('\','/'))'`nSTEP8_BROKER_URL=''`nSTEP8_BROKER_DATABASE_ID=''`nSTEP8_BROKER_SERVER_ID=''`n"
-    $taskFixtureText += "STEP8_QUERY_PROFILE=''`nSTEP8_PROVIDER_BIND='127.0.0.1'`nSTEP8_PROVIDER_CLIENT='127.0.0.1'`n"
+    $taskFixtureText += "STEP8_QUERY_PROFILE=''`n"
     if ($taskFixtureText -notmatch "(?m)^STEP8_API_IMAGE='([^']*)'") { throw 'Fixture API image declaration missing.' }
     $taskFixtureImage = $Matches[1]
     $taskFixtureImageId = & rtk proxy docker image inspect --format '{{.Id}}' $taskFixtureImage 2>$null
@@ -61,15 +65,29 @@ try {
         Add-Content -LiteralPath $taskFixtureEnv -Value "STEP8_API_IMAGE_ID='sha256:d854da5ecb3d9e26b110723ffc466e3568b6b8b1ed765fc49265f066c43c8d2a'"
     }
     & "$PSScriptRoot/check-step8-config.ps1" -EnvFile $taskFixtureEnv -ComposeFile "$taskRoot/docker-compose.kag.yml"
-    & "$PSScriptRoot/check-step8-config.ps1" -EnvFile $taskFixtureEnv -ComposeFile "$taskRoot/docker-compose.step8.kag.yml"
     & "$PSScriptRoot/check-config.ps1" -Docker $Docker -Stack All -WebAppEnvFile "$taskTempRoot/.env" -KagEnvFile $taskFixtureEnv
+    $taskPortableEnv = Join-Path $taskTempRoot 'portable-kag.env'
+    $taskPortableText = [IO.File]::ReadAllText($taskFixtureEnv) -replace "(?m)^STEP8_KAG_PROJECT='[^']*'", "STEP8_KAG_PROJECT='kag-s8-other-machine'"
+    $taskPortableText = $taskPortableText -replace "(?m)^STEP8_CHAT_PROXY_(HOST|PORT)='[^']*'\r?\n?", ''
+    $taskPortableText += "`nSTEP8_CHAT_PROXY_HOST='receiver-proxy.internal'`nSTEP8_CHAT_PROXY_PORT='9317'`n"
+    [IO.File]::WriteAllText($taskPortableEnv,$taskPortableText,[Text.UTF8Encoding]::new($false))
+    $taskPortableConfig = (& rtk proxy docker compose --project-directory $taskRoot --env-file $taskPortableEnv -f "$taskRoot/docker-compose.kag.yml" config --format json) -join "`n" | ConvertFrom-Json
+    Assert-Task ($LASTEXITCODE -eq 0 -and $taskPortableConfig.networks.ingress.name -eq 'kag-s8-other-machine_ingress' -and $taskPortableConfig.services.'kag-ingress'.environment.KAG_CHAT_PROXY_HOST -eq 'receiver-proxy.internal' -and $taskPortableConfig.services.'kag-ingress'.environment.KAG_CHAT_PROXY_PORT -eq '9317') 'Another project/proxy must interpolate without author addresses.'
+    $taskIpEnv = Join-Path $taskTempRoot 'fixed-ip.env'
+    $taskIpText = [IO.File]::ReadAllText($taskFixtureEnv) -replace "(?m)^STEP8_CHAT_PROXY_HOST='[^']*'\r?\n?", ''
+    $taskIpText += "`nSTEP8_CHAT_PROXY_HOST='172.22.0.4'`n"
+    [IO.File]::WriteAllText($taskIpEnv,$taskIpText,[Text.UTF8Encoding]::new($false))
+    $taskRejected = $false
+    try { & "$PSScriptRoot/check-step8-config.ps1" -EnvFile $taskIpEnv -ComposeFile "$taskRoot/docker-compose.kag.yml" }
+    catch { $taskRejected = $_.Exception.Message -eq 'Provider proxy requires a configurable DNS host and valid port.' }
+    Assert-Task $taskRejected 'Fixed provider IP must fail the portability guard.'
     $taskComposeText = [IO.File]::ReadAllText("$taskRoot/docker-compose.kag.yml")
     $taskGuardCases = @(
         @('db-network','networks: [readbus]','networks: [private]','Exact private/readbus/ingress service network memberships required.'),
         @('java-bind','--server.address=127.0.0.1','--server.address=0.0.0.0','OpenSPG Java must use the fixed supervisor and loopback-only HTTP bind.'),
         @('broker-mount','target: /run/broker-credentials','target: /run/not-approved','Separate exact read-only broker mounts required.')
         @('ledger-mount','target: /provider-state/attempts.json','target: /provider-state/other','Unexpected writable/host-control API mount.'),
-        @('gateway-public','KAG_PROVIDER_BIND: ${STEP8_PROVIDER_BIND:-127.0.0.1}','KAG_PROVIDER_BIND: 0.0.0.0','Exact private provider bind/client IPv4 required.')
+        @('gateway-port','ports: ["127.0.0.1:${STEP8_API_PORT:-38000}:8080"]','ports: ["127.0.0.1:${STEP8_API_PORT:-38000}:8080", "127.0.0.1:8898:8898"]','Exact localhost ingress port mapping required.')
     )
     foreach ($taskCase in $taskGuardCases) {
         $taskRejectedCompose = Join-Path $taskTempRoot ($taskCase[0]+'.yml')

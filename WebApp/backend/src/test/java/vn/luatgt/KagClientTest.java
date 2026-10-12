@@ -47,7 +47,8 @@ class KagClientTest {
         final HttpServer server; final AtomicInteger calls=new AtomicInteger();
         final Map<String,List<String>> headers=new TreeMap<>(String.CASE_INSENSITIVE_ORDER); JsonNode received;
         int status=200,delay; String media="application/json",omit,wrong,duplicate;
-        String body=answer().toString(),delta="Nội dung thử",encoding; byte[] raw; boolean incomplete,closeBeforeHeaders;
+        String body=answer().toString(),delta="Nội dung thử",encoding; byte[] raw; boolean incomplete,closeBeforeHeaders,identityHeaders=true;
+        String requestId="00000000-0000-4000-8000-000000000002",cacheControl="no-store";
         final AtomicReference<Runnable> onRequest=new AtomicReference<>(()->{});
         Fixture() throws Exception {
             server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -58,11 +59,14 @@ class KagClientTest {
                 if(closeBeforeHeaders) { exchange.close(); return; }
                 if(delay>0) try { Thread.sleep(delay); } catch(InterruptedException e) { Thread.currentThread().interrupt(); }
                 for(String name:List.of("X-KAG-Release-ID","X-WebApp-Snapshot-ID","X-KAG-As-Of")) {
+                    if(!identityHeaders) continue;
                     String value=exchange.getRequestHeaders().getFirst(name);
                     if(value==null) value=name.equals("X-KAG-Release-ID")?RELEASE:name.equals("X-WebApp-Snapshot-ID")?SNAPSHOT:LocalDate.now(ZoneId.of("Asia/Saigon")).toString();
                     if(!name.equals(omit)) exchange.getResponseHeaders().add(name,name.equals(wrong)?"wrong":value);
                     if(name.equals(duplicate)) exchange.getResponseHeaders().add(name,value);
                 }
+                if(requestId!=null) exchange.getResponseHeaders().set("X-Request-ID",requestId);
+                if(cacheControl!=null) exchange.getResponseHeaders().set("Cache-Control",cacheControl);
                 boolean streaming=status==200&&exchange.getRequestURI().getPath().endsWith("/stream");
                 exchange.getResponseHeaders().set("Content-Type",streaming&&media.equals("application/json")?"text/event-stream":media);
                 if(encoding!=null) exchange.getResponseHeaders().set("Content-Encoding",encoding);
@@ -236,6 +240,53 @@ class KagClientTest {
         String code=switch(status) { case 401->"AUTH_INVALID"; case 403->"SCOPE_DENIED"; case 422->"INVALID_REQUEST"; default->"RELEASE_UNAVAILABLE"; };
         String message=switch(status) { case 401->"Xác thực dịch vụ không hợp lệ."; case 403->"Quyền dịch vụ không được phép."; case 422->"Yêu cầu không hợp lệ."; default->"Release chưa khả dụng."; };
         return "{\"request_id\":\"00000000-0000-4000-8000-000000000002\",\"error\":{\"code\":\""+code+"\",\"message\":\""+message+"\",\"retryable\":false},\"native_state\":null}";
+    }
+    static String nativeAbstention() {
+        return "{\"request_id\":\"00000000-0000-4000-8000-000000000002\",\"error\":{\"code\":\"KAG_ABSTAINED\",\"message\":\"Chưa đủ bằng chứng để trả lời.\",\"retryable\":false},\"native_state\":\"abstained\"}";
+    }
+    @Test void verifiedNativeAbstentionIsTerminalRestAndSseOutcomeWithoutRetryOrCircuitFailure() throws Exception {
+        try(var f=new Fixture()) {
+            f.status=503; f.body=nativeAbstention(); f.identityHeaders=false; var client=client(f);
+            var expected=json.readTree("{\"state\":\"KAG_ABSTAINED\"}");
+            for(int i=0;i<5;i++) assertEquals(expected,client.query(request()));
+            var events=new ArrayList<String>(); var payloads=new ArrayList<JsonNode>();
+            client.stream(request(),(event,data)->{events.add(event);payloads.add(data);});
+            assertEquals(List.of("done"),events); assertEquals(List.of(expected),payloads); assertEquals(6,f.calls.get());
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"http200","http403","code","state","missing-state","extra","answer","retry","message","id","id-echo","missing-id-echo","cache","media","encoding","utf8","duplicate","trailing","empty","token","wrong-release","wrong-snapshot","wrong-date","duplicate-release"})
+    void unverifiedAbstentionCannotBecomeBusinessOutcome(String mode) throws Exception {
+        try(var f=new Fixture()) {
+            f.status=503; var body=(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(nativeAbstention());
+            var error=(com.fasterxml.jackson.databind.node.ObjectNode)body.path("error");
+            switch(mode) {
+                case "http200" -> { f.status=200; f.media="application/json; charset=utf-8"; }
+                case "http403" -> f.status=403;
+                case "code" -> error.put("code","BACKEND_UNAVAILABLE");
+                case "state" -> body.put("native_state","answered");
+                case "missing-state" -> body.remove("native_state");
+                case "extra" -> body.put("reason","out_of_scope");
+                case "answer" -> body.put("answer","fabricated");
+                case "retry" -> error.put("retryable",true);
+                case "message" -> error.putNull("message");
+                case "id" -> body.put("request_id","bad");
+                case "id-echo" -> f.requestId="00000000-0000-4000-8000-000000000003";
+                case "missing-id-echo" -> f.requestId=null;
+                case "cache" -> f.cacheControl="public";
+                case "media" -> f.media="text/plain";
+                case "encoding" -> f.encoding="gzip";
+                case "utf8" -> f.raw=new byte[]{(byte)0xc3,0x28};
+                case "token" -> error.put("message",TOKEN);
+                case "wrong-release" -> f.wrong="X-KAG-Release-ID";
+                case "wrong-snapshot" -> f.wrong="X-WebApp-Snapshot-ID";
+                case "wrong-date" -> f.wrong="X-KAG-As-Of";
+                case "duplicate-release" -> f.duplicate="X-KAG-Release-ID";
+            }
+            f.body=switch(mode) {case "duplicate"->"{\"native_state\":\"abstained\","+body.toString().substring(1);case "trailing"->body+" {}";case "empty"->"";default->body.toString();};
+            var client=client(f); unavailable(()->client.query(request()));
+            var events=new ArrayList<String>(); unavailable(()->client.stream(request(),(event,data)->events.add(event)));
+            assertTrue(events.isEmpty()); assertEquals(2,f.calls.get());
+        }
     }
     @ParameterizedTest @ValueSource(ints={401,403,422,503})
     void h1ErrorsRemainSanitizedAndNeverEmitStreamSuccess(int status,CapturedOutput output) throws Exception {

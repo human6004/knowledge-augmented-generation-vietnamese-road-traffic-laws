@@ -60,7 +60,7 @@ foreach ($taskService in $taskConfig.services.PSObject.Properties) {
     $taskValue = $taskService.Value
     if ($taskPinnedImages.ContainsKey($taskService.Name) -and $taskValue.image -ne $taskPinnedImages[$taskService.Name]) { throw 'Pinned OpenSPG image declaration changed.' }
     if ($taskService.Name -eq 'openspg-minio' -and ($taskValue.image -ne $taskEnv['STEP8_MINIO_IMAGE'] -or $taskEnv['STEP8_MINIO_IMAGE_ID'] -ne 'sha256:5e65d87b41ed46cbdb6edcd5f0bc92ab947f0f9873d609b41e2c071f6028f532')) { throw 'Retained MinIO declaration mismatch; actual cache needs build/deploy preflight.' }
-    if ($taskValue.container_name -or $taskValue.profiles -or $taskValue.privileged -or $taskValue.network_mode -or $taskValue.pid -or $taskValue.ipc -or $taskValue.links -or $taskValue.volumes_from -or $taskValue.extra_hosts -or $taskValue.devices) { throw 'Unsafe or unexpected service coupling.' }
+    if ($taskValue.container_name -or $taskValue.profiles -or $taskValue.privileged -or $taskValue.network_mode -or $taskValue.pid -or $taskValue.ipc -or $taskValue.links -or $taskValue.volumes_from -or ($taskValue.extra_hosts -and $taskService.Name -ne 'kag-ingress') -or $taskValue.devices) { throw 'Unsafe or unexpected service coupling.' }
     if ($taskValue.platform -ne 'linux/amd64' -or $taskValue.pull_policy -ne 'never' -or $taskValue.restart -ne 'no') { throw 'No automatic pull/restart; canonical platform required.' }
     if ([int64]$taskValue.mem_limit -ne $taskMemory[$taskService.Name] -or [double]$taskValue.cpus -le 0 -or [double]$taskValue.cpus -gt 1 -or $taskValue.pids_limit -le 0) { throw 'Bounded candidate resource caps required; these are not capacity proof.' }
     $taskNetworks = switch ($taskService.Name) {
@@ -125,14 +125,12 @@ foreach ($taskService in @('kag-api','kag-ingress')) {
 }
 if ($taskApi.user -ne "$($taskEnv['STEP8_API_UID']):$($taskEnv['STEP8_API_GID'])" -or $taskProxy.user -ne '99:99') { throw 'Exact configured API and non-root ingress users required.' }
 if ($taskProxy.build -or $taskProxy.secrets -or $taskProxy.tmpfs -or $taskProxy.healthcheck -or ($taskProxy.entrypoint -join '|') -ne 'haproxy' -or ($taskProxy.command -join '|') -ne '-W|-db|-f|/usr/local/etc/haproxy/haproxy.cfg') { throw 'Ingress must run the fixed native proxy without secrets or command overrides.' }
-if (Compare-Object @($taskProxy.environment.PSObject.Properties.Name) @('KAG_PROVIDER_BIND','KAG_PROVIDER_CLIENT')) { throw 'Only exact provider gateway IP settings permitted.' }
-foreach ($taskPair in @(@('BIND','KAG_PROVIDER_BIND'),@('CLIENT','KAG_PROVIDER_CLIENT'))) {
-    $taskIp = [string]$taskProxy.environment.($taskPair[1])
-    $taskDeclared = $taskEnv['STEP8_PROVIDER_'+$taskPair[0]]
-    if (!$taskDeclared) { $taskDeclared='127.0.0.1' }
-    if ($taskIp -ne $taskDeclared -or $taskIp -notmatch '^(127\.0\.0\.1|10\.(\d{1,3}\.){2}\d{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$' -or ($taskIp.Split('.') | Where-Object { [int]$_ -gt 255 })) { throw 'Exact private provider bind/client IPv4 required.' }
-    if (!$taskEnv['STEP8_QUERY_PROFILE'] -and $taskIp -ne '127.0.0.1') { throw 'Provider gateway must remain loopback when SAMPLE query disabled.' }
-}
+if (Compare-Object @($taskProxy.environment.PSObject.Properties.Name) @('KAG_PROVIDER_ENABLED','KAG_CHAT_PROXY_HOST','KAG_CHAT_PROXY_PORT')) { throw 'Only exact provider gateway routing settings permitted.' }
+if ([string]$taskProxy.environment.KAG_PROVIDER_ENABLED -ne $(if ($taskEnv['STEP8_QUERY_PROFILE']) { '1' } else { '' })) { throw 'Provider gateway requires the authorized SAMPLE query profile.' }
+$taskProxyHost = if ($taskEnv['STEP8_CHAT_PROXY_HOST']) { $taskEnv['STEP8_CHAT_PROXY_HOST'] } else { 'host.docker.internal' }
+$taskProxyPort = if ($taskEnv['STEP8_CHAT_PROXY_PORT']) { $taskEnv['STEP8_CHAT_PROXY_PORT'] } else { '8317' }
+if ($taskProxyHost.Length -gt 253 -or $taskProxyHost -notmatch '^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$' -or $taskProxyHost -match '^[0-9.]+$' -or $taskProxyHost -eq 'localhost' -or $taskProxyPort -notmatch '^[0-9]{1,5}$' -or [int]$taskProxyPort -lt 1 -or [int]$taskProxyPort -gt 65535 -or $taskProxy.environment.KAG_CHAT_PROXY_HOST -ne $taskProxyHost -or [string]$taskProxy.environment.KAG_CHAT_PROXY_PORT -ne $taskProxyPort) { throw 'Provider proxy requires a configurable DNS host and valid port.' }
+if (@($taskProxy.extra_hosts).Count -ne 1 -or $taskProxy.extra_hosts[0] -ne 'host.docker.internal=host-gateway') { throw 'Only the portable Docker host gateway mapping is permitted.' }
 if (@($taskProxy.depends_on.PSObject.Properties.Name).Count -ne 1 -or $taskProxy.depends_on.'kag-api'.condition -ne 'service_healthy' -or @($taskProxy.sysctls.PSObject.Properties.Name).Count -ne 1 -or $taskProxy.sysctls.'net.ipv4.ip_forward' -ne '0') { throw 'Ingress requires healthy API dependency and disabled IP forwarding.' }
 $taskProxyConfig = Join-Path $taskRoot 'docker/kag-ingress/haproxy.cfg'
 $taskMount = @($taskProxy.volumes)
@@ -143,7 +141,7 @@ if (Compare-Object @((Get-ChildItem -LiteralPath $taskEnv['STEP8_EGRESS_CREDENTI
 $taskHash = [Security.Cryptography.SHA256]::Create()
 try { $taskDigest = [BitConverter]::ToString($taskHash.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($taskProxyConfig).Replace("`r`n","`n")))).Replace('-','').ToLowerInvariant() }
 finally { $taskHash.Dispose() }
-if ($taskDigest -ne '588a97495ec84e273ca0b31935d905634afc54a0302d638b42716a52cdc88211') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
+if ($taskDigest -ne 'f392afc015a702ac58f617451c8286a1654ede6a6a67bf9629c6077651640a48') { throw 'Ingress config differs from the reviewed fixed H1 reverse proxy.' }
 $taskSamplePin = if ($taskEnv['STEP8_SAMPLE_PROOF_SHA256']) { $taskEnv['STEP8_SAMPLE_PROOF_SHA256'] } else { '' }
 if ($taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256 -ne $taskSamplePin -or ($taskSamplePin -and $taskSamplePin -notmatch '^[0-9a-f]{64}$')) { throw 'Sample serving proof pin mismatch.' }
 if (($taskBrokerUrl -and $taskSamplePin) -or $taskApi.environment.KAG_HTTP_SAMPLE_PROOF_SHA256_FILE -ne $(if ($taskBrokerUrl) { '/run/api-credentials/sample-proof.sha256' } else { '' })) { throw 'Broker SAMPLE proof must use the fixed operator pin file.' }

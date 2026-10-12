@@ -58,4 +58,4 @@ python -B -m unittest discover -s tests/runner -p 'test_*.py' -v
 Java/H2 và database MySQL kiểm thử riêng: [backend](../WebApp/backend/README.md#chạy).
 Frontend test/typecheck/build: [frontend](../WebApp/frontend/README.md#phát-triển-và-kiểm-thử).
 Kiểm tra Docker/API thật tạo state: [WebApp](../WebApp/README.MD), thực hiện theo
-quyền vận hành riêng. Production WRITE vẫn BLOCKED; H1/H2 NOT_STARTED.
+quyền vận hành riêng. HTTP API và Admin SAMPLE đã có; Production WRITE vẫn BLOCKED.

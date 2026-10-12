@@ -142,6 +142,56 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret,output.getvalue())
         self.assertIn('"error_type": "ValueError"',output.getvalue())
 
+    async def test_query_failure_preserves_inner_legal_parse_without_sensitive_text(self):
+        import io
+        from contextlib import redirect_stdout
+        from types import SimpleNamespace
+        from kag.interface import LLMClient
+        from kag.legal_prompts import LegalPlanningPrompt
+        module=api();secret='PRIVATE_PROMPT_RESPONSE_EXCEPTION'
+        class Model(LLMClient):
+            model='offline-fixture'
+            def call_with_json_parse(self, **kwargs):return {'private':secret}
+        model=Model(name='chain-fixture',enable_check=False)
+        async def fail(*args,**kwargs):
+            model.invoke(dict(query=secret,context=[],executors=[]),LegalPlanningPrompt(language='vi'))
+        request=SimpleNamespace(budget=module._Budget(time.monotonic()+10),closed=False,
+            question=secret,as_of=AS_OF,pipeline=object())
+        output=io.StringIO()
+        with patch('kag.legal_solver.aanswer',fail),redirect_stdout(output):
+            with self.assertRaises(module.RuntimeFailure) as caught:await module.run_query(request,secret,AS_OF)
+        row=json.loads(output.getvalue().splitlines()[-1].removeprefix('SAMPLE_QUERY_FAILURE '))
+        self.assertEqual(caught.exception.code,'PROVIDER_ERROR')
+        self.assertNotIn(secret,output.getvalue())
+        self.assertEqual(row['inner_errors'][0]['type'],'ValueError')
+        self.assertEqual(row['inner_errors'][0]['stage'],'legal_parse')
+        self.assertEqual(row['inner_errors'][0]['category'],'LEGAL_RESPONSE_INVALID')
+        self.assertTrue(any(f['file']=='kag/legal_prompts.py' and f['function']=='parse_response'
+                            for f in row['inner_errors'][0]['frames']))
+
+    def test_query_failure_chain_prefers_cause_and_bounds_cycles(self):
+        secret='PRIVATE_CHAIN_MESSAGE'
+        cause=ValueError(secret);context=TypeError(secret);outer=RuntimeError(secret)
+        outer.__cause__=cause;outer.__context__=context;cause.__context__=outer
+        row=api()._query_failure_diagnostic(outer)
+        self.assertEqual([item['type'] for item in row['inner_errors']],['ValueError'])
+        self.assertNotIn(secret,json.dumps(row))
+
+    def test_query_failure_stage_uses_source_frames_only(self):
+        root=Path(api().__file__).resolve().parents[2]
+        cases=[('kag/legal_prompts.py','validate_subquery','legal_parse','LEGAL_SUBQUERY_REJECTED'),
+               ('vendor/KAG/kag/interface/common/llm_client.py','call_with_json_parse','json_parse','JSON_PARSE_FAILED'),
+               ('vendor/KAG/kag/common/llm/openai_client.py','__call__','model_call','MODEL_CALL_FAILED')]
+        for filename,function,stage,category in cases:
+            namespace={}
+            exec(compile('def '+function+'():\n raise ValueError("PRIVATE_FRAME_MESSAGE")',str(root/filename),'exec'),namespace)
+            try:namespace[function]()
+            except ValueError as inner:
+                outer=RuntimeError('PRIVATE_WRAPPER');outer.__cause__=inner
+                item=api()._query_failure_diagnostic(outer)['inner_errors'][0]
+                self.assertEqual((item['stage'],item['category']),(stage,category))
+                self.assertNotIn('PRIVATE',json.dumps(item))
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='runtime-synthetic-')
         self.root = Path(self.temp.name)

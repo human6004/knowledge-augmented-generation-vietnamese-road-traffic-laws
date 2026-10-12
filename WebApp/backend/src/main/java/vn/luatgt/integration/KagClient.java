@@ -15,6 +15,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
@@ -416,7 +417,7 @@ public class KagClient {
         try {
             var admitted=admit(request);
             return breaker.executeSupplier(() -> post("/v1/query",admitted).exchange((req,res) -> {
-                if(!res.getStatusCode().is2xxSuccessful()) throw new IOException("KAG error");
+                if(!res.getStatusCode().is2xxSuccessful()) return abstained(res,admitted);
                 verifyHeaders(res.getHeaders(),admitted.date(),MediaType.APPLICATION_JSON);
                 byte[] bytes=res.getBody().readNBytes(256*1024+1);
                 if(bytes.length>256*1024) throw new IOException("KAG response too large");
@@ -429,7 +430,7 @@ public class KagClient {
         try {
             var admitted=admit(request);
             breaker.executeRunnable(() -> post("/v1/query/stream",admitted).accept(MediaType.TEXT_EVENT_STREAM).exchange((req,res) -> {
-                if(!res.getStatusCode().is2xxSuccessful()) throw new IOException("KAG error");
+                if(!res.getStatusCode().is2xxSuccessful()) { consumer.accept("done",abstained(res,admitted)); return null; }
                 verifyHeaders(res.getHeaders(),admitted.date(),MediaType.TEXT_EVENT_STREAM);
                 try(var reader=new BufferedReader(new InputStreamReader(new LimitedInput(res.getBody()),StandardCharsets.UTF_8.newDecoder()))) {
                     String event="message",line; var payload=new StringBuilder(); boolean done=false;
@@ -453,6 +454,26 @@ public class KagClient {
         } catch(Exception e) { throw unavailable(); }
     }
     private record Admitted(byte[] body,String token,LocalDate date) {}
+    private JsonNode abstained(ClientHttpResponse response,Admitted admitted) throws IOException {
+        var headers=response.getHeaders(); var media=headers.getContentType();
+        if(response.getStatusCode().value()!=503||media==null||!media.getType().equalsIgnoreCase("application")||!media.getSubtype().equalsIgnoreCase("json")||
+            (media.getCharset()!=null&&!media.getCharset().equals(StandardCharsets.UTF_8))||headers.containsKey(HttpHeaders.CONTENT_ENCODING)||
+            !List.of("no-store").equals(headers.get(HttpHeaders.CACHE_CONTROL))) throw new IOException("Unverified KAG error");
+        byte[] bytes=response.getBody().readNBytes(256*1024+1);
+        if(bytes.length>256*1024) throw new IOException("KAG response too large");
+        var body=parse(StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString(),admitted.token());
+        if(!fields(body).equals(Set.of("request_id","error","native_state"))||!fields(body.path("error")).equals(Set.of("code","message","retryable"))||
+            !body.path("error").path("code").isTextual()||!body.path("error").path("code").asText().equals("KAG_ABSTAINED")||
+            !text(body.path("error").path("message"),4000,true)||!body.path("error").path("retryable").isBoolean()||body.path("error").path("retryable").asBoolean()||
+            !body.path("native_state").isTextual()||!body.path("native_state").asText().equals("abstained")||!text(body.path("request_id"),36,true)) throw new IOException("Unverified KAG abstention");
+        String id=body.path("request_id").asText();
+        if(!UUID.fromString(id).toString().equals(id)) throw new IOException("Invalid request identity");
+        echo(headers,"X-Request-ID",id);
+        // Native errors have no success identity echoes; reject mismatches when echoes are present.
+        for(var pin:Map.of("X-KAG-Release-ID",release,"X-WebApp-Snapshot-ID",snapshot,"X-KAG-As-Of",admitted.date().toString()).entrySet())
+            if(headers.containsKey(pin.getKey())) echo(headers,pin.getKey(),pin.getValue());
+        currentDate(admitted.date()); return json.createObjectNode().put("state","KAG_ABSTAINED");
+    }
     private Admitted admit(Object request) throws IOException {
         headerIdentity(release); headerIdentity(snapshot);
         currentDate(LocalDate.now(clock));

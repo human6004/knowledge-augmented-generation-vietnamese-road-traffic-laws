@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { test, beforeEach } from 'node:test'
-import { createChat, chatView } from '../src/pages/server/chat-state.ts'
+import { createChat, chatView, loadCitationSource } from '../src/pages/server/chat-state.ts'
 import { tokenKey } from '../src/api.ts'
 
 const citation = { doc_id: 'fixture-doc', unit_id: 'fixture-unit', quote: 'TEST ONLY — trích đoạn kiểm thử.\nKhông phải căn cứ pháp luật.' }
 const answered = { id: 'fixture-chat', question: 'Câu hỏi tiếng Việt\nDòng thứ hai', answer: 'TEST ONLY — nội dung từ HTTP fixture.', citations: [citation], state: 'ANSWERED', createdAt: '2026-10-10T00:00:00Z' }
 const unavailable = { ...answered, answer: '', citations: [], state: 'UNAVAILABLE' }
+const abstained = { ...unavailable, id: 'fixture-abstained', state: 'KAG_ABSTAINED' }
+const abstainedMessage = 'Hiện tôi chưa tìm được đủ căn cứ pháp lý được xác minh để trả lời chính xác câu hỏi này.'
+const unavailableMessage = 'Dịch vụ tra cứu pháp luật hiện đang gặp sự cố hoặc chưa sẵn sàng. Vui lòng thử lại sau.'
 let requests, tokens, expired
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status })
 beforeEach(() => {
@@ -51,9 +54,9 @@ test('503 refreshes persisted UNAVAILABLE once and never exposes backend error d
   const chat = await loaded(method => method === 'POST' ? response({ message: 'KAG-secret-fixture /private/credentials' }, 503) : response(++gets === 1 ? [] : [unavailable]))
   assert.equal(await chat.submit(answered.question), false)
   assert.equal(requests.length, 3); assert.deepEqual(chat.getSnapshot().rows, [unavailable])
-  assert.equal(chat.getSnapshot().observed, 'unavailable'); assert.match(chat.getSnapshot().requestError, /KAG chưa khả dụng/)
+  assert.equal(chat.getSnapshot().observed, 'unavailable'); assert.equal(chat.getSnapshot().requestError, unavailableMessage)
   assert.doesNotMatch(chat.getSnapshot().requestError, /KAG-secret-fixture|private/)
-  assert.deepEqual(chatView(unavailable), { status: 'Chưa có câu trả lời — dịch vụ KAG chưa khả dụng.', answer: '', citations: [] })
+  assert.deepEqual(chatView(unavailable), { status: unavailableMessage, answer: '', citations: [] })
   assert.equal(tokens.has(tokenKey), true); assert.equal(expired, false)
 })
 test('offline POST retains history and emits no answer or automatic retry', async () => {
@@ -87,6 +90,32 @@ test('4000 UTF-16 characters and multiline text reach backend unchanged', async 
 test('UNAVAILABLE suppresses even stray answer and citations', () => {
   const view = chatView({ ...answered, state: 'UNAVAILABLE' }); assert.equal(view.answer, ''); assert.deepEqual(view.citations, [])
 })
+test('verified backend abstention is a completed business outcome without answer, retries or scope guesses', async () => {
+  const row = { ...abstained, question: 'Câu hỏi ngoài chuyên môn chưa có reason đáng tin cậy', answer: 'stray answer', citations: [citation] }
+  const chat = await loaded(method => response(method === 'POST' ? row : [unavailable]))
+  assert.equal(await chat.submit(row.question), true); assert.equal(requests.length, 2)
+  assert.equal(chat.getSnapshot().observed, 'abstained'); assert.equal(chat.getSnapshot().requestError, '')
+  assert.deepEqual(chatView(chat.getSnapshot().rows[0]), { status: abstainedMessage, answer: '', citations: [] })
+  assert.doesNotMatch(chatView(row).status, /ngoài phạm vi|chỉ hỗ trợ|sự cố/)
+  assert.equal(chat.getSnapshot().busy, false)
+})
+test('reload preserves abstention and old answered, unavailable and processing rows without reclassification', async () => {
+  const rows = [abstained, answered, { ...unavailable, question: 'Không đủ căn cứ nhưng record cũ UNAVAILABLE' }, { ...unavailable, state: 'PROCESSING' }]
+  const chat = await loaded(() => response(rows)); assert.deepEqual(chat.getSnapshot().rows, rows)
+  assert.equal(chatView(chat.getSnapshot().rows[0]).status, abstainedMessage)
+  assert.equal(chatView(chat.getSnapshot().rows[1]).answer, answered.answer)
+  assert.equal(chatView(chat.getSnapshot().rows[2]).status, unavailableMessage)
+  assert.match(chatView(chat.getSnapshot().rows[3]).status, /Đang xử lý/)
+  assert.equal(chat.getSnapshot().observed, 'idle'); assert.equal(requests.length, 1)
+})
+test('raw or malformed 503 cannot make the browser classify native abstention', async () => {
+  for (const body of [{ error: { code: 'KAG_ABSTAINED', retryable: false }, native_state: 'abstained' }, {}, { message: 'private-token' }]) {
+    const chat = await loaded(method => response(method === 'POST' ? body : [], method === 'POST' ? 503 : 200))
+    assert.equal(await chat.submit('Căn cứ?'), false)
+    assert.equal(chat.getSnapshot().observed, 'unavailable'); assert.equal(chat.getSnapshot().requestError, unavailableMessage)
+    assert.deepEqual(chat.getSnapshot().rows, []); assert.doesNotMatch(chat.getSnapshot().requestError, /private-token/)
+  }
+})
 test('missing citation fields or unknown state do not become verified answers', () => {
   for (const row of [{ ...answered, citations: [] }, { ...answered, citations: [{ doc_id: 'fixture-doc' }] }, { ...answered, state: 'UNKNOWN' }]) {
     const view = chatView(row); assert.equal(view.answer, ''); assert.deepEqual(view.citations, []); assert.notEqual(view.status, 'Đã trả lời')
@@ -98,7 +127,8 @@ test('invalid history body fails closed without showing backend content', async 
 })
 test('invalid POST body does not clear draft or become a successful answer', async () => {
   const chat = await loaded(method => response(method === 'POST' ? { answer: 'not a chat record' } : []))
-  assert.equal(await chat.submit(answered.question), false); assert.deepEqual(chat.getSnapshot().rows, []); assert.equal(chat.getSnapshot().observed, 'error')
+  assert.equal(await chat.submit(answered.question), false); assert.deepEqual(chat.getSnapshot().rows, []); assert.equal(chat.getSnapshot().observed, 'unavailable')
+  assert.equal(chat.getSnapshot().requestError, unavailableMessage); assert.equal(requests.length, 3)
 })
 
 for (const [status, expected] of [[403, /không có quyền/], [422, /không hợp lệ/]]) {
@@ -122,4 +152,52 @@ test('HTTP success with UNAVAILABLE does not promote it to ANSWERED or show stra
   assert.equal(await chat.submit(answered.question), true); assert.equal(requests.length, 2)
   assert.equal(chat.getSnapshot().observed, 'unavailable'); assert.equal(chat.getSnapshot().rows[0].state, 'UNAVAILABLE')
   assert.equal(chatView(row).answer, ''); assert.deepEqual(chatView(row).citations, [])
+})
+
+test('cancel aborts one request, preserves draft/history, and a later load recovers persisted rows', async () => {
+  const chat = await loaded()
+  globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    requests.push(options)
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+  })
+  const pending = chat.submit(answered.question)
+  chat.cancel()
+  assert.equal(await pending, false)
+  assert.equal(requests.length, 2); assert.equal(chat.getSnapshot().busy, false)
+  assert.deepEqual(chat.getSnapshot().rows, []); assert.equal(chat.getSnapshot().observed, 'cancelled')
+  assert.match(chat.getSnapshot().requestError, /lịch sử/)
+  wire(() => response([answered])); await chat.load()
+  assert.deepEqual(chat.getSnapshot().rows, [answered]); assert.equal(requests.length, 3)
+})
+
+test('429 shows a busy error without inference retry', async () => {
+  for (const [status, expected] of [[429, /đang bận/]]) {
+    const chat = await loaded(method => response(method === 'POST' ? { message: 'private-key' } : [], method === 'POST' ? status : 200))
+    const count = requests.length
+    assert.equal(await chat.submit(answered.question), false)
+    assert.equal(requests.length, count + 1); assert.match(chat.getSnapshot().requestError, expected)
+    assert.doesNotMatch(chat.getSnapshot().requestError, /private-key/)
+  }
+})
+test('processing failures and timeouts display unavailable and reload saved history once without inference retry', async () => {
+  for (const status of [500, 502, 504]) {
+    const chat = await loaded(method => response(method === 'POST' ? { message: 'private-key' } : [unavailable], method === 'POST' ? status : 200))
+    const count = requests.length
+    assert.equal(await chat.submit('Căn cứ?'), false)
+    assert.equal(requests.length, count + 2); assert.equal(requests.at(-1).method || 'GET', 'GET')
+    assert.equal(chat.getSnapshot().observed, 'unavailable'); assert.equal(chat.getSnapshot().requestError, unavailableMessage)
+    assert.deepEqual(chat.getSnapshot().rows, [unavailable]); assert.doesNotMatch(chat.getSnapshot().requestError, /private-key/)
+  }
+})
+
+test('citation details use exact authorized IDs and fail closed on missing source or changed quote', async () => {
+  const doc = { externalId: citation.doc_id, data: { title: 'TEST ONLY title', so_hieu: 'TEST ONLY number' } }
+  const unit = { externalId: citation.unit_id, data: { doc_id: citation.doc_id, unit_type: 'TEST ONLY', text: citation.quote } }
+  globalThis.fetch = async (url, options) => {
+    assert.equal(options.headers.get('Authorization'), 'Bearer webapp-jwt-fixture')
+    assert.ok(['/api/documents', '/api/units?docId=fixture-doc'].includes(url))
+    return response(url.includes('units') ? [unit] : [doc])
+  }
+  assert.deepEqual(await loadCitationSource(citation), { title: doc.data.title, number: doc.data.so_hieu, unitType: unit.data.unit_type, text: citation.quote })
+  for (const bad of [{ ...citation, unit_id: 'missing' }, { ...citation, quote: 'not in source' }]) await assert.rejects(loadCitationSource(bad))
 })

@@ -3,7 +3,7 @@
 Ứng dụng Knowledge-Augmented Generation tra cứu và trả lời câu hỏi pháp lý từ
 văn bản, đơn vị nội dung và biển báo. Core Python đã có Builder, Retriever,
 Solver và Evaluation Framework. LuậtGT cung cấp giao diện React và backend
-Spring Boot; HTTP adapter nối backend với core Python chưa được triển khai.
+Spring Boot; HTTP API tại `kag/http_api/` nối backend với core Python.
 
 ## Bản đồ tính năng và mã nguồn
 
@@ -27,14 +27,14 @@ Spring Boot; HTTP adapter nối backend với core Python chưa được triển
   citations và báo cáo có hash. Gold/QID phục vụ đánh giá, không điều khiển inference.
   Mã: [G1/G2](kag/evaluation/evaluate.py), [dataset](kag/evaluation/dataset.py),
   [reports](kag/evaluation/report.py).
-- **WebApp LuậtGT** đã có quản lý nội dung, ôn/thi, chat client và schema identity.
-  HTTP query adapter còn thiếu; một số trang quản trị KAG vẫn là chức năng chờ tích hợp.
+- **WebApp LuậtGT** có quản lý nội dung, ôn/thi, chat REST/citations và schema identity.
+  Python API đã có query/SSE, retrieval và inspection SAMPLE có kiểm chứng nguồn.
   Mã: [routes](WebApp/frontend/src/App.tsx), [user pages](WebApp/frontend/src/pages/server/UserPages.tsx),
   [chat service](WebApp/backend/src/main/java/vn/luatgt/service/ChatService.java),
   [KagClient](WebApp/backend/src/main/java/vn/luatgt/integration/KagClient.java).
 - **Admin** quản lý nội dung/đơn vị pháp lý, nhập dữ liệu, tài khoản, phản hồi,
-  mức phạt, schema identity và kiểm tra MySQL/Redis/MinIO. Pipeline/graph/benchmark
-  đang là trang chờ tích hợp. Mã: [admin pages](WebApp/frontend/src/pages/server/AdminPages.tsx),
+  mức phạt, schema identity và kiểm tra MySQL/Redis/MinIO. Graph/Pipeline/Benchmark
+  đọc API SAMPLE; không có quyền chạy build/benchmark. Mã: [admin pages](WebApp/frontend/src/pages/server/AdminPages.tsx),
   [schema page](WebApp/frontend/src/pages/server/KagSchemaPage.tsx),
   [operations](WebApp/frontend/src/pages/server/OperationsPages.tsx),
   [moderation](WebApp/backend/src/main/java/vn/luatgt/service/ModerationService.java).
@@ -46,15 +46,18 @@ Câu hỏi → upstream iterative planner/pipeline
               └→ legal deduction + safe generator → AnswerResult / abstention
 
 Dataset đánh giá → G1: Retriever / G2: public answer API → metrics + reports
-React → Spring KagClient → HTTP query adapter [chưa triển khai] → core Python
+React → Spring KagClient → HAProxy → Python HTTP API → core Python
 ```
 
 Chi tiết package, transport và namespace: [kiến trúc sản phẩm](docs/architecture.md).
 
 ## Trạng thái triển khai
 
-Builder/Retriever/Solver/Evaluation và nghiệp vụ WebApp đã có code. HTTP query
-adapter và management integration KAG chưa có. [Bootstrap](kag/bootstrap.py)
+Builder/Retriever/Solver, Question Generation/Evaluation, HTTP API và nghiệp vụ
+WebApp đã có code. Chat và Admin SAMPLE đã được kiểm thử trong các lượt nghiệm thu
+11–12/10/2026; đó là bằng chứng tại thời điểm chạy, không bảo đảm runtime hôm nay.
+Hai Compose khai báo 11 services: 5 WebApp + 6 KAG. SAMPLE gồm 32 nodes / 22 edges /
+42 vectors; bộ câu hỏi chính thức chưa hoàn thành. [Bootstrap](kag/bootstrap.py)
 đã xử lý preload local Solver; [regression import-order](tests/runtime/test_bootstrap.py)
 kiểm cả initialize-first, preload-builder và preload-solver.
 Mã đã triển khai không đồng nghĩa graph production đã build hoặc benchmark pháp
@@ -62,6 +65,15 @@ lý đã đạt. **Production WRITE vẫn BLOCKED**. Import SDK phải qua boots
 đúng thứ tự; import/smoke PASS không là legal-domain hoặc production release.
 
 ## Bắt đầu
+
+Hướng dẫn bàn giao: [cài đặt lần đầu](docs/INSTALL.md),
+[sử dụng USER/ADMIN](docs/USER-GUIDE.md),
+[cập nhật giữ dữ liệu](docs/UPDATE.md). Máy sạch chưa được nghiệm thu;
+source local chưa phát hành và serving artifacts ngoài Git cần chuẩn bị riêng.
+Baseline GitHub branch `codex/d05-d07-runner-verify-rehearsal` hiện ở
+`d1d9c4fa308571f9cad6c6842bac8bfc67ecbd57`; bản nghiệm thu ngày 12/10/2026 còn các
+thay đổi local chưa commit. Khi bàn giao, chủ dự án cần công bố SHA release mới
+chứa đủ source, tests và ba tài liệu trên. Chưa dùng `main` làm bản SAMPLE đã nghiệm thu.
 
 Từ root repository, lấy submodule đúng pin nếu checkout mới chưa có:
 
@@ -78,7 +90,8 @@ python -B -m kag.evaluation --help
 ```
 
 CLI [runtime](kag/__main__.py) có `run`, `resume`, `verify`, dùng config tường minh và lưu bằng
-chứng ngoài repo. CLI [evaluation](kag/evaluation/__main__.py) có `validate`, `freeze`, `import-legacy`;
+chứng ngoài repo. CLI [evaluation](kag/evaluation/__main__.py) có `validate`, `freeze`, `import-legacy`,
+`generate`, `validate-generated`;
 G1/G2 là library API, không có lệnh benchmark live tự động. Xem
 [kiến trúc và entrypoints](docs/architecture.md#entrypoints-và-lệnh-ổn-định),
 [vận hành runtime](docs/runner.md) và [hướng dẫn WebApp](WebApp/README.MD).
@@ -135,10 +148,15 @@ Không sửa corpus, schema, gold hoặc input đã khóa để làm smoke PASS.
   Import/build/verify-stack có side effects; xem hướng dẫn subsystem trước khi chạy.
 - `docs/`: tài liệu kiến trúc, vận hành và design lịch sử; chỉ mục ở bên dưới.
 
-`KAG_BASE_URL` dành cho HTTP adapter cổng 8000, không phải OpenSPG cổng 28887.
+`KAG_BASE_URL` trong backend mặc định là `http://kag-ingress:8080` qua external
+Docker ingress network; cổng host ingress mặc định 38000. API nội bộ dùng 8000,
+OpenSPG Java nội bộ dùng 8887. Không trỏ chat tới OpenSPG.
 Native `AnswerResult` và hợp đồng Java khác nhau về abstention, loại citation
-và validation nguồn. Xem [gap và chính sách API đề xuất](docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích-đề-xuất).
-H1/H2 chưa bắt đầu; tài liệu này không triển khai API hoặc mở WRITE.
+và validation nguồn. Xem [hợp đồng HTTP](docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
+Clone GitHub chưa đủ để chạy SAMPLE: cần đúng vendor/runtime và image cache,
+wheel/Git objects cho build offline, graph/release proof, provider/proxy và
+publication hợp lệ. [Docker](docker/README.md) giữ prerequisites cụ thể.
+SAMPLE không phải production; Production WRITE vẫn BLOCKED.
 
 ## Tài liệu chi tiết
 
