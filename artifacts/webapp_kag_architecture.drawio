@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-10-12T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="webapp-kag-architecture" name="WebApp + KAG">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="WebApp phục vụ nghiệp vụ; KAG tìm và kiểm căn cứ" style="text;html=1;align=left;verticalAlign=middle;fontSize=30;fontStyle=1;fontColor=#102A43;" vertex="1" parent="1">
+          <mxGeometry x="50" y="22" width="1120" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="C4 container view · Source Compose + inventory hiện tại · các dịch vụ KAG đang RUNNING (health check, readiness và chất lượng retrieval cần xác minh)" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontColor=#52677E;" vertex="1" parent="1">
+          <mxGeometry x="52" y="68" width="1400" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="tier1" value="Tầng 1: Giao diện, điều phối request và kiểm soát truy cập" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;fillOpacity=50;strokeColor=#C026D3;strokeWidth=2;dashed=1;dashPattern=8 5;verticalAlign=top;align=left;spacingLeft=16;spacingTop=12;fontColor=#7C3AED;fontSize=19;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="120" width="1490" height="205" as="geometry"/>
+        </mxCell>
+        <mxCell id="tier2" value="Tầng 2: Dịch vụ WebApp, gateway và KAG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;fillOpacity=45;strokeColor=#3B82F6;strokeWidth=2;dashed=1;dashPattern=8 5;verticalAlign=top;align=left;spacingLeft=16;spacingTop=12;fontColor=#1D4ED8;fontSize=19;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="355" width="1490" height="245" as="geometry"/>
+        </mxCell>
+        <mxCell id="tier3" value="Tầng 3: Kho dữ liệu, graph và dịch vụ tích hợp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;fillOpacity=50;strokeColor=#F97316;strokeWidth=2;dashed=1;dashPattern=8 5;verticalAlign=top;align=left;spacingLeft=16;spacingTop=12;fontColor=#C2410C;fontSize=19;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="630" width="1490" height="240" as="geometry"/>
+        </mxCell>
+        <mxCell id="frontend" value="&lt;b&gt;WebApp · React / Vite&lt;/b&gt;&lt;br&gt;Giao diện USER + ADMIN&lt;br&gt;8081 → API qua backend&lt;br&gt;Browser chỉ gọi 3WT" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#64748B;strokeWidth=1.5;fillColor=#FFFFFF;fontColor=#172B4D;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="175" width="250" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="backend" value="&lt;b&gt;Spring Boot · monolith&lt;/b&gt;&lt;br&gt;Auth, nội dung, học/thi/chat&lt;br&gt;8080; MySQL nghiệp vụ&lt;br&gt;Gateway nội HTTP" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#64748B;strokeWidth=1.5;fillColor=#FFFFFF;fontColor=#172B4D;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="440" y="175" width="270" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="gateway" value="&lt;b&gt;HAProxy ingress&lt;/b&gt;&lt;br&gt;127.0.0.1:38000&lt;br&gt;Query và inspect routes&lt;br&gt;Gateway provider theo allowlist" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2563EB;strokeWidth=1.7;fillColor=#EFF6FF;fontColor=#1E3A8A;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="825" y="175" width="280" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="kagapi" value="&lt;b&gt;KAG HTTP / Python&lt;/b&gt;&lt;br&gt;Auth, proof, source checks&lt;br&gt;Retriever + iterative Solver&lt;br&gt;Readiness, health, DB credential" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;strokeWidth=2;fillColor=#F3E8FF;fontColor=#312E81;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="175" width="300" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="webstores" value="&lt;b&gt;Kho WebApp&lt;/b&gt;&lt;br&gt;MySQL: account/content&lt;br&gt;Redis: rate limits, chat state&lt;br&gt;MinIO: PDF, ảnh câu hỏi" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#64748B;strokeWidth=1.5;fillColor=#FFFFFF;fontColor=#172B4D;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="415" width="270" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="gatewayservice" value="&lt;b&gt;Gateway trong HAProxy&lt;/b&gt;&lt;br&gt;Metadata / embedding / chat&lt;br&gt;API token + IP binding&lt;br&gt;Ledger ghi trust send" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#2563EB;strokeWidth=1.7;fillColor=#EFF6FF;fontColor=#1E3A8A;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="470" y="415" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="openspg" value="&lt;b&gt;OpenSPG server + broker&lt;/b&gt;&lt;br&gt;Project / schema / writer API&lt;br&gt;Broker chỉ cho graph ops&lt;br&gt;Giữ DB credential" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#7C3AED;strokeWidth=2;fillColor=#F3E8FF;fontColor=#312E81;fontSize=15;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="415" width="345" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="provider" value="&lt;b&gt;Provider ngoài stack&lt;/b&gt;&lt;br&gt;Embedding 3072 + chat LLM&lt;br&gt;Chat qua Windows proxy&lt;br&gt;Exact model chưa xác minh" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#F97316;strokeWidth=1.7;fillColor=#FFF7ED;fontColor=#7C2D12;fontSize=14;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="470" y="540" width="300" height="72" as="geometry"/>
+        </mxCell>
+        <mxCell id="graph" value="&lt;b&gt;Neo4j · VietRoadTraffic&lt;/b&gt;&lt;br&gt;Graph + indexes vector&lt;br&gt;SAMPLE 322/22/42&lt;br&gt;Reader kiểm physical identity" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#F97316;strokeWidth=1.7;fillColor=#FFF7ED;fontColor=#7C2D12;fontSize=14;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="895" y="685" width="300" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="spgdb" value="&lt;b&gt;OpenSPG MySQL + MinIO&lt;/b&gt;&lt;br&gt;2 service riêng&lt;br&gt;Metadata / object storage&lt;br&gt;Tách khỏi WebApp storage" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#F97316;strokeWidth=1.7;fillColor=#FFF7ED;fontColor=#7C2D12;fontSize=14;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="685" width="280" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="note" value="&lt;b&gt;ĐƯỜNG XÂY GRAPH RIÊNG&lt;/b&gt;&lt;br&gt;Operator CLI → bootstrap vendor KAG → pin → Builder/runner → OpenSPG writer → Neo4j.&lt;br&gt;Query/SAMPLE API không sử dụng để ghi graph production. WRITE vẫn BLOCKED." style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#F97316;strokeWidth=2;fillColor=#FFFFFF;fontColor=#7C2D12;fontSize=14;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=12;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="685" width="690" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="boundary" value="&lt;b&gt;RANH GIỚI MẠNG&lt;/b&gt;&lt;br&gt;private: OpenSPG + DB; readbus: broker/API/HAProxy; ingress: host/gateway.&lt;br&gt;API chỉ trên readbus; không database socket hoặc credential trực tiếp." style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#64748B;strokeWidth=1.5;fillColor=#FFFFFF;fontColor=#334E68;fontSize=13;align=left;verticalAlign=middle;spacingLeft=14;spacingRight=10;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="810" y="810" width="710" height="54" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="JWT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#475569;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#475569;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="frontend" target="backend">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="service tokens" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#475569;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#475569;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="backend" target="gateway">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="/v1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#475569;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#475569;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="gateway" target="kagapi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#64748B;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="backend" target="webstores">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="260" y="335"/>
+              <mxPoint x="215" y="415"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#64748B;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="backend" target="gatewayservice">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="515" y="335"/>
+              <mxPoint x="620" y="415"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#64748B;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="backend" target="provider">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="675" y="335"/>
+              <mxPoint x="675" y="540"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="cùng service" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#2563EB;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="gateway" target="gatewayservice">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="provider request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#2563EB;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;" edge="1" parent="1" source="gatewayservice" target="kagapi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="broker token" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#7C3AED;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="kagapi" target="openspg">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="doc graph" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#F97316;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="openspg" target="graph">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="metadata" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#F97316;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="openspg" target="spgdb">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="SAMPLE proof" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F97316;strokeWidth=2;endArrow=block;endFill=1;fontSize=13;fontColor=#F97316;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="gatewayservice" target="provider">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="footer" value="Hai primary Compose: docker-compose.yml và docker-compose.kag.yml. Legacy release stack đã ngừng.&lt;br&gt;SAMPLE authority có proof riêng; production operational proof DENY. Cấu hình model/metadata response không chứng minh chất lượng." style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontColor=#52677E;" vertex="1" parent="1">
+          <mxGeometry x="55" y="890" width="1450" height="45" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
