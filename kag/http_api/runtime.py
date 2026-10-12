@@ -259,8 +259,9 @@ def _identity(request, settings, release, parsed, as_of=None, *, capability='que
         if values != [expected]:
             raise RuntimeFailure(code)
     publication = release.publication
+    from .artifacts import publication_covers
     if (publication is None or publication['snapshot_id'] != settings.webapp_snapshot_id
-            or publication['as_of'] != as_of.isoformat() or not release.records):
+            or not publication_covers(publication,as_of) or not release.records):
         raise ApiFailure('NOT_READY')
     try:
         _unchanged(release)
@@ -557,6 +558,9 @@ class RuntimeSupervisor:
         async def operation():
             reader=None
             try:
+                from .artifacts import publication_covers
+                if capability=='query' and (type(release) is not ServingRelease or not publication_covers(release.publication,_today())):
+                    raise ApiFailure('NOT_READY')
                 proof,_,_=await asyncio.to_thread(_require_operational_proof,settings,release,capability=capability)
                 initialize_runtime()
                 reader=await asyncio.to_thread(_new_reader,settings,release,self._budget)

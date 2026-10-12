@@ -301,6 +301,34 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_date_mismatch_before_constructor(self):
         await self.rejection(self.request(headers={'x-kag-as-of':'2000-01-01'}),'DATE_MISMATCH')
 
+    async def test_sample_publication_window_admits_next_day_and_keeps_request_header_gate(self):
+        from datetime import timedelta
+        from types import SimpleNamespace
+        from kag.http_api.artifacts import load_release
+        next_day=AS_OF+timedelta(days=1)
+        self.reader.publication.update(schema='h1-webapp-publication-2.0',serving_until=(AS_OF+timedelta(days=6)).isoformat())
+        self.reader.seal();release=load_release(self.root,'synthetic-release')
+        request=self.request(headers={'x-kag-as-of':next_day.isoformat()})
+        parsed=SimpleNamespace(schema_contract=release.schema_contract)
+        self.assertEqual(api()._identity(request,self.settings(),release,parsed,next_day),next_day)
+        with self.assertRaises(api().RuntimeFailure) as caught:
+            api()._identity(self.request(),self.settings(),release,parsed,next_day)
+        self.assertEqual(caught.exception.code,'DATE_MISMATCH')
+
+    async def test_query_readiness_rejects_expired_publication_before_broker_or_gateway(self):
+        from datetime import timedelta
+        from kag.http_api.artifacts import load_release
+        module=api()
+        self.reader.publication.update(schema='h1-webapp-publication-2.0',serving_until=(AS_OF+timedelta(days=6)).isoformat())
+        self.reader.seal();release=load_release(self.root,'synthetic-release')
+        supervisor=module.RuntimeSupervisor()
+        with patch.object(module,'_today',lambda:AS_OF+timedelta(days=7)),patch.object(module,'_require_operational_proof') as proof:
+            with self.assertRaises(ApiFailure) as caught:
+                await supervisor.sample_ready(self.request(),self.settings(),release,capability='query')
+            self.assertEqual(caught.exception.code,'NOT_READY')
+            proof.assert_not_called()
+        await supervisor.close()
+
     async def test_missing_release_fail_closed(self):
         module=api()
         supervisor=module.RuntimeSupervisor()

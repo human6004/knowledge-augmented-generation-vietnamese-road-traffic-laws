@@ -46,6 +46,16 @@ def _source_texts(payload):
     return tuple(texts)
 
 
+def _unit_references(metadata):
+    references=[]
+    for field,label,pattern in (('dieu_number','Điều',r'\d+[a-zđ]?'),
+                                ('khoan_number','khoản',r'\d+[a-zđ]?'),
+                                ('diem_letter','điểm',r'[a-zđ]')):
+        value=metadata.get(field)
+        if isinstance(value,str) and re.fullmatch(pattern,value,re.I):references.append(label+' '+value)
+    return ' '.join(references)
+
+
 def _grounding_sources(payload):
     """Ground planner identities/coordinates in server-confirmed typed fields.
 
@@ -56,16 +66,10 @@ def _grounding_sources(payload):
         texts.extend(item[key] for key in ('entity_id','doc_id','unit_id','sign_id')
                      if isinstance(item.get(key),str))
         metadata = item['metadata']
-        references = []
-        for field,label,pattern in (('dieu_number','Điều',r'\d+[a-zđ]?'),
-                                    ('khoan_number','khoản',r'\d+[a-zđ]?'),
-                                    ('diem_letter','điểm',r'[a-zđ]')):
-            value = metadata.get(field)
-            if isinstance(value,str) and re.fullmatch(pattern,value,re.I):
-                references.append(label+' '+value)
+        references = _unit_references(metadata)
         if references:
             number = payload['documents'].get(item['doc_id'],{}).get('so_hieu') or ''
-            texts.append(number+' '+' '.join(references))
+            texts.append(number+' '+references)
         texts.extend(canonical_json(value) for value in metadata.values() if type(value) in (int,float))
     return tuple(texts)
 
@@ -387,12 +391,15 @@ def _applicable(query, item, support, payload):
     if requested_vehicles and vehicle_scopes - requested_vehicles:
         return False
     document_number = payload['documents'].get(item['doc_id'], {}).get('so_hieu') or ''
-    authority = text+'\n'+canonical_json(item['metadata'])+'\n'+document_number+'\n'+context_text
+    # Numbered source paragraphs need their verified typed coordinates, as in planner grounding.
+    authority = text+'\n'+canonical_json(item['metadata'])+'\n'+document_number+'\n'+context_text+'\n'+_unit_references(item['metadata'])
     if not query_content_terms(query) <= {word.casefold() for word in re.findall(r'[^\W\d_]+', authority)}:
         return False
     provided = material_constraints(authority)
     for kind in ('documents', 'references', 'negation'):
-        if not requested[kind] <= provided[kind]:
+        required={v.casefold() for v in requested[kind]} if kind=='references' else requested[kind]
+        available={v.casefold() for v in provided[kind]} if kind=='references' else provided[kind]
+        if not required <= available:
             return False
     if parent and not parents:
         return False

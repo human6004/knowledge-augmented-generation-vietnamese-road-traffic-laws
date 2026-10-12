@@ -285,14 +285,19 @@ def _catalog(value, descriptor, contract):
 def _publication(value, descriptor, records):
     if value is None:
         return None
+    window = value.get('schema') == 'h1-webapp-publication-2.0' if type(value) is dict else False
     _keys(value, ('schema','snapshot_id','schema_contract','source_snapshot_id','as_of',
-                  'timezone','documents','units'))
-    if (value['schema'] != 'h1-webapp-publication-1.0' or value['timezone'] != 'Asia/Saigon'
+                  'timezone','documents','units',*(('serving_until',) if window else ())))
+    if (value['schema'] not in ('h1-webapp-publication-1.0','h1-webapp-publication-2.0') or value['timezone'] != 'Asia/Saigon'
             or value['snapshot_id'] != descriptor['webapp_snapshot_id']
             or value['schema_contract'] != descriptor['schema_contract']
             or value['source_snapshot_id'] != descriptor['source_snapshot_id']):
         _invalid()
     _date(value['as_of'])
+    if window:
+        _date(value['serving_until'])
+        days=(date.fromisoformat(value['serving_until'])-date.fromisoformat(value['as_of'])).days
+        if descriptor['release_kind']!='SAMPLE' or not 0<=days<=6:_invalid()
     documents = {r.entity_id:r for r in records if r.entity_type.endswith('.LegalDocument')}
     units = {r.entity_id:r for r in records if r.entity_type.endswith('.LegalUnit') and r.field == 'text'}
     for group in ('documents','units'):
@@ -326,6 +331,14 @@ def _publication(value, descriptor, records):
                     if entry[field] is not None:
                         _date(entry[field])
     return _freeze(value)
+
+
+def publication_covers(publication, as_of):
+    """Snapshot date bounds sealed SAMPLE serving authority, never legal effectivity."""
+    if publication is None or type(as_of) is not date:return False
+    start=publication['as_of']
+    end=publication['serving_until'] if publication['schema']=='h1-webapp-publication-2.0' else start
+    return start<=as_of.isoformat()<=end
 
 
 def load_release(root: Path, expected_release_id: str) -> ServingRelease:
@@ -529,7 +542,7 @@ def verify_native_sources(result: AnswerResult, release: ServingRelease, reader,
         _unchanged(release)
         publication = release.publication
         if publication is not None:
-            if publication['snapshot_id'] != webapp_snapshot_id or publication['as_of'] != as_of.isoformat():
+            if publication['snapshot_id'] != webapp_snapshot_id or not publication_covers(publication,as_of):
                 _invalid()
         elif webapp_snapshot_id is not None:
             _invalid()

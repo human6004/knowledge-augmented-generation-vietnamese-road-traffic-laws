@@ -525,6 +525,33 @@ class SafetyTests(unittest.TestCase):
         self.assertIsNone(module.document_content_question('Trích nội dung văn bản: pháp luật hiện hành quy định gì?'))
         self.assertIsNone(module.document_content_question('Nghị định 330/2026/NĐ-CP quy định gì?'))
 
+    def test_content_lookup_resolves_numbered_unit_metadata_with_exact_parent_support(self):
+        text='4. Người dự kiểm tra không đạt yêu cầu có thể đăng ký kiểm tra lại sau 07 ngày.'
+        parent_text='Điều 9. Sửa tại Điều 16 về kiểm tra.'
+        question='Trích nội dung văn bản: Khoản 4 Điều 16 sửa tại Điều 9 Nghị định 330/2026/NĐ-CP quy định gì về kiểm tra lại?'
+        module,reader,retriever,_,_=self.prepare(text=text,question=question,parentId='parent',dieuNumber='9',khoanNumber='4')
+        parent=retrieval_fixture.node('LegalUnit','parent',text=parent_text,doc='văn-bản')
+        parent['properties'].update(unitType='Dieu',soHieu='330/2026/NĐ-CP',dieuNumber='9')
+        reader.nodes['VietRoadTraffic.LegalUnit','parent']=parent
+        reader.hits['LegalUnit','text'].append({'id':'parent','score':0.8,'index':'text-index'})
+        ctx=Context();module.LegalRetrieverExecutor(retriever).invoke(question,Task('Retriever',{'query':question}),ctx)
+        value=candidate([self.selected(ctx)],support_selections=[self.selected(ctx,1)],effectivity='uncertain')
+        result,_,_=self.render(module,ctx,question,value)
+        self.assertFalse(result.abstained)
+        self.assertEqual([c.quote for c in result.citations],[text,parent_text])
+        for bad_question in (question.replace('Khoản 4','Khoản 5'),question.replace('330/2026','331/2026')):
+            payload=ctx.kwargs['legal_evidence'].payload();payload['original_question']=bad_question
+            bad_ctx=Context();bad_ctx.kwargs['legal_evidence']=module.LegalEvidenceResponse(module.canonical_json(payload))
+            rejected,_,_=self.render(module,bad_ctx,bad_question,value)
+            self.assertTrue(rejected.abstained)
+        rejected,_,_=self.render(module,ctx,question,dict(value,support_selections=[]))
+        self.assertTrue(rejected.abstained)
+        current=question.removeprefix('Trích nội dung văn bản: ')
+        payload=ctx.kwargs['legal_evidence'].payload();payload['original_question']=current
+        current_ctx=Context();current_ctx.kwargs['legal_evidence']=module.LegalEvidenceResponse(module.canonical_json(payload))
+        rejected,_,_=self.render(module,current_ctx,current,value)
+        self.assertTrue(rejected.abstained)
+
     def test_inactive_metadata_without_dated_authority_abstains(self):
         for props in ({'currentStatus':'Hết hiệu lực'},
                       {'currentStatus':'REPLACED'},

@@ -181,6 +181,42 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(release.release_id,'synthetic-release')
         self.assertEqual(release.descriptor_sha256, sha((self.root/'release.json').read_bytes()))
         self.assertEqual(self.fixture.calls,[])
+
+    def test_sample_publication_window_verifies_next_day_without_changing_query_date(self):
+        from datetime import timedelta
+        self.fixture.publication.update(schema='h1-webapp-publication-2.0',serving_until=(AS_OF+timedelta(days=6)).isoformat())
+        self.fixture.seal()
+        verified=self.verify(as_of=AS_OF+timedelta(days=1))
+        self.assertEqual(verified.as_of,AS_OF+timedelta(days=1))
+        self.assertEqual(verified.publication_state.value,'verified')
+        for day in (AS_OF-timedelta(days=1),AS_OF+timedelta(days=7)):
+            self.failure(lambda:self.verify(as_of=day),'NOT_READY')
+
+    def test_sample_publication_window_does_not_extend_legal_effectivity(self):
+        from datetime import timedelta
+        props=self.fixture.nodes[NS+'LegalDocument','document-1']['properties']
+        props['effectiveTo']=(AS_OF+timedelta(days=1)).isoformat()
+        for record in self.fixture.catalog['records']:
+            if record['entity_type']==NS+'LegalDocument':
+                record['metadata']=decode_properties(props,CONTRACT['node_properties']['LegalDocument'])
+        self.fixture.publication['documents'][0]['effective_to']=props['effectiveTo']
+        self.fixture.publication.update(schema='h1-webapp-publication-2.0',serving_until=(AS_OF+timedelta(days=6)).isoformat())
+        self.fixture.seal()
+        self.verify()
+        self.failure(lambda:self.verify(as_of=AS_OF+timedelta(days=1)))
+
+    def test_publication_window_is_sample_only_bounded_and_cannot_mutate_sealed_bytes(self):
+        from datetime import timedelta
+        self.fixture.publication.update(schema='h1-webapp-publication-2.0',serving_until=(AS_OF+timedelta(days=6)).isoformat())
+        self.fixture.seal();release=self.load()
+        (self.root/'webapp-publication.json').write_bytes(b'{}')
+        self.failure(lambda:self.verify(release=release),'NOT_READY')
+        for end in ((AS_OF-timedelta(days=1)).isoformat(),(AS_OF+timedelta(days=7)).isoformat(),None):
+            self.fixture.publication['serving_until']=end
+            self.fixture.seal();self.failure(self.load,'NOT_READY')
+        self.fixture.publication['serving_until']=(AS_OF+timedelta(days=6)).isoformat()
+        self.fixture.descriptor['release_kind']='PRODUCTION'
+        self.fixture.seal();self.failure(self.load,'NOT_READY')
         with self.assertRaises(FrozenInstanceError):
             release.release_id = 'forged'
         with self.assertRaises(TypeError):
