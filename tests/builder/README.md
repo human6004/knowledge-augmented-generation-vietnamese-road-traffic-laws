@@ -1,41 +1,23 @@
-# Builder offline
+# Kiểm thử Builder
 
-Các module project-layer dùng stdlib; import trực tiếp `kag.builder.codec`,
-`kag.builder.inputs`, `kag.builder.mapping`. Không khởi tạo SDK/service/model.
+Tests dùng records/files synthetic và transport/model doubles; không gọi graph, embedding hoặc provider thật.
 
-- Codec nhận logical keys và property rows từ `schema_contract.json`; encode trả
-  physical keys. JSON_TEXT nhận giá trị Python logical, encode một lần; Integer
-  giữ native int. Decode trả logical keys, semantic JSON và Boolean Text `true/false`.
-  `server_encoded=True` đọc thêm đúng một lớp JSON ngoài cho non-identity properties.
-- `load_inputs(project_root, ledger_path, audit_path, policy_path, contract)` trả
-  `ValidatedInputs`: exact indexes, penalty join, toàn bộ fingerprint join.
-  Production mặc định pin SHA ledger/audit/policy và xref. Chỉ fixture synthetic
-  cấp `expected_artifact_hashes` riêng và xref SHA tương ứng trong contract copy.
-- `validate_input_integrity(BuilderInputs(...), contract)` dành cho records đã đọc,
-  bao gồm synthetic fixtures. Kiểm identity/hierarchy/joins; SHA của file thật được
-  kiểm tại `load_inputs`. Markdown paths trong `BuilderInputs` phải đã kiểm tồn tại.
-- `map_nodes(validated, contract)` trả dict `{type, id, name, properties}`.
-- `map_relation_rows(validated, contract)` giữ tất cả contributing rows, tuple,
-  application key, logical properties, invariant candidates và locator.
-- `aggregate_relations(rows, contract)` trả dict `{tuple, application_edge_key,
-  properties}` với physical properties. Tuple gồm `(from_type, from_id, predicate,
-  to_type, to_id)`; types fully qualified. Evidence nằm ngoài identity.
-- C3 `build_graph_plan(validated_inputs, contract)` dùng lại ba API mapping trên,
-  kiểm tra endpoint/key/provenance/type, rồi sắp node và edge theo UTF-8 bytes.
-  `plan_hash(plan)` hash streaming byte-equivalent với canonical JSON; `write_dry_run`
-  ghi `manifest.json`, `nodes.jsonl`, `edges.jsonl`, `plan.sha256` bằng UTF-8/LF.
-  `vector_input_length_stats` chỉ đo độ dài content, không gọi tokenizer/model.
+## Phạm vi
 
-Containers frozen; dicts/specs immutable-by-convention, caller không sửa inputs
-sau validation. Output provenance có bản sao riêng. Không runner full-source,
-writer hoặc vectorization ở các module này.
+- Codec: logical/physical keys, native Integer, Boolean Text và JSON encode/decode; `server_encoded=True` chỉ đọc thêm một lớp JSON ngoài.
+- Inputs: identity/hierarchy/joins, production scope, fingerprint ledger/policy và hash file. Fixtures cấp hash riêng, không sửa contract/source production.
+- Mapping/graph plan: node/edge identity, provenance, polarity SAFE_EDGE, aggregation và canonical ordering/hash.
+- Writer adapter: exact scope, payload validation, node readback trước edge và chặn thao tác ngoài manifest.
+- Vectorizer: retry có giới hạn, checkpoint/resume, cache identity, chunk fallback và gate khi vectorization chưa hoàn thành.
 
-Tests dùng synthetic records/file nhỏ. Chạy từ project root, bằng Python hiện có:
+Source: [kag/builder](../../kag/builder/). Codec/inputs/mapping/graph plan dùng stdlib; writer/vectorizer tests cần SDK/dependencies đã pin.
 
-```powershell
-rtk proxy python -B -m unittest discover -s tests/builder -p 'test_*.py' -v
-rtk proxy python -B -c "import unittest; suite=unittest.TestSuite([unittest.TestLoader().discover('tests/schema'), unittest.TestLoader().discover('tests/builder')]); result=unittest.TextTestRunner(verbosity=1).run(suite); raise SystemExit(not result.wasSuccessful())"
+## Chạy
+
+Từ root checkout trong [runtime chuẩn](../../docs/runtime.md), chạy process riêng:
+
+```sh
+python -B -m unittest discover -s tests/builder -p "test_*.py" -v
 ```
 
-Schema tests cần environment chứa các dependency parser đã cài của project.
-Builder tests không cần dependency ngoài stdlib hoặc internet.
+Giữ source read-only và network denied. Kết quả synthetic không chứng minh graph write, provider reliability hoặc production readiness.

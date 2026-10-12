@@ -1,248 +1,202 @@
 # Cài đặt LuậtGT lần đầu
 
-LuậtGT dùng KAG để tìm nội dung nguồn, trả lời kèm căn cứ và từ chối trả lời
-khi thiếu bằng chứng. WebApp có tài khoản USER/ADMIN. Hướng dẫn này dành cho
-**SAMPLE**, không cấp quyền build graph production hoặc chạy benchmark chính thức.
+LuậtGT cung cấp WebApp cho USER/ADMIN, nối KAG để tra cứu luật giao thông và
+đọc căn cứ nguồn. Hướng dẫn này dành cho triển khai **SAMPLE**. Production WRITE
+giữ `BLOCKED`; bộ benchmark chính thức chưa hoàn thành.
 
-Đọc [cách sử dụng](USER-GUIDE.md) và [cập nhật giữ dữ liệu](UPDATE.md).
+Đọc [cách sử dụng](USER-GUIDE.md), [cập nhật giữ dữ liệu](UPDATE.md) và
+[cấu hình Docker cho người vận hành](../docker/README.md).
 
-## 1. Điều kiện trước khi nhận bàn giao
+## 1. Phần mềm và máy
 
-**FRESH_INSTALL_NOT_VERIFIED**: chưa thử máy sạch. `git clone` không chứa graph
-trong Docker volumes, tài khoản, publication hay credentials. Không bảo đảm
-chatbot chạy ngay sau clone/up.
+- Windows x64, Docker Desktop dùng Linux containers/WSL2, Git, PowerShell 7
+  (`pwsh`) và trình duyệt. Scripts UTF-8 dùng PowerShell 7.
+- Initializer/checker KAG gọi RTK bên trong; máy dùng các scripts đó cần `rtk`
+  trong PATH. App/container không cần RTK.
+- Docker cần plugin `docker compose`, BuildKit và `additional_contexts`.
+  KAG dùng nền tảng `linux/amd64`.
+- Chạy bằng Docker không cần cài Java, Node hoặc Python trên host. Khi phát triển
+  riêng: frontend dùng Node 24/pnpm 10.11.0, backend Java 21/Maven, KAG CPython
+  3.10.16 với dependencies đã pin.
+- Chuẩn bị RAM và SSD cho cả hai stack, images, build và backup. Tổng giới hạn
+  RAM khai báo riêng KAG là 5,25 GiB; cần thêm dung lượng cho WebApp, Docker và
+  hệ điều hành. Chưa xác định cấu hình tối thiểu hoặc khả năng chịu tải.
 
-Ngày 12/10/2026, source được kiểm ở branch `codex/d05-d07-runner-verify-rehearsal`,
-HEAD `d1d9c4fa308571f9cad6c6842bac8bfc67ecbd57` **cộng thay đổi local chưa commit**.
-Remote branch vẫn ở HEAD đó; sửa trạng thái chat, diagnostic KAG, cleanup frontend,
-portability và tài liệu bàn giao
-chưa được phát hành đầy đủ trên GitHub. Remote default HEAD là
-`0ae41304074103d843d326852a36266d99010597`. Người nhận cần chủ dự án cung cấp
-revision/bundle đã nghiệm thu và manifest SHA-256; chưa có revision phát hành
-đầy đủ thì chưa thể nhận bản tương đương qua GitHub. Khi chủ dự án phát hành,
-dùng SHA commit/release mới chứa đủ các thay đổi này; HEAD nêu trên chỉ là baseline.
-
-Yêu cầu chủ dự án/người vận hành cung cấp qua kênh riêng:
-
-- Source đã nghiệm thu, submodule `vendor/KAG` đúng commit
-  `fdab15b3929d2ee40dfcdd388f90233096a6afc9`.
-- Bộ Docker images và manifest identity tương thích Compose: ba OpenSPG images
-  pin digest trong `docker-compose.kag.yml`, runtime
-  `vietroadtraffic-kag-runtime:d0.2`, MinIO KAG và API image. KAG dùng
-  `pull_policy: never`; không có images trong cache sẽ không startup.
-- Offline wheels đúng `requirements-http-api.txt`, gồm FastAPI 0.115.12;
-  vendor Git objects lấy từ submodule đã checkout. Runtime/API cache phải khớp
-  các `STEP8_*_IMAGE_ID`; đổi tag đơn thuần không làm identity hợp lệ.
-- Gói backup SAMPLE được duyệt, manifest/hash và quy trình restore riêng cho
-  máy mới; dữ liệu WebApp tương ứng gồm văn bản/units đã xuất bản. Nguồn JSONL
-  trong Git không tự tạo Neo4j graph hoặc dữ liệu MySQL WebApp.
-- Release descriptor, source catalog, graph/backend/authority receipts,
-  SAMPLE/query proofs, embedding cache, publication và snapshot WebApp khớp nhau;
-  API/broker/gateway token files tách riêng, ledger và lock bền vững.
-- Provider credentials riêng, chat proxy được cấp quyền và model route đúng policy.
-  Proxy chat chạy ngoài 11 services; repository không cài hoặc khởi động nó.
-
-Các artifact này hiện ở workspace vận hành ngoài Git; lấy từ chủ dự án,
-không lấy ngẫu nhiên từ Internet hoặc chép credentials thật vào tài liệu.
-Proof mạng của máy cũ không dùng nguyên xi trên máy mới: operator cần đo lại
-database/server identity, read-only, isolation, Docker DNS và pin supplemental
-proof theo deployment thực. Không tự sửa ngày/hash publication để mở gate.
-
-Baseline SAMPLE: **32 nodes / 22 edges / 42 vectors**, database `vietroadtraffic`,
-namespace `VietRoadTraffic`, fingerprint
-`3fbfd44d0f81e9139b3c34dffb11e2930240e8a6a3e5b58c8ed534e7af987d49`.
-Publication đang kiểm có `serving_until=2026-10-18`; đây là thời hạn artifact
-SAMPLE hiện tại, không bảo đảm còn hợp lệ vào ngày người nhận cài đặt.
-
-Giới hạn nghiệm thu ngày 12/10/2026: Query/Retrieval/Vector readiness và một native
-abstention qua WebApp/history đã LIVE_PASS trên máy hiện tại. Production readiness
-chưa được chứng minh; Production WRITE vẫn BLOCKED. Planner RuntimeError lịch sử
-chưa xác định nguyên nhân gốc. Proxy binary khớp route receipt nhưng hash config
-proxy hiện khác hash lịch sử; drift chưa được giải thích hoàn toàn. Metadata
-được policy hiện hữu chấp nhận không chứng minh exact upstream model identity
-hoặc reliability/billing. Người vận hành cần đối chiếu các bằng chứng này trước
-bàn giao; không sửa hash, model hay policy để che drift.
-
-## 2. Phần mềm và máy
-
-- Windows x64: Docker Desktop dùng Linux containers/WSL2, Git, PowerShell 7
-  (`pwsh`), trình duyệt. Docker phải có plugin `docker compose`, BuildKit và
-  `additional_contexts`. Scripts hiện gọi `rtk`; cần RTK trong PATH, lấy binary
-  đã kiểm chứng từ bộ bàn giao. Không dùng Windows PowerShell 5.1 cho scripts UTF-8.
-- Chạy toàn bộ bằng Docker không cần cài Java/Node/Python trên host. Phát triển
-  riêng: Node 24/pnpm 10.11.0, Java 21/Maven; KAG dùng CPython 3.10.16 Linux amd64.
-- Máy nghiệm thu cấp Docker khoảng 7,62 GiB RAM, 12 CPU; 11 containers lúc idle
-  dùng khoảng 3,3 GiB. Riêng tổng memory limits KAG là 5,25 GiB, chưa gồm WebApp,
-  build và hệ điều hành. Gợi ý máy host RAM 16 GiB, Docker từ 8 GiB, CPU 4 core,
-  SSD còn ít nhất 30 GiB cho SAMPLE/images/build. Đây là mức chuẩn bị đề xuất,
-  chưa đo minimum, peak hoặc tải nhiều người; backup/corpus lớn cần thêm dung lượng.
+Kiểm công cụ:
 
 ```powershell
-rtk git --version
-rtk proxy pwsh --version
-rtk proxy docker version
-rtk proxy docker compose version
-rtk proxy docker info --format '{{.OSType}} {{.Architecture}} {{.MemTotal}}'
+git --version
+pwsh --version
+docker version
+docker compose version
+docker info --format '{{.OSType}} {{.Architecture}} {{.MemTotal}}'
 ```
 
-## 3. Lấy source và submodule
+## 2. Lấy source và submodule
 
-Trong PowerShell 7, clone vào thư mục riêng. Branch dưới đây là branch đã kiểm;
-vẫn phải nhận phần source local chưa phát hành theo mục 1 trước khi triển khai.
+Clone branch `main`, rồi mở PowerShell 7 tại thư mục repository:
 
 ```powershell
-rtk git clone --branch codex/d05-d07-runner-verify-rehearsal https://github.com/human6004/knowledge-augmented-generation-vietnamese-road-traffic-laws.git
-Set-Location knowledge-augmented-generation-vietnamese-road-traffic-laws
-# Sau khi nhận SHA release đã phát hành từ chủ dự án:
-$ReleaseRevision = '<SHA-commit-release-da-nghiem-thu>'
-rtk git checkout --detach $ReleaseRevision
-rtk git submodule update --init vendor/KAG
-rtk git rev-parse HEAD
-rtk git -C vendor/KAG rev-parse HEAD
-rtk git -C vendor/KAG status --short
+git clone --branch main https://github.com/human6004/knowledge-augmented-generation-vietnamese-road-traffic-laws.git
+git submodule update --init vendor/KAG
+git rev-parse HEAD
+git -C vendor/KAG rev-parse HEAD
+git -C vendor/KAG status --short
 ```
 
-Các lệnh sau chạy từ root repository. Không đổi upstream pin. Chuẩn bị cached
-images bằng gói image archive của operator (`rtk proxy docker load -i <archive>`),
-đối chiếu manifest; build runtime từ source là quy trình riêng trong
-[runtime](runtime.md), không tự thay cache identity của initializer.
+Submodule `vendor/KAG` phải ở commit
+`fdab15b3929d2ee40dfcdd388f90233096a6afc9`, không có thay đổi local.
+Không dùng `submodule update --remote`. Khi triển khai, ghi lại commit source
+và đối chiếu phiên bản đó với bộ artifacts/images do người vận hành cung cấp.
 
-## 4. Tạo `.env` và cấu hình KAG riêng
+Các lệnh còn lại chạy từ root repository.
 
-Chỉ dùng initializer khi **cài mới**, thư mục secrets mới chưa tồn tại.
-Ví dụ `C:/kag-local` là đường dẫn người nhận tự chọn, không phải đường dẫn máy tác giả.
+## 3. Chuẩn bị phần vận hành ngoài Git
+
+Git chứa source, Compose, scripts, schema và dữ liệu nguồn. Clone không tạo graph
+Neo4j, dữ liệu MySQL WebApp, tài khoản, publication, provider keys hoặc serving
+proof. Chưa xác minh cài đặt hoàn chỉnh trên máy sạch.
+
+Người vận hành cần chuẩn bị:
+
+- Cached images đúng Compose và manifest identity: OpenSPG/HAProxy pin digest,
+  runtime `vietroadtraffic-kag-runtime:d0.2`, MinIO KAG và API image tương thích.
+  KAG dùng `pull_policy: never`; thiếu cache thì không startup.
+- Offline wheels theo `requirements-http-api.txt`, gồm FastAPI 0.115.12 đúng hash;
+  Git objects của submodule đúng pin khi build API.
+- Graph SAMPLE và dữ liệu WebApp tương ứng, gồm văn bản/units được duyệt và
+  xuất bản. Restore hoặc tạo graph cần kế hoạch vận hành riêng.
+- Release descriptor, source catalog, backend/authority receipts, SAMPLE/query
+  proofs, embedding cache và publication còn hiệu lực, cùng snapshot WebApp.
+- External env, query/inspect tokens khác nhau, credentials riêng cho broker/API/
+  gateway, ledger và lock bền vững.
+- Provider credentials, chat proxy ngoài Compose và model route phù hợp proof.
+  Repository không cài hoặc khởi động chat proxy.
+
+Lấy bộ artifacts qua kênh bàn giao của dự án; đối chiếu hash/identity trước dùng.
+Không đưa secrets vào Git. Proof gắn với deployment: chuyển máy hoặc recreate
+container cần đo lại backend identity, read-only, isolation, Docker DNS và ràng
+buộc proof mới. Không chép IP/identity máy cũ hay sửa ngày/hash sealed bundle
+để mở readiness.
+
+## 4. Tạo env và cấu hình
+
+Chỉ khởi tạo khi cài mới. Ví dụ `C:/kag-local` là thư mục ngoài Git do người
+vận hành chọn; thay bằng nơi lưu artifacts của bạn. Chuẩn bị wheel cache trước.
+`$ApiImageId` phải là ID image API đã đối chiếu với bộ bàn giao:
 
 ```powershell
-rtk proxy pwsh -NoProfile -File docker/init-env.ps1
-rtk proxy pwsh -NoProfile -File docker/init-step8-env.ps1 -OutputDirectory C:/kag-local/secrets -WheelDirectory C:/kag-local/offline-wheels -ProjectName kag-s8-local
+$ApiImageId = '<sha256-ID-image-API-da-doi-chieu>'
+pwsh -NoProfile -File docker/init-env.ps1
+pwsh -NoProfile -File docker/init-step8-env.ps1 -OutputDirectory C:/kag-local/secrets -WheelDirectory C:/kag-local/offline-wheels -ProjectName kag-s8-local -ApiImageId $ApiImageId
 ```
 
-Lệnh đầu tạo `.env` WebApp và credentials ngẫu nhiên. Lệnh thứ hai tạo external
+Lệnh đầu tạo `.env` WebApp với credentials ngẫu nhiên. Lệnh thứ hai tạo external
 `C:/kag-local/secrets/kag.env`, tokens, thư mục release/credentials và ledger
-placeholder `{}`; **readiness vẫn DENY**. Initializer không tạo graph, provider
-keys, serving proof hoặc publication. Giá trị API image ID mặc định là cache
-lịch sử; operator phải chọn identity image đã bàn giao/build, không mặc định
-coi đó là image mới đã nghiệm thu.
+placeholder `{}`. Initializer không tạo graph, provider keys, proof hoặc
+publication; readiness vẫn chưa được cấp. Thư mục output phải chưa tồn tại.
+Không dùng image ID mặc định của initializer thay cho ID image đã bàn giao.
 
-Để dùng tên `.env.kag`, sao chép `kag.env` trong cùng thư mục external qua trình
-quản lý file thành `C:/kag-local/secrets/.env.kag`; giữ quyền truy cập hạn chế.
-Không dùng `docker/init-env.ps1 -Kag` hoặc `.env.kag.example` cho primary Compose:
-chúng là compatibility `OPENSPG_*` cũ, thiếu biến `STEP8_*`.
-Không tạo `.env.kag` mới trên máy đã cài.
+Dùng trực tiếp `kag.env`; tên file không bắt buộc là `.env.kag`.
+`docker/init-env.ps1 -Kag` và `.env.kag.example` thuộc cấu hình compatibility
+`OPENSPG_*`, thiếu biến `STEP8_*` cho Compose chính.
 
-Mở `.env` bằng editor riêng; thêm các biến sau, thay đường dẫn/token theo gói
-được cấp. Không đăng file env hoặc ảnh chứa secrets lên GitHub.
+Mở `.env` WebApp bằng editor riêng và thêm:
 
 ```dotenv
 STEP8_KAG_PROJECT=kag-s8-local
 KAG_BASE_URL=http://kag-ingress:8080
 KAG_TOKEN_FILE=C:/kag-local/secrets/query.token
 KAG_INSPECT_TOKEN_FILE=C:/kag-local/secrets/inspect.token
-KAG_RELEASE_ID=<release-id-do-operator-cap>
-KAG_WEBAPP_SNAPSHOT_ID=<snapshot-id-do-operator-cap>
+KAG_RELEASE_ID=<release-id-duoc-cap>
+KAG_WEBAPP_SNAPSHOT_ID=<snapshot-id-duoc-cap>
 KAG_QUERY_TIMEOUT_SECONDS=180
 KAG_INSPECTION_TIMEOUT_SECONDS=25
 ```
 
-`STEP8_KAG_PROJECT` trong hai env phải giống nhau, bắt đầu bằng `kag-s8-`.
-Query/inspect là hai tokens khác nhau, khớp API; browser chỉ giữ JWT WebApp.
-Tài khoản ADMIN nằm trong `.env`: `ADMIN_EMAIL`, `ADMIN_PASSWORD`; không dùng
-mật khẩu mẫu công khai. USER đăng ký qua UI.
+`STEP8_KAG_PROJECT` hai env phải giống nhau và bắt đầu bằng `kag-s8-`.
+Token files phải khớp KAG API; browser chỉ dùng JWT WebApp. Tài khoản ADMIN
+khởi tạo từ `ADMIN_EMAIL`/`ADMIN_PASSWORD` trong `.env`; USER đăng ký qua UI.
 
-Operator hoàn thiện external `.env.kag` bằng dữ liệu máy mới, giữ định dạng
-`KEY='value'`, không trùng key. Các nhóm bắt buộc xem trực tiếp
-[initializer](../docker/init-step8-env.ps1) và [Compose](../docker-compose.kag.yml):
+Người vận hành hoàn thiện `kag.env` theo [Docker](../docker/README.md),
+[initializer](../docker/init-step8-env.ps1) và [Compose](../docker-compose.kag.yml).
+Giữ định dạng `KEY='value'`, không trùng key. Cần đúng paths, image IDs,
+database/storage revision, broker identity, release, provider/model và proof pins.
+SAMPLE broker dùng database `vietroadtraffic` đã seal read-only; storage revision
+phải khớp volume được cấp. Không đổi revision để vô tình tạo graph rỗng.
 
-- Images/cache/build: `STEP8_API_IMAGE`, `STEP8_API_IMAGE_ID`,
-  `STEP8_RUNTIME_IMAGE`, `STEP8_RUNTIME_IMAGE_ID`, `STEP8_MINIO_IMAGE`,
-  `STEP8_MINIO_IMAGE_ID`, `STEP8_HTTP_WHEELS_DIR`, `STEP8_VENDOR_OBJECTS_DIR`.
-- Release/reader/broker: `STEP8_RELEASE_DIR`, `STEP8_RELEASE_ID`,
-  `STEP8_API_CREDENTIALS_DIR`, `STEP8_BROKER_CREDENTIALS_DIR`,
-  `STEP8_BROKER_DATABASE_ID`, `STEP8_BROKER_SERVER_ID`,
-  `STEP8_BROKER_URL='http://openspg-server:8899'`; broker giữ DB credential,
-  API giữ broker token và proof pins, không giữ DB password.
-- Query/provider: `STEP8_QUERY_PROFILE`, `STEP8_CHAT_URL`, `STEP8_CHAT_MODEL`,
-  `STEP8_EMBEDDING_URL`, `STEP8_EMBEDDING_MODEL`, gateway credentials,
-  `STEP8_ATTEMPT_LEDGER_FILE`, `STEP8_ATTEMPT_LOCK_FILE` và policy được cấp.
-  Provider keys nằm trong API-only `chat.key`/`embedding.key`, không đưa vào frontend.
-- Proxy: `STEP8_CHAT_PROXY_HOST='host.docker.internal'`,
-  `STEP8_CHAT_PROXY_PORT='8317'` hoặc DNS/port riêng đã kiểm chứng.
-  Linux cần listener/firewall cho Docker truy cập; không mở LAN tùy tiện.
-- Graph SAMPLE được bàn giao dùng `STEP8_DATABASE='vietroadtraffic'`,
-  `STEP8_READ_ONLY_DATABASES='vietroadtraffic'` và storage revision đúng volume
-  đã duyệt. Không tự copy revision máy tác giả hoặc tạo graph rỗng rồi coi READY.
-
-Không hardcode IP Docker/Wi-Fi. `STEP8_CHAT_URL` loopback là logical identity
-trong policy sealed; transport thực qua ingress gateway. Đổi URL/model cần
-operator kiểm proof, không tự sửa để vượt gate. Chi tiết: [Docker](../docker/README.md).
+Chat proxy dùng DNS host/port đã kiểm chứng; mặc định
+`host.docker.internal:8317`. URL/model logical trong proof khác transport gateway;
+không sửa endpoint hoặc model chỉ để vượt gate.
 
 ## 5. Chạy KAG trước, WebApp sau
 
-**Chỉ chạy sau khi operator hoàn tất provisioning SAMPLE/artifacts ở mục 1–4.**
-Các lệnh này startup services đã chuẩn bị; không phải quy trình restore hoặc mint
-proof. Máy mới sẽ chưa query được cho tới khi operator đo/pin proof thực.
+Chỉ startup sau khi người vận hành chuẩn bị images, mounts và cấu hình phù hợp.
+Đây là lệnh chạy services, không thay quy trình restore hoặc cấp serving proof:
 
 ```powershell
-$KagEnv = 'C:/kag-local/secrets/.env.kag'
+$KagEnv = 'C:/kag-local/secrets/kag.env'
 $WebEnv = '.env'
-rtk proxy pwsh -NoProfile -File docker/check-config.ps1 -Stack Kag -KagEnvFile $KagEnv
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml up -d --no-build --pull never
-rtk proxy pwsh -NoProfile -File docker/check-config.ps1 -Stack WebApp -WebAppEnvFile $WebEnv
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml build frontend backend minio
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml up -d --no-build
+pwsh -NoProfile -File docker/check-config.ps1 -Stack Kag -KagEnvFile $KagEnv
+docker compose --env-file $KagEnv -f docker-compose.kag.yml up -d --no-build --pull never
+pwsh -NoProfile -File docker/check-config.ps1 -Stack WebApp -WebAppEnvFile $WebEnv
+docker compose --env-file $WebEnv -f docker-compose.yml build frontend backend minio
+docker compose --env-file $WebEnv -f docker-compose.yml up -d --no-build
 ```
 
-WebApp build lần đầu cần registry/npm/Maven/GitHub access hoặc cache tương ứng.
-Backend Dockerfile chạy Maven verify và Flyway trên MySQL WebApp khi startup;
-không trỏ DB_URL vào database cũ/khác. KAG API build offline chỉ cần nếu operator
-chưa cấp đúng API image: xem [cập nhật API](UPDATE.md#kag-api); proof phải khớp code.
+WebApp build cần registry/npm/Maven/GitHub access hoặc cache tương ứng. Backend
+Dockerfile chạy Maven verify; Flyway chạy khi backend startup trên MySQL WebApp.
+KAG API build offline chỉ cần khi chưa có image phù hợp: xem
+[cập nhật API](UPDATE.md#kag-api). Build runtime có hướng dẫn riêng tại
+[runtime](runtime.md).
 
-Kiểm đúng 6 + 5 services, trạng thái running; healthcheck hiện chỉ có ở một số service:
+Deployment mới cần người vận hành đo và pin lại proof sau startup, rồi reload
+API theo [quy trình ràng buộc proof](../docker/README.md#operational-proof-và-rebind).
+Container chạy hoặc healthcheck xanh chưa đủ để chat.
+
+## 6. Mở UI và kiểm kết nối
 
 ```powershell
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml config --services
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml config --services
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml ps
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml ps
-rtk proxy curl.exe --fail http://127.0.0.1:8080/actuator/health
-rtk proxy curl.exe --silent --output NUL --write-out '%{http_code}' http://127.0.0.1:38000/v1/health
+docker compose --env-file $KagEnv -f docker-compose.kag.yml ps
+docker compose --env-file $WebEnv -f docker-compose.yml ps
+curl.exe --fail http://127.0.0.1:8080/actuator/health
+curl.exe --silent --output NUL --write-out '%{http_code}' http://127.0.0.1:38000/v1/health
 ```
 
-KAG6: `openspg-mysql`, `openspg-neo4j`, `openspg-minio`, `openspg-server`,
-`kag-api`, `kag-ingress`. WebApp5: `mysql`, `redis`, `minio`, `backend`, `frontend`.
-KAG health không kèm token trả 401; lệnh curl trên chỉ kiểm ingress reachable.
-Nếu operator kiểm trực tiếp readiness/inspection bằng service token, cần header
-`X-KAG-Release-ID` khớp release đã cấp; thiếu/sai header có thể trả
-`RELEASE_MISMATCH`, không đủ bằng chứng kết luận source hoặc proof đã drift.
-Backend health công khai là `/actuator/health` (UP); `/api/health` không phải
-endpoint kiểm công khai. Liveness 200 có token vẫn không chứng minh readiness.
-Đăng nhập ADMIN → Hạ tầng/Tổng quan,
-kiểm Query/Retrieval/Vector READY và graph fingerprint; release artifact có thể
-hiện `NOT_READY · ARTIFACTS_ONLY` riêng, không thay thế capability readiness.
+Mở [LuậtGT](http://127.0.0.1:8081). Backend dùng host port 8080; KAG ingress
+mặc định 38000; MinIO WebApp console 9001. Host ports chỉ bind localhost.
+Nếu đổi `STEP8_API_PORT`, kiểm KAG bằng port đã chọn.
 
-Mở **http://127.0.0.1:8081**. Backend host 8080; ingress host mặc định 38000;
-MinIO console 9001. KAG API 8000 và gateway 8898 không publish host;
-OpenSPG Java 8887 chỉ nghe loopback container. Nếu đổi `STEP8_API_PORT`, dùng
-port host tương ứng. Các host ports chỉ bind localhost.
+Backend health công khai là `/actuator/health`. KAG health qua ingress không có
+service token trả 401: lệnh trên chỉ kiểm ingress phản hồi. Không đưa service token
+vào browser. Đăng nhập ADMIN, mở **Hạ tầng** hoặc **Tổng quan** để đọc liveness,
+Query/Retrieval/Vector readiness và graph fingerprint. Release artifact tồn tại
+không thay cho capability readiness.
 
-## 6. Dừng, chạy lại, xem lỗi
+## 7. Dừng, chạy lại và xử lý lỗi
 
-Giữ cùng `$KagEnv`, `$WebEnv`, project và working directory:
+Giữ cùng env, project và thư mục làm việc:
 
 ```powershell
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml stop
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml stop
-# Khởi động lại các container đã có: KAG trước, WebApp sau.
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml start
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml start
-rtk proxy docker compose --env-file $WebEnv -f docker-compose.yml logs --tail 100 frontend backend
-rtk proxy docker compose --env-file $KagEnv -f docker-compose.kag.yml logs --tail 100 kag-ingress kag-api
+docker compose --env-file $WebEnv -f docker-compose.yml stop
+docker compose --env-file $KagEnv -f docker-compose.kag.yml stop
+docker compose --env-file $KagEnv -f docker-compose.kag.yml start
+docker compose --env-file $WebEnv -f docker-compose.yml start
+docker compose --env-file $WebEnv -f docker-compose.yml logs --tail 100 frontend backend
+docker compose --env-file $KagEnv -f docker-compose.kag.yml logs --tail 100 kag-ingress kag-api
 ```
 
-Không gửi logs chưa kiểm secrets cho người khác. Thiếu external network: kiểm
-KAG đã chạy và project hai env giống nhau. Thiếu token/bind/cache: bổ sung artifact
-từ operator, không tạo file rỗng. `401/403`: kiểm credentials/scope.
-`CONCURRENCY_LIMIT`: query đang chạy; đợi kết thúc rồi kiểm trạng thái, không tự
-gửi lại inference. `NOT_READY/RELEASE_UNAVAILABLE`: xem proofs, graph, provider,
-thời hạn publication. `KAG_ABSTAINED` với `native_state=abstained` là thiếu căn cứ,
-khác lỗi hạ tầng dù HTTP 503. Không bypass safety.
+- Thiếu external network: kiểm KAG đã startup và project hai env giống nhau.
+- Thiếu image, token hoặc bind mount: bổ sung đúng bộ artifacts; không tạo file
+  rỗng thay credential/proof.
+- `401/403`: kiểm token và scope. Kiểm readiness/inspection trực tiếp còn cần
+  `X-KAG-Release-ID` khớp release; thiếu/sai header có thể trả `RELEASE_MISMATCH`.
+- `CONCURRENCY_LIMIT`: đợi query hiện tại kết thúc, đọc lại trạng thái/lịch sử
+  trước gửi lại.
+- `NOT_READY/RELEASE_UNAVAILABLE`: người vận hành kiểm release, proofs, graph,
+  provider route và thời hạn publication.
+- `KAG_ABSTAINED` với `native_state=abstained` là thiếu căn cứ đã được xác minh,
+  khác lỗi hạ tầng dù native API dùng HTTP 503.
+
+Kiểm và che secrets trước chia sẻ logs. Không bỏ authentication, mở production
+WRITE, xóa volumes hoặc reset ledger để xử lý lỗi.

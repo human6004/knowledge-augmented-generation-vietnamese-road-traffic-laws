@@ -1,178 +1,73 @@
 # KAG luật giao thông đường bộ Việt Nam
 
-Ứng dụng Knowledge-Augmented Generation tra cứu và trả lời câu hỏi pháp lý từ
-văn bản, đơn vị nội dung và biển báo. Core Python đã có Builder, Retriever,
-Solver và Evaluation Framework. LuậtGT cung cấp giao diện React và backend
-Spring Boot; HTTP API tại `kag/http_api/` nối backend với core Python.
+Dự án xây dựng ứng dụng tra cứu luật giao thông và trả lời câu hỏi có căn cứ từ văn bản pháp luật, đơn vị nội dung và biển báo. LuậtGT là giao diện web; hệ thống KAG phía sau tổ chức dữ liệu thành đồ thị tri thức, tìm nguồn liên quan và kiểm tra căn cứ trước khi trả lời.
 
-## Bản đồ tính năng và mã nguồn
+## Tính năng
 
-- **Deterministic Builder** kiểm tra nguồn/schema, lập kế hoạch node/cạnh,
-  giữ native Integer và gộp provenance xác định. Adapter tái sử dụng writer và
-  vectorizer OpenSPG KAG, bổ sung retry/checkpoint, scope và kiểm chứng readback.
-  Mã: [graph plan](kag/builder/graph_plan.py), [writer](kag/builder/writer_adapter.py),
-  [vectorizer](kag/builder/resilient_vectorizer.py), [runner](kag/runner.py).
-- **OpenSPG + Neo4j** cung cấp project/schema, lưu graph và index vector.
-  Retriever và verifier đọc Neo4j trực tiếp; writer/SDK dùng API OpenSPG.
-  Mã: [readback verifier](kag/verify.py), [backend identity](kag/backend_identity.py).
-- **Legal Retriever** truy hồi bốn trường nội dung, giữ exact ID và nguyên văn
-  nguồn; mở rộng quan hệ một hop có giới hạn, mặc định tắt.
-  Mã: [Retriever](kag/retriever/retriever.py), [Neo4j reader](kag/retriever/neo4j.py).
-- **Legal Solver** dùng `KAGIterativePlanner` và `KAGIterativePipeline` từ upstream
-  đã pin, ghép executor/prompt/generator pháp lý. Kết quả chỉ dùng nguồn đã đọc
-  lại từ server; thiếu căn cứ, hiệu lực hoặc applicability thì abstain.
-  Mã: [public answer API và safe generator](kag/legal_solver.py),
-  [legal prompts](kag/legal_prompts.py).
-- **Evaluation Framework** có typed dataset, lifecycle, G1 retrieval, G2 answer/
-  citations và báo cáo có hash. Gold/QID phục vụ đánh giá, không điều khiển inference.
-  Mã: [G1/G2](kag/evaluation/evaluate.py), [dataset](kag/evaluation/dataset.py),
-  [reports](kag/evaluation/report.py).
-- **WebApp LuậtGT** có quản lý nội dung, ôn/thi, chat REST/citations và schema identity.
-  Python API đã có query/SSE, retrieval và inspection SAMPLE có kiểm chứng nguồn.
-  Mã: [routes](WebApp/frontend/src/App.tsx), [user pages](WebApp/frontend/src/pages/server/UserPages.tsx),
-  [chat service](WebApp/backend/src/main/java/vn/luatgt/service/ChatService.java),
-  [KagClient](WebApp/backend/src/main/java/vn/luatgt/integration/KagClient.java).
-- **Admin** quản lý nội dung/đơn vị pháp lý, nhập dữ liệu, tài khoản, phản hồi,
-  mức phạt, schema identity và kiểm tra MySQL/Redis/MinIO. Graph/Pipeline/Benchmark
-  đọc API SAMPLE; không có quyền chạy build/benchmark. Mã: [admin pages](WebApp/frontend/src/pages/server/AdminPages.tsx),
-  [schema page](WebApp/frontend/src/pages/server/KagSchemaPage.tsx),
-  [operations](WebApp/frontend/src/pages/server/OperationsPages.tsx),
-  [moderation](WebApp/backend/src/main/java/vn/luatgt/service/ModerationService.java).
+- Hỏi chatbot, đọc trích dẫn và đối chiếu với nội dung nguồn.
+- Tra cứu văn bản, biển báo và mức phạt đã được quản trị viên kiểm duyệt.
+- Ôn tập, thi thử hạng B và xem lịch sử.
+- Quản lý nội dung, đơn vị pháp lý, tài khoản và phản hồi qua trang ADMIN.
+- Xây dựng đồ thị tri thức; truy hồi theo vector và quan hệ pháp lý.
+- Tạo, kiểm tra và quản lý bộ câu hỏi đánh giá; đo truy hồi và câu trả lời qua API Python.
 
-```text
-Nguồn + schema → deterministic plan → guarded KAG builder → OpenSPG → Neo4j
-Câu hỏi → upstream iterative planner/pipeline
-              ├→ Legal Retriever → đọc Neo4j trực tiếp → evidence nguồn
-              └→ legal deduction + safe generator → AnswerResult / abstention
+Khi thiếu căn cứ, chatbot thông báo chưa thể trả lời. Kết quả trích nội dung văn bản không tự xác nhận quy định còn hiệu lực. Ứng dụng hỗ trợ tra cứu, không thay thế văn bản chính thức hoặc tư vấn pháp lý.
 
-Dataset đánh giá → G1: Retriever / G2: public answer API → metrics + reports
-React → Spring KagClient → HAProxy → Python HTTP API → core Python
-```
+## Công nghệ
 
-Chi tiết package, transport và namespace: [kiến trúc sản phẩm](docs/architecture.md).
+React và TypeScript cung cấp giao diện. Spring Boot xử lý tài khoản, nội dung, ôn thi và tích hợp chatbot. Python kết hợp OpenSPG KAG với các bộ truy hồi và kiểm tra căn cứ pháp lý của dự án. Neo4j lưu đồ thị cùng vector; MySQL lưu dữ liệu nghiệp vụ. Redis hỗ trợ giới hạn truy cập, MinIO lưu tệp và ảnh.
 
-## Trạng thái triển khai
-
-Builder/Retriever/Solver, Question Generation/Evaluation, HTTP API và nghiệp vụ
-WebApp đã có code. Chat và Admin SAMPLE đã được kiểm thử trong các lượt nghiệm thu
-11–12/10/2026; đó là bằng chứng tại thời điểm chạy, không bảo đảm runtime hôm nay.
-Hai Compose khai báo 11 services: 5 WebApp + 6 KAG. SAMPLE gồm 32 nodes / 22 edges /
-42 vectors; bộ câu hỏi chính thức chưa hoàn thành. [Bootstrap](kag/bootstrap.py)
-đã xử lý preload local Solver; [regression import-order](tests/runtime/test_bootstrap.py)
-kiểm cả initialize-first, preload-builder và preload-solver.
-Mã đã triển khai không đồng nghĩa graph production đã build hoặc benchmark pháp
-lý đã đạt. **Production WRITE vẫn BLOCKED**. Import SDK phải qua bootstrap
-đúng thứ tự; import/smoke PASS không là legal-domain hoặc production release.
+Xem [kiến trúc](docs/architecture.md) để hiểu luồng dữ liệu và trách nhiệm từng thành phần.
 
 ## Bắt đầu
 
-Hướng dẫn bàn giao: [cài đặt lần đầu](docs/INSTALL.md),
-[sử dụng USER/ADMIN](docs/USER-GUIDE.md),
-[cập nhật giữ dữ liệu](docs/UPDATE.md). Máy sạch chưa được nghiệm thu;
-source local chưa phát hành và serving artifacts ngoài Git cần chuẩn bị riêng.
-Baseline GitHub branch `codex/d05-d07-runner-verify-rehearsal` hiện ở
-`d1d9c4fa308571f9cad6c6842bac8bfc67ecbd57`; bản nghiệm thu ngày 12/10/2026 còn các
-thay đổi local chưa commit. Khi bàn giao, chủ dự án cần công bố SHA release mới
-chứa đủ source, tests và ba tài liệu trên. Chưa dùng `main` làm bản SAMPLE đã nghiệm thu.
+Mã nguồn chính nằm trên nhánh `main`. Repository chứa ứng dụng, schema, dữ liệu nguồn, cấu hình mẫu và định nghĩa Docker. Để phục vụ chatbot, người vận hành còn cần chuẩn bị cấu hình dịch vụ mô hình, secrets, dữ liệu graph và bộ tệp xác minh phục vụ ngoài Git.
 
-Từ root repository, lấy submodule đúng pin nếu checkout mới chưa có:
+1. Làm theo [hướng dẫn cài đặt](docs/INSTALL.md).
+2. Đọc [hướng dẫn sử dụng](docs/USER-GUIDE.md) cho USER và ADMIN.
+3. Khi nâng cấp, dùng [hướng dẫn cập nhật](docs/UPDATE.md) để giữ dữ liệu.
 
-```sh
-git submodule update --init vendor/KAG
+Hệ thống hỗ trợ vận hành với graph SAMPLE có phạm vi giới hạn. Ghi graph production vẫn bị khóa trong runtime; bộ câu hỏi benchmark chính thức chưa hoàn thành. Có đủ mã nguồn không đồng nghĩa đã có graph đầy đủ hoặc dịch vụ sẵn sàng.
+
+## Cấu trúc repository
+
+```text
+kag/         Core Python: builder, retriever, solver, evaluation và HTTP API
+WebApp/      Frontend React, backend Spring Boot và công cụ nhập nội dung
+data/        Nguồn pháp luật, dữ liệu xử lý và dữ liệu đánh giá
+docker/      Images và công cụ vận hành hạ tầng
+tests/       Kiểm thử Python theo thành phần
+benchmark/   Hướng dẫn đánh giá và thư mục làm việc
+docs/        Hướng dẫn sử dụng, cài đặt và tài liệu kỹ thuật
+vendor/KAG/  OpenSPG KAG dưới dạng Git submodule
 ```
 
-Runtime chuẩn là **CPython 3.10.16, Linux amd64**. Làm theo
-[setup runtime](docs/runtime.md); các lệnh sau chỉ xem giao diện CLI:
+Hai file Compose tại root triển khai hạ tầng KAG và WebApp riêng. Code ứng dụng nằm ngoài vendor; các lệnh runtime và đánh giá được cung cấp trực tiếp qua package `kag`.
+
+## Dữ liệu và đánh giá
+
+Dữ liệu graph gồm văn bản pháp luật, các đơn vị nội dung và biển báo. Dữ liệu đánh giá được quản lý riêng, không đưa vào nguồn truy hồi. Xem [mô tả dữ liệu](data/README.md), [datasheet](data/DATASHEET.md) và [điều kiện sử dụng](data/LICENSE.md).
+
+Framework đánh giá có G1 cho truy hồi và G2 cho câu trả lời, trích dẫn, khả năng từ chối trả lời. Bộ câu hỏi thử nghiệm và kết quả SAMPLE không phải benchmark chính thức. Quy trình chuẩn bị dataset, điều kiện đánh giá và API nằm trong [hướng dẫn benchmark](benchmark/README.md).
+
+## Phát triển
+
+- [WebApp](WebApp/README.MD), [frontend](WebApp/frontend/README.md), [backend](WebApp/backend/README.md): phát triển và kiểm thử ứng dụng.
+- [Runtime Python](docs/runtime.md): phiên bản phụ thuộc, submodule và khởi tạo SDK.
+- [Kiểm thử Python](tests/README.md): cách chạy từng nhóm kiểm thử và chuẩn bị fixtures.
+- [Docker](docker/README.md): services, mạng, cổng và cấu hình vận hành.
+
+Sau khi chuẩn bị [runtime Python](docs/runtime.md), từ root repository có thể xem các lệnh được hỗ trợ:
 
 ```sh
 python -B -m kag --help
 python -B -m kag.evaluation --help
 ```
 
-CLI [runtime](kag/__main__.py) có `run`, `resume`, `verify`, dùng config tường minh và lưu bằng
-chứng ngoài repo. CLI [evaluation](kag/evaluation/__main__.py) có `validate`, `freeze`, `import-legacy`,
-`generate`, `validate-generated`;
-G1/G2 là library API, không có lệnh benchmark live tự động. Xem
-[kiến trúc và entrypoints](docs/architecture.md#entrypoints-và-lệnh-ổn-định),
-[vận hành runtime](docs/runner.md) và [hướng dẫn WebApp](WebApp/README.MD).
-`verify` không ghi graph nhưng có thể cập nhật receipt/log của run ngoài repo.
+## Tài liệu kỹ thuật
 
-## Đánh giá và benchmark
-
-G1 đo Retriever hiện tại; G2 dùng public Solver API và kiểm citations. Dataset
-PROVISIONAL/FROZEN, eligibility và nơi lưu evidence được hướng dẫn tại
-[benchmark](benchmark/README.md); API nội bộ tại
-[Evaluation Framework](docs/architecture.md#evaluation-framework).
-Smoke synthetic/sample không thay thế official benchmark. Không chạy full
-benchmark hoặc provider từ thao tác setup.
-
-## Kiểm thử
-
-Sau [setup runtime chuẩn](docs/runtime.md), từ root repository:
-
-```sh
-python -B -m unittest discover -s tests/runtime -p 'test_*.py' -v
-```
-
-[Hướng dẫn test](tests/README.md) giải thích từng suite, chạy process riêng,
-fixtures và canonical lock mount. Test WebApp nằm trong hướng dẫn
-[backend](WebApp/backend/README.md#chạy) và
-[frontend](WebApp/frontend/README.md#phát-triển-và-kiểm-thử).
-
-## Dữ liệu và nguồn chuẩn
-
-Corpus tại `data/` có phạm vi graph 91 văn bản, 55.597 đơn vị nội dung và 887
-bản ghi biển báo; eval không thuộc retrieval corpus. Xem [dataset](data/README.md),
-[datasheet](data/DATASHEET.md) và [giấy phép](data/LICENSE.md).
-
-Schema `VietRoadTraffic` có `LegalDocument`, `LegalUnit`, `TrafficSign`, mười
-predicate; 75 thuộc tính node logical gồm 69 khai báo và sáu `id/name` kế thừa
-`Thing`. Penalty nằm trên LegalUnit; provenance nằm trên cạnh. Nguồn chuẩn:
-[schema](kag/schema/VietRoadTraffic.schema),
-[contract](kag/schema/schema_contract.json),
-[mô hình miền](docs/domain_model.md) và [quy tắc schema](docs/schema.md).
-Không sửa corpus, schema, gold hoặc input đã khóa để làm smoke PASS.
-
-## Cấu trúc và tích hợp
-
-- `kag/`: core ứng dụng, runtime, legal adapters và evaluation.
-- `vendor/KAG/`: upstream OpenSPG KAG, pin
-  `fdab15b3929d2ee40dfcdd388f90233096a6afc9`; không đặt code ứng dụng ở đây.
-- `WebApp/`: React/Spring và nguồn nghiệp vụ được kiểm duyệt riêng.
-- `docker/`: runtime Python và hạ tầng hai stack độc lập; xem [Docker](docker/README.md).
-- `tests/`: [kiểm thử theo trách nhiệm](tests/README.md); `benchmark/` và `scripts/`
-  là workspace dành riêng, implementation hoạt động nằm trong `kag/`.
-  Root `scripts/` chưa có wrapper; script hạ tầng ở [docker](docker/README.md),
-  nhập/kiểm tra nghiệp vụ ở [WebApp/scripts](WebApp/README.MD).
-  Dùng CLI hiện có, không cần wrapper/runner mới.
-  Import/build/verify-stack có side effects; xem hướng dẫn subsystem trước khi chạy.
-- `docs/`: tài liệu kiến trúc, vận hành và design lịch sử; chỉ mục ở bên dưới.
-
-`KAG_BASE_URL` trong backend mặc định là `http://kag-ingress:8080` qua external
-Docker ingress network; cổng host ingress mặc định 38000. API nội bộ dùng 8000,
-OpenSPG Java nội bộ dùng 8887. Không trỏ chat tới OpenSPG.
-Native `AnswerResult` và hợp đồng Java khác nhau về abstention, loại citation
-và validation nguồn. Xem [hợp đồng HTTP](docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
-Clone GitHub chưa đủ để chạy SAMPLE: cần đúng vendor/runtime và image cache,
-wheel/Git objects cho build offline, graph/release proof, provider/proxy và
-publication hợp lệ. [Docker](docker/README.md) giữ prerequisites cụ thể.
-SAMPLE không phải production; Production WRITE vẫn BLOCKED.
-
-## Tài liệu chi tiết
-
-- [Kiến trúc sản phẩm](docs/architecture.md): package, upstream, transport, API và compatibility HTTP đề xuất.
-- [Runtime Python](docs/runtime.md): interpreter, dependency/vendor pin, setup và bootstrap.
-- [Vận hành Builder](docs/runner.md): run/resume/verify, config, ledger, outbox và lock.
-- [Backend identity](docs/backend-identity.md): physical database và routing trước dispatch.
-- [Writer scope](docs/production-writer-scope.md): preconditions và production WRITE còn khóa.
-- [Mô hình miền](docs/domain_model.md): identity, cây đơn vị, quan hệ pháp lý và phạm vi graph.
-- [Schema kỹ thuật](docs/schema.md): property/predicate, codec, SAFE_EDGE và yêu cầu Builder.
-- [Retrieval và frozen slice](docs/retrieval-demo.md): exact ranking; sample lịch sử không là official benchmark.
-- [Benchmark](benchmark/README.md): datasets, library G1/G2 và reports.
-- [Dữ liệu](data/README.md), [WebApp](WebApp/README.MD), [backend](WebApp/backend/README.md),
-  [frontend](WebApp/frontend/README.md), [Docker](docker/README.md), [tests](tests/README.md).
-
-Design trong [docs/superpowers/specs](docs/superpowers/specs/) giữ quyết định và
-checkpoint lịch sử; tên scope, stage, release/gate và input paths trong machine
-contracts vẫn ổn định. Báo cáo phase ngoài repo là bằng chứng tại thời điểm chạy,
-không tự xác nhận runtime hoặc graph đang hoạt động hôm nay.
+- [Kiến trúc](docs/architecture.md): thành phần, luồng câu hỏi và hợp đồng HTTP.
+- [Mô hình miền](docs/domain_model.md) và [schema](docs/schema.md): định danh, thuộc tính và quan hệ pháp lý.
+- [Builder và runner](docs/runner.md): cấu hình, chạy, tiếp tục và xác minh.
+- [Backend identity](docs/backend-identity.md) và [phạm vi ghi graph](docs/production-writer-scope.md): điều kiện truy cập và bảo vệ dữ liệu.
+- [Retrieval](docs/retrieval-demo.md): tìm nguồn, xếp hạng và chuẩn bị tập kiểm tra.

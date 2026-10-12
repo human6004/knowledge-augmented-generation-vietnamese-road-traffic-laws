@@ -1,31 +1,36 @@
 # Writer scope và execution authority
 
-Scope/validation, scoped writer, runner và readback đã có implementation.
-Public runner hiện chặn mọi `WRITE`; production full build vẫn BLOCKED.
-Config, offline source PASS hoặc backend identity PROVEN không mở gate.
-Các names/hash C3/C4 dưới đây là stable machine contracts, không đổi theo cách
-đặt tên sản phẩm. Xem [kiến trúc hiện tại](architecture.md).
+Writer scope bind target, source payload và quyền dispatch. Public runner chặn
+`PRODUCTION WRITE`; config hợp lệ, source-only PASS hoặc backend identity PROVEN
+không mở gate. `FRESH_SAMPLE` là nhánh WRITE giới hạn trên backend cô lập, không
+cấp quyền full production build.
 
 ## Scope và default
 
-- `C4_1_SMOKE`: tên project và ID synthetic được discovery/verify; chỉ ID dưới
-  prefix smoke, cleanup exact synthetic được phép.
-- `C4_3A_MANIFEST_SAMPLE` (DEMO): giữ nguyên project `VietRoadTrafficC43A10Pct`,
-  ID `2`, namespace `VietRoadTraffic`, partition `5`, node/edge identity manifest
-  C4.3a. Không đổi hành vi sample đã PASS; không được delete dữ liệu thật.
-- `PRODUCTION`: cấu hình riêng, target khác sample/smoke, C3 exact, không delete.
-- Thiếu scope hoặc scope lạ: `DENY WRITE`. `WriterConfig` không tự chọn smoke.
-  Caller smoke cũ phải truyền rõ `scope='C4_1_SMOKE'`.
+- `C4_1_SMOKE`: project/ID synthetic được discovery và verify; chỉ ID dưới
+  prefix smoke. Cleanup chỉ được xóa exact synthetic objects.
+- `C4_3A_MANIFEST_SAMPLE`: exact project `VietRoadTrafficC43A10Pct`, ID `2`,
+  namespace `VietRoadTraffic`, partition `5`, node/edge identities theo manifest
+  C4.3a. Public runner chỉ `NO_OP/replay-existing`; không delete dữ liệu thật.
+- `FRESH_SAMPLE`: subset C3 theo sealed manifest, 1–128 nodes, 1–256 edges,
+  endpoints thuộc subset; project `FreshSample_*`, replay-existing, batch ≤ 32.
+  Target phải khớp project/namespace/database/physical ID/runtime identity.
+  Backend private cô lập phải bind đúng volume `kag-s8-*_openspg-neo4j-data`;
+  database `vietroadtraffic` bắt buộc volume revision `-fresh-*`.
+  Không delete hoặc đổi source payload; không dùng scope này để ghi full graph.
+- `PRODUCTION`: target khác sample/smoke, exact C3, không delete.
+- Thiếu scope hoặc scope lạ: DENY WRITE. `WriterConfig` không tự chọn smoke;
+  caller synthetic phải truyền `scope='C4_1_SMOKE'`.
+
+C3/C4 là tên machine contracts được mã nguồn dùng; không thay theo tên sản phẩm.
+Chi tiết enforcement: [writer_adapter.py](../kag/builder/writer_adapter.py),
+[runner](runner.md).
 
 ## Gate trước side effect
 
 `validate_production_scope(settings, contract, manifest_path)` chạy offline,
-không nạp model/SDK client, không network. Phải gọi trước khi tạo/gọi vectorizer.
-Không chỉ tin hash khai trong manifest: kiểm byte nodes/edges và tính lại
-semantic plan hash bằng `graph_plan.plan_hash` hiện có.
-Đây là phần kiểm input, chưa cấp quyền embedding/write. Caller production
-phải hoàn tất cả `discover_production_project` trước khi tạo/gọi vectorizer;
-missing/ambiguous/mismatch project phải chặn tại đó, không chờ đến write.
+không model/SDK client/network. Kiểm byte nodes/edges, schema/contract/input và
+tính lại semantic plan hash bằng `graph_plan.plan_hash`; không chỉ tin manifest.
 
 ```text
 nodes.jsonl  9a19e7e79a03c0ce339bf3da20d11db395c5662821178e5013d1f026fc8bea86
@@ -35,80 +40,57 @@ schema       ec05cc76303b99c43f7d2d8ed662459daeafe69fa750b7ebbdbf975fb794c23c
 contract     3a57fae7702e4f063b175d58e58a53d74b991b9c52f822c8cc769770687156c0
 ```
 
-Manifest phải là C3, có đầy đủ input manifest, counts và `plan.sha256` UTF-8/LF.
-Mỗi input source và ba canonical `xref_a3g2` được kiểm checksum từ file thật.
-Đường dẫn input phải nằm trong project root; không absolute/path traversal.
-Schema/contract local phải khớp pin và contract truyền vào. Binding này chứng
-minh identity C3/local schema; schema đang cài trên server phải được preflight
-production/readback xác minh riêng trước mọi execution authority tương lai.
+C3 manifest phải có input manifest, counts và `plan.sha256` UTF-8/LF. Kiểm file
+thật của từng source input và ba canonical `xref_a3g2`; input paths thuộc
+project root, không absolute/traversal. Schema/contract local phải khớp pin và
+contract caller truyền vào. Gate này chứng minh input/local schema; schema
+server cần kiểm live riêng trước bất kỳ execution authority tương lai nào.
 
-`discover_production_project` làm gate offline trước, rồi dùng read-only
-`_rest_client.project_get()` để lọc exact `name + namespace`. Không dùng
-`ProjectClient.get(name=...)` chọn kết quả đầu hoặc `get_all()` gộp namespace.
-Phải có đúng một project, ID là positive int hoặc chuỗi thập phân exact, khớp
-`expected_project_id`; đọc lại theo ID và kiểm cả ID/name/namespace. Không tạo
-project khi missing/ambiguous, không fallback sang ID sample hoặc env SDK.
-ID `2` reserved cho sample và bị chặn ngay gate offline, kể cả khi server đổi
-tên project đó thành production. Production phải chọn ID khác qua discovery.
+Caller production phải hoàn tất `discover_production_project` trước tạo/gọi
+vectorizer: offline validator → exact discovery → backend proof. Discovery dùng
+read-only `_rest_client.project_get()`, lọc `name + namespace`; không chọn kết quả
+đầu theo name hoặc gộp namespace bằng `get_all()`. Cần đúng một project,
+positive ID khớp `expected_project_id`, rồi đọc lại theo ID và kiểm ID/name/namespace.
+ID được trả về phải là native int hoặc chuỗi thập phân exact.
 
-Production proof được gắn vào `WriterConfig`. `NativeIntegerKGWriter._invoke`
-đồng thời yêu cầu [backend session/proof](backend-identity.md), revalidate
-live identity trước dispatch. Identity PROVEN không mở production WRITE;
-Production authority cần re-prove project/runtime thật và xét các gate còn lại.
-Guard kiểm scope cho direct write và inherited `invoke/ainvoke`; staged write kiểm
-toàn bộ plan trước node đầu tiên. Payload node/edge phải khớp C3, chỉ được thêm
-vector đúng target schema với 3072 số hữu hạn. Content không rỗng phải có vector
-trước write. Edge cần full C3 node readback barrier, không chỉ endpoint batch.
-Mỗi write kiểm lại checksum file và contract; lỗi chặn trước GraphClient.
+Missing/ambiguous/mismatch bị chặn trước embedding/write; không tạo project,
+fallback sang sample hoặc env SDK. ID `2` dành cho C4.3a, production bị chặn
+ngay offline dù server đổi tên project đó.
+
+`WriterConfig` giữ C3 scope và [backend session/proof](backend-identity.md).
+Constructor và `NativeIntegerKGWriter._invoke` kiểm target và revalidate live
+trước dispatch, kể cả inherited `invoke/ainvoke`. Writer không được đổi config,
+client hoặc route sau discovery. Proof hợp lệ vẫn không mở runner production WRITE.
+
+Staged write kiểm toàn plan trước node đầu tiên. Node/edge payload phải khớp C3;
+chỉ thêm vector đúng schema target, 3072 số hữu hạn, khác vector zero. Content
+không rỗng cần vector. Ghi node trước; edge cần full C3 node readback barrier,
+không chỉ endpoints của một batch. Rehash files/contract mỗi write; lỗi chặn trước
+GraphClient. Fresh sample áp dụng cùng vector và barrier contract trên subset
+manifest, đồng thời kiểm source node/edge hashes và isolated backend target.
 
 ## Config host/container
 
-Template official: `kag/config/writer_scope.example.json`. Không credential.
-Chọn profile tường minh; không tự đoán từ host. Host dùng loopback port publish;
-container dùng DNS mạng Docker. Endpoint phải có scheme/port, không userinfo,
-query hoặc fragment. `neo4j_uri` bind target cho identity/verify; offline scope
-validation không khởi tạo Neo4j client. Auth lấy từ môi trường/runtime secret store khi cần.
+Template [writer_scope.example.json](../kag/config/writer_scope.example.json)
+không credential, mặc định `DENY`, ID/confirmation rỗng. Chọn profile explicit:
+host dùng loopback port publish; container dùng DNS mạng Docker. Endpoint cần
+scheme/port, không userinfo/query/fragment. `neo4j_uri` bind identity/verifier;
+offline validator không tạo Neo4j client. Auth lấy từ môi trường/secret store.
 
-```python
-import json
-from pathlib import Path
-from kag.builder.production_scope import ProductionSettings, validate_production_scope
-
-config = json.loads(Path('kag/config/writer_scope.example.json').read_text())
-profile = 'host'  # 'container' khi chạy trong kag-runtime nối mạng stack
-settings = ProductionSettings(scope=config['scope'],
-    **config['profiles'][profile], **config['production'])
-scope = validate_production_scope(settings, contract, c3_manifest_path)
-# Entry point đã bootstrap SDK theo docs/runtime.md; client read-only đúng host.
-from kag.builder.writer_adapter import discover_production_project
-writer_config = discover_production_project(project_client, settings, contract,
-                                           c3_manifest_path)
-# Chỉ sau complete preflight và execution authority riêng mới được tạo vectorizer thật.
-```
-
-Template mặc định `DENY`, ID/confirmation rỗng, nên snippet từ chối. Config
-production hợp lệ phải có scope `PRODUCTION`, name exact,
-ID đã kiểm độc lập, và confirmation exact:
+Production config cần scope `PRODUCTION`, exact name, namespace `VietRoadTraffic`,
+ID đã kiểm độc lập và confirmation:
 
 ```text
 CONFIRM_PRODUCTION:<project_name>:VietRoadTraffic:<expected_project_id>:ee8b3709e89060b446c508f2c87bdcae7f401530976a30beecdd92935cdca917
 ```
 
-Confirmation gắn target và plan; không phải credential. Không ghi token/key/
-password vào config repo. Scope tests chỉ dùng fake project metadata, không
-gửi production graph request. Test fixture nhỏ dùng hash tính độc lập; evidence
-ngoài repo kiểm thêm C3 golden thật.
+Confirmation bind target và plan, không phải credential hoặc quyền mở WRITE.
+Không ghi token/key/password vào config repo. Entrypoint SDK dùng
+[bootstrap runtime](runtime.md); runner config và mounts theo [runner](runner.md).
 
 ## Kiểm thử và giới hạn
 
-```sh
-python -B -m unittest discover -s tests/schema
-python -B -m unittest discover -s tests/builder
-python -B -m unittest discover -s tests/runtime
-```
-
-Chạy từng suite process riêng vì builder/runtime đều có module `test_inputs`.
-Môi trường chuẩn vẫn CPython 3.10.16/Linux amd64, không mạng, source chỉ
-đọc. Rehash exact mỗi batch ưu tiên fail-closed; tối ưu khi runner có immutable
-input snapshot. Runner/state/streaming plan đã có tại
-[runtime operations](runner.md); đây không phải quyền chạy build production.
+Scope tests dùng project metadata fixtures, không gửi production graph request.
+Lệnh suites nằm tại [tests](../tests/README.md); chạy từng process, runtime
+canonical, source chỉ đọc, network denied. Offline contract tests không chứng
+minh schema/backend live hoặc cấp quyền chạy production build.

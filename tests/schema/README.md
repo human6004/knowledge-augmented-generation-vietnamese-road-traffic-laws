@@ -1,12 +1,11 @@
 # Kiểm thử schema
 
-`test_schema_contract.py` kiểm tra schema bằng parser/model KAG đã pin,
-contract miền, inheritance từ Thing, codec, SAFE_EDGE và yêu cầu runtime.
-Kiểm thử deterministic, chạy offline; cần Python có dependency `six` của SDK.
+[test_schema_contract.py](test_schema_contract.py) kiểm [schema/contract](../../kag/schema/): parser/model KAG đúng pin, namespace, inheritance từ Thing, property mappings, predicates, codec, SAFE_EDGE và runtime requirements.
 
-Chạy từ root dự án:
+Chạy offline từ root checkout trong [runtime chuẩn](../../docs/runtime.md), với dependency parser `six`:
 
 ```sh
-python -B tests/schema/test_schema_contract.py
 python -B -m unittest discover -s tests/schema -p "test_*.py" -v
 ```
+
+Không gọi server/model. Kết quả xác nhận contract/parser trên source đã pin; không xác nhận schema hoặc graph đang chạy trên backend live.

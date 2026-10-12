@@ -1,152 +1,90 @@
 # Backend LuậtGT
 
-Một ứng dụng Spring Boot 3.5.16 / Java 21, kiến trúc **monolith, MVC**. React là lớp hiển thị; backend phục vụ REST và SSE. Core KAG Python đã có implementation riêng; HTTP query/SSE adapter đã triển khai tại `kag/http_api/`. Xem [kiến trúc](../../docs/architecture.md).
+Spring Boot 3.5.16 / Java 21, monolith theo MVC. Backend phục vụ REST/SSE, quản lý tài khoản, nội dung, học/thi và tích hợp KAG Python. Xem [kiến trúc](../../docs/architecture.md).
+
+## Cấu trúc
 
 ```text
 src/main/java/vn/luatgt/
-├── Application.java           Điểm khởi động duy nhất
-├── controller/                Nhận HTTP, kiểm tra DTO, gọi service
-├── dto/                       Các request DTO và ràng buộc đầu vào
-├── service/                   Xác thực, nhập dữ liệu, học, thi, chat, lưu tệp
-├── model/                     JPA entity, không trả trực tiếp qua HTTP
-├── repository/                Spring Data JPA, truy vấn và khóa bản ghi
-├── integration/               HTTP KAG và MinIO
-├── config/                    Security/JWT và giới hạn request
-└── exception/                 Chuyển lỗi nghiệp vụ thành HTTP
+├── controller/    Nhận HTTP, kiểm DTO, gọi service
+├── dto/           Request DTO và ràng buộc đầu vào
+├── service/       Nghiệp vụ và giao dịch
+├── repository/    Spring Data JPA và khóa bản ghi
+├── model/         JPA entity
+├── integration/   KAG HTTP và MinIO
+├── config/        Security/JWT và giới hạn request
+└── exception/     Chuyển lỗi nghiệp vụ thành HTTP
 src/main/resources/
 ├── application.yml
-└── db/migration/             Flyway: core, moderation/law versions, legal units
+└── db/migration/  Flyway
 ```
 
-Controller không truy cập repository. Service giữ giao dịch và quy tắc nghiệp vụ. Repository không xử lý HTTP. Các package cùng chạy trong một tiến trình và dùng một MySQL; không có service nội bộ riêng hoặc event bus.
+Controller không truy cập repository; API không trả entity trực tiếp. Các package chạy trong một ứng dụng, dùng một MySQL.
 
 ## Chạy
 
-Từ thư mục gốc repository (thư mục cha của `WebApp`), với Docker Desktop đã cài và chạy:
+Chạy stack theo [Docker WebApp](../../docker/README.md#webapp). API ở `http://127.0.0.1:8080/api`, health ở `/actuator/health`.
 
-Khởi tạo môi trường/build stack theo [Docker WebApp](../../docker/README.md#webapp).
+Để chạy Java trên host, chuẩn bị MySQL/Redis/MinIO và đặt biến môi trường theo [application.yml](src/main/resources/application.yml): `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD`. Đặt thêm `DB_URL`, `DB_USER`, `MINIO_URL` nếu khác mặc định. `REDIS_URL` phải chứa mật khẩu khi Redis yêu cầu xác thực; Java không tự đọc `.env`.
 
-Nếu đã có `.env`, dùng `./docker/init-env.ps1 -Update` để bổ sung biến còn thiếu. `docker-compose.yml` chỉ chứa WebApp, project `webapp`; KAG dùng `docker-compose.kag.yml`, project `kag-s8-*` và external Step8 env riêng. Hai Compose khai báo 11 services; cần các prerequisites tại hướng dẫn Docker. WebApp dùng MySQL 8.4.11, database/tài khoản `luatgt`, cổng host 3306. Schema dùng UUID `BINARY(16)`, thời gian `DATETIME(6)` theo UTC, nội dung JSON/văn bản `LONGTEXT`, khóa ngoại cấp bảng. Volume MySQL mới không tự chứa dữ liệu PostgreSQL cũ; xem [hướng dẫn Docker](../../docker/README.md).
-
-API: `http://127.0.0.1:8080/api`; health: `/actuator/health`. Mật khẩu ADMIN lấy từ `.env`, không phải tài khoản demo trên FE. Tự đăng ký chỉ tạo USER. Bootstrap chỉ tạo ADMIN nếu email chưa tồn tại; không tự nâng USER thành ADMIN, không đặt lại mật khẩu ADMIN cũ.
-
-Để chạy Java trên máy, từ root repository dùng `docker compose --env-file <webapp-env> -f docker-compose.yml up -d mysql redis minio`, đặt các biến `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD` trong môi trường rồi chạy `mvn spring-boot:run` tại `WebApp/backend`. `REDIS_URL` phải chứa mật khẩu từ `.env`; Java không tự đọc `.env`.
+Từ `WebApp/backend/`, với Java 21 và Maven:
 
 ```powershell
-# Từ root repository:
-cd WebApp/backend
+mvn spring-boot:run
+```
+
+ADMIN bootstrap chỉ tạo khi email chưa tồn tại; không đặt lại mật khẩu hoặc nâng USER thành ADMIN. Tự đăng ký chỉ tạo USER.
+
+Kiểm thử mặc định dùng H2 chế độ MySQL và mock dịch vụ ngoài:
+
+```powershell
 mvn verify
 ```
 
-Test mặc định dùng H2 chế độ MySQL và mock Redis/MinIO/KAG. Bộ test kiểm tra UUID, tiếng Việt/emoji, nội dung lớn hơn 64 KB, thời gian UTC, phân biệt hoa/thường và khóa ngoại; H2 không thay thế kiểm thử MySQL thật. MinIO được build từ [bản nguồn chính thức có bản vá 2025-10-15](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z); upstream đã archive.
-
-Chạy cùng bộ test trên MySQL thật bằng các biến `TEST_DB_URL`, `TEST_DB_USER`, `TEST_DB_PASSWORD`. Chỉ dùng **database kiểm thử riêng, rỗng**, không trỏ tới dữ liệu WebApp đang sử dụng: Flyway và các bài test sẽ tạo bảng/tài khoản/nội dung.
+H2 không thay thế MySQL thật. Để chạy cùng suite trên MySQL, chỉ dùng **database kiểm thử riêng, rỗng**: Flyway và tests sẽ tạo bảng/tài khoản/nội dung. Từ `WebApp/backend/`:
 
 ```powershell
-# Từ WebApp/backend, với database luatgt_test đã tạo và tài khoản có quyền trên database đó:
-$env:TEST_DB_URL = 'jdbc:mysql://127.0.0.1:3306/luatgt_test?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true'
-$env:TEST_DB_USER = 'luatgt_test'
-$env:TEST_DB_PASSWORD = '<mật khẩu kiểm thử>'
+$env:TEST_DB_URL = "jdbc:mysql://127.0.0.1:3306/luatgt_test?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true"
+$env:TEST_DB_USER = "luatgt_test"
+$env:TEST_DB_PASSWORD = "<mật khẩu kiểm thử>"
 mvn verify
 Remove-Item Env:TEST_DB_URL, Env:TEST_DB_USER, Env:TEST_DB_PASSWORD
 ```
 
 ## API
 
-Mọi API trừ đăng ký, đăng nhập và health yêu cầu `Authorization: Bearer <accessToken>`. JWT hết hạn sau 1 giờ. Logout thu hồi toàn bộ token của tài khoản; khóa USER cũng thu hồi token. Không lưu token vào cookie nên xác thực API dùng bearer, không dùng session cookie.
+Tiền tố `/api`; mọi API trừ đăng ký, đăng nhập và health yêu cầu `Authorization: Bearer <accessToken>`. JWT hết hạn sau một giờ. Logout hoặc khóa tài khoản thu hồi token.
 
-| Nhóm | Endpoint |
-|---|---|
-| Tài khoản | `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout` |
-| Nội dung USER | `GET /questions?chapter=1`, `GET /signs`, `GET /documents` — chỉ bản đã xuất bản/còn hiệu lực |
-| Ôn tập | `POST /study/{questionId}/answer` với `{ "selected": 0 }`; `GET /progress` |
-| Thi thử | `POST /exams`, `GET /exams/{id}`, `PUT /exams/{id}/answers/{questionId}`, `POST /exams/{id}/submit`, `GET /exams` |
-| Chat | `POST /chat` hoặc `POST /chat/stream`; `GET /chat` lấy lịch sử của chính tài khoản |
-| ADMIN | `GET /admin/questions`, `/admin/signs`, `/admin/documents`; `GET /admin/users`; `PATCH /admin/users/{id}` với `{ "enabled": false }` |
-| Nhập hàng loạt | `POST /admin/imports/{questions\|signs\|documents}/preview` rồi `/confirm` với `{ "rows": [...], "updateExisting": false }` |
-| Sửa/kiểm duyệt | `PUT /admin/content/{id}` với `{ "version": 0, "data": {...} }`; `POST /admin/content/{id}/publication` với `{ "version": 1, "published": true }` |
-| Tệp | `POST /admin/content/{id}/media` multipart `file`; `POST /admin/signs/images-zip` multipart `file`; `GET /content/{id}/media` |
-| Schema KAG | `GET /admin/kag/schema` trả identity/SHA-256 và contract được đóng gói cùng backend |
-| Đơn vị pháp lý | `GET /units?docId=<doc_id>`; `GET /admin/units` (lọc `docId` tùy chọn); `POST /admin/imports/units/preview`, `/confirm`; `PUT /admin/units/{id}`; `POST /admin/units/{id}/publication` |
+- Tài khoản: `/auth/register`, `/auth/login`, `/auth/me`, `/auth/logout`.
+- Học/thi: `/questions`, `/study/{questionId}/answer`, `/progress`, `/exams`; đáp án JSON dùng chỉ số từ 0.
+- Tra cứu: `/documents`, `/units`, `/signs`, `/penalties`; USER chỉ thấy nội dung được phép tra cứu.
+- Chat: `POST /chat`, `POST /chat/stream`, `GET /chat`; lịch sử gắn với tài khoản.
+- Quản trị: `/admin/imports/{questions|signs|documents|units}/preview` và `/confirm`, nội dung/xuất bản, tài khoản, phản hồi, báo cáo và hạ tầng.
 
-Tiền tố bảng là `/api`. Đáp án đánh chỉ số **0**. Preview chỉ kiểm tra; confirm kiểm tra lại và ghi toàn bộ hoặc rollback. Mặc định bỏ qua mã đã có; cập nhật luôn quay về bản nháp. Các thao tác sửa/xuất bản dùng version chống ghi đè dữ liệu đã thay đổi.
+Endpoint và DTO cụ thể nằm trong [controller](src/main/java/vn/luatgt/controller/) và [dto](src/main/java/vn/luatgt/dto/). Preview không ghi; confirm kiểm lại và ghi toàn bộ hoặc rollback. Sửa/xuất bản dùng version chống ghi đè.
 
-Hạng B hiện ghim bộ quy tắc **B-2025-06**: 30 câu, 20 phút, đạt 27 và không sai/bỏ trống câu điểm liệt; quota 8/1/1/1/9/9 câu thường chương 1–6 cộng 1 câu điểm liệt. [Nguồn cấu trúc đề năm 2025](https://xaydungchinhsach.chinhphu.vn/cau-truc-bo-de-dung-de-sat-hach-cap-giay-phep-lai-xe-cac-hang-tu-1-6-119250513103938925.htm). Đây là cấu hình của bộ mẫu, chưa tuyên bố cập nhật mọi thay đổi quy định sau năm 2025. Server quyết định hạn chót, chấm bằng bản chụp câu hỏi lúc bắt đầu; không gửi đáp án/cờ điểm liệt khi bài đang làm. Mỗi người chỉ đọc/ghi bài thi của chính mình. Nộp lại trả cùng kết quả.
+Thi hạng B ghim `B-2025-06`: 30 câu, 20 phút, đạt từ 27 và không sai/bỏ trống câu điểm liệt. Server giữ thời gian, đáp án và ảnh snapshot; kiểm quyền sở hữu bài thi. Cấu hình này không tự cập nhật theo thay đổi quy định.
 
 ## Chuẩn hóa dữ liệu
 
-Nguồn schema chung là [`kag/schema/schema_contract.json`](../../kag/schema/schema_contract.json) và [`VietRoadTraffic.schema`](../../kag/schema/VietRoadTraffic.schema), namespace `VietRoadTraffic`. Contract có 75 thuộc tính node logical, 69 thuộc tính khai báo và sáu thuộc tính `id/name` kế thừa OpenSPG `Thing`; không khai báo lại `id/name` trong EntityType. Maven đóng gói hai file từ thư mục này (Docker build từ root); backend kiểm tra SHA-256 của schema đóng gói khớp `runtime_contract.schema_sha256`, nên phải build lại khi đổi contract hoặc schema. UI `/admin/config` hiển thị ba loại node, trường nguồn/trường graph, kiểu dữ liệu và quan hệ từ API thật. UUID WebApp là khóa quản trị; `externalId` giữ chính xác `doc_id`, `unit_id`, `sign_id`, không trim/canonicalize hoặc đổi thành UUID. ID nguồn đã lưu không được sửa trực tiếp.
+Schema dùng chung: [schema_contract.json](../../kag/schema/schema_contract.json) và [VietRoadTraffic.schema](../../kag/schema/VietRoadTraffic.schema), namespace `VietRoadTraffic`. Maven đóng gói hai file; backend kiểm SHA-256 của schema. Thay schema/contract cần build lại backend.
 
-Import nhận trường nguồn snake_case hoặc alias graph lowerCamelCase trong contract, giữ metadata nguồn và từ chối ID/alias xung đột hoặc kiểu dữ liệu sai. `JSON_TEXT` từ trường graph được đọc thành JSON; giá trị 0/false/null được giữ. Bản nháp nghiệp vụ có thể chưa đủ mọi trường graph; việc xuất bản trên WebApp không xác nhận graph đã sẵn sàng ingestion.
+UUID là khóa quản trị; `externalId` giữ nguyên `doc_id`, `unit_id`, `sign_id` nguồn. Import nhận snake_case nguồn hoặc alias graph từ contract, từ chối ID/alias xung đột và kiểu sai. Bản nháp có thể thiếu trường graph; xuất bản WebApp không xác nhận ingestion readiness.
 
-`LegalUnit` lưu trong bảng riêng qua migration V3, gắn UUID văn bản và `unit_id` nguồn duy nhất. Dữ liệu nhập cần `unit_id`, `doc_id` (văn bản đã nhập), `so_hieu`, `unit_type` theo contract, `text`, `order` số nguyên không âm; `parent_id` null hoặc ID cha cùng văn bản. Nhập được cha/con trong cùng batch dù thứ tự đảo ngược; chặn cha thiếu, chu trình và khác văn bản. Xuất bản cần `reviewed=true` và văn bản nguồn đã xuất bản. Đọc cho USER chỉ trả unit đã xuất bản thuộc văn bản được phép tra cứu; bản lịch sử vẫn giữ trong quản trị. Các trường mức phạt sparse trong contract nằm trên `LegalUnit`, không tạo node Penalty/Evidence mới.
+`LegalUnit` giữ hierarchy cùng văn bản; chặn cha thiếu, chu trình và cha khác văn bản. Xuất bản cần `reviewed=true` và văn bản nguồn đã xuất bản. Câu hỏi cần xác nhận đáp án/điểm liệt/ảnh; biển báo cần ảnh và metadata pháp lý tương ứng. Mức phạt dùng số nguyên không âm và văn bản nguồn hợp lệ.
 
-Câu hỏi: `externalId`, `text`, `chapter` (1–6), `options` (2–4 chuỗi), `correctAnswer` (0-based hoặc null khi nháp), `critical` (boolean hoặc null), `source`, `imageRequired`, `reviewed`. Xuất bản yêu cầu đáp án và điểm liệt được xác nhận, `reviewed=true`, nguồn và ảnh nếu cần.
+MinIO lưu tệp; DB giữ khóa và MIME. Backend nhận PNG/JPEG tối đa 5 MB, 4096×4096; PDF 20 MB; ZIP 20 MB nén, 50 MB giải nén, 1000 mục. ZIP câu hỏi ghép theo `externalId`, ZIP biển báo theo `ma_bien`; mã có nhiều biến thể trả `unmatched` để gắn thủ công. SVG/WebP chưa được nhận.
 
-Biển báo: nhận trực tiếp `sign_id`, `ma_bien`, `nhom`, `ten`, `mo_ta`, giữ `doc_id`, `unit_id`, `qcvn`, `so_hieu`, `bien_phu_variant`, `ngay_hieu_luc`, `ngay_het_hieu_luc`; bổ sung alias chuẩn `externalId`, `code`, `group`, `name`, `meaning`. Nội dung `mo_ta` bị cắt trong mẫu phải được bổ sung trước khi duyệt. Xuất bản cần ảnh, metadata pháp lý, ngày hiệu lực, xác nhận kiểm duyệt và unit/văn bản nguồn tương ứng đã xuất bản (`hasSign`).
-
-Văn bản: `externalId`/`doc_id`, `title`, `so_hieu`, `source`, ngày hiệu lực/hết hiệu lực; upload PDF riêng. Tệp/ảnh do MinIO lưu, DB chỉ giữ khóa và MIME. Client nhập JSON không được tự đặt khóa tài nguyên. Ảnh PNG/JPEG tối đa 5 MB, 4096×4096; PDF tối đa 20 MB; ZIP 20 MB nén, 50 MB giải nén, 1000 mục. Ảnh ZIP biển báo ghép theo `ma_bien`, ví dụ `DP.127.png`; ZIP câu hỏi theo `externalId`, ví dụ `Q301.png`. Nếu cùng mã có nhiều biến thể/phiên bản, trả `unmatched` để gắn ảnh theo ID thay vì đoán. SVG/WebP cần xử lý bổ sung; không nhận vào backend hiện tại.
-
-`docs/imports/questions-draft.json` chứa bản trích PDF, luôn cần duyệt. Script `scripts/prepare_question_bank.py` kiểm tra đủ 600 số câu và 2–4 đáp án, lấy đáp án từ gạch chân, giữ trang nguồn; 60 câu điểm liệt được đối chiếu nguồn Chính phủ và 318 ảnh đã tách thành ZIP khoảng 16.9 MB. Các câu 204/301/302/352 có đối chiếu thủ công; xem `docs/imports/question-audit.json`. Tất cả vẫn `reviewed=false`, chờ kiểm duyệt, không xuất bản tự động. `scripts/extract_questions.py` chuyển đến cùng pipeline để tránh dùng parser cũ. FE đã dùng API thật, không lấy dữ liệu demo thay thế khi lỗi.
+Luồng nhập câu hỏi và kiểm duyệt: [WebApp](../README.MD#dữ-liệu-và-nghiệp-vụ).
 
 ## Hợp đồng KAG Python
 
-Python HTTP API đã triển khai, dùng KAGIterativePlanner/KAGIterativePipeline,
-Legal Retriever/Deduce và SafeLegalGenerator. `KAG_BASE_URL`: Docker backend
-`http://kag-ingress:8080` trên external network `${STEP8_KAG_PROJECT}_ingress` có sẵn; env WebApp/KAG phải cùng project và KAG khởi động trước. Java local `http://127.0.0.1:38000`.
-Query và inspect dùng hai external token files riêng; browser chỉ giữ JWT WebApp.
+[KagClient](src/main/java/vn/luatgt/integration/KagClient.java) gọi `POST /v1/query` và `POST /v1/query/stream`. Request gồm `user_id`, `message`, `context_id` rỗng và identity `schema_contract`; backend thêm release/snapshot/as_of headers.
 
-`POST /v1/query` nhận `{user_id,message,context_id,schema_contract}`, context_id
-rỗng, identity namespace `VietRoadTraffic` cùng schema/contract SHA-256.
-Backend thêm release/snapshot/as_of headers. Success trả `answer` và 1..20
-citations `{doc_id,unit_id,sign_id,evidence_id,field,start,end,quote}`:
-sign_id null, field text, start 0, end là độ dài Unicode code points của
-whole-field quote. KagClient kiểm identity/media/structure/limits; ChatService
-kiểm document/unit xuất bản, hiệu lực và quote thuộc đúng nguồn.
-Thiếu/sai căn cứ bị từ chối cả câu trả lời.
+`KAG_BASE_URL` mặc định cho Java host là `http://127.0.0.1:38000`; Docker dùng `http://kag-ingress:8080`. Query/inspection dùng `KAG_TOKEN_FILE`/`KAG_INSPECT_TOKEN_FILE` riêng; browser chỉ giữ JWT WebApp. Đặt `KAG_RELEASE_ID` và `KAG_WEBAPP_SNAPSHOT_ID` khớp release đang phục vụ; cấu hình network theo [Docker KAG](../../docker/README.md#kag-primary-compose).
 
-`POST /v1/query/stream` dùng cùng request; API hiện trả `done` sau verification,
-Java còn nhận legacy `delta/done`. Thiếu done hoặc upstream error bị từ chối;
-Java phát downstream `error`. Frontend hiện dùng REST.
-Connect timeout 2s; query read 30s mặc định, cấu hình
-`KAG_QUERY_TIMEOUT_SECONDS` từ 30–180s. Inspection mặc định 2s,
-`KAG_INSPECTION_TIMEOUT_SECONDS` từ 2–25s. Response/stream tối đa 256KiB,
-chat rate 20/60s mỗi owner, 8 streams mỗi monolith, circuit breaker hiện hữu.
+Success v1 cần answer và 1–20 citations `LegalUnit.text`, quote nguyên trường, document/unit đã xuất bản và còn hiệu lực. Native document/sign citations chưa biểu diễn được qua projection này. Sai/thiếu căn cứ bị từ chối cả câu trả lời; không bỏ support để ép success.
 
-Native `AnswerResult` có abstention và unit/document/sign citations.
-Projection v1 chỉ biểu diễn LegalUnit.text đủ publication; abstention và
-citation không biểu diễn được trả non-2xx, Java lưu UNAVAILABLE.
-Không drop support hoặc tạo unit_id giả để ép success.
-Xem [hợp đồng HTTP](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
+Native abstention hợp lệ được kiểm qua response 503 `KAG_ABSTAINED`, `native_state=abstained` và identity release, rồi lưu `KAG_ABSTAINED`. Lỗi upstream/response khác lưu `UNAVAILABLE`. SSE cần terminal `done`; frontend hiện dùng REST. Chi tiết: [hợp đồng HTTP](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
 
-Admin dùng `/api/admin/kag/status`; dưới tiền tố `/api/admin/kag` còn có
-`GET /pipeline`, `GET /benchmark/datasets`, `GET /sample` và `POST /retrieve`.
-Graph/Pipeline/Benchmark đọc dữ liệu SAMPLE/receipt/eligibility; không chạy
-builder/benchmark hoặc điều khiển Docker. Question Generation/Evaluation đã
-có, bộ câu hỏi chính thức chưa hoàn thành. Chat/citations và Admin SAMPLE có
-nghiệm thu 11–12/10/2026; không tự xác nhận runtime hiện tại.
-
-SAMPLE gồm 32 nodes / 22 edges / 42 vectors, không phải production.
-Production WRITE BLOCKED. Quan hệ nghiệp vụ REPLACES/AMENDS của WebApp không
-tự trở thành cạnh graph; mức phạt chỉ dùng nội dung đã kiểm duyệt.
-Clone repo chưa đủ: cần cache/runtime/vendor, graph/release/proof,
-provider/proxy và publication hợp lệ theo [Docker](../../docker/README.md).
-
-## Nghiệp vụ bổ sung và chạy kiểm tra thật
-
-| Nhóm | Endpoint (tiền tố `/api`) |
-|---|---|
-| Xuất bản câu hỏi hàng loạt | `POST /admin/questions/publication-batch`, `{rows:[{id,version}],reviewed:true,published:true}`, tối đa 600, giao dịch nguyên khối |
-| ZIP câu hỏi | `POST /admin/questions/images-zip`, multipart `file` |
-| Ảnh snapshot bài thi | `GET /exams/{id}/questions/{questionId}/media`, chỉ chủ bài |
-| Lịch sử nội dung | `GET /admin/content/{id}/history` |
-| Quan hệ văn bản | `GET/POST /admin/law-relations`, `PUT /admin/law-relations/{id}`, predecessor/successor UUID, type REPLACES/AMENDS, effectiveDate, note, version |
-| Mức phạt | `GET /penalties`; `GET/POST /admin/penalties`, `PUT /admin/penalties/{id}`, documentId, data, published, version |
-| Phản hồi/kiểm duyệt chat | `POST /chat/{id}/feedback`, feedback HELPFUL/WRONG/NO_BASIS/OUTDATED và note; `GET /admin/chatlogs?pending=true`; `POST /admin/chatlogs/{id}/resolve`, note |
-| Báo cáo/hạ tầng | `GET /admin/reports`, `GET /admin/infrastructure` |
-
-Lịch sử lưu JSON trước mỗi lần sửa/nhập ghi đè/đổi xuất bản/gắn ảnh. Quan hệ văn bản chặn tự tham chiếu và chu trình; REPLACES đã có hiệu lực với văn bản kế nhiệm xuất bản/còn hiệu lực làm văn bản cũ không còn được tra cứu hoặc dùng làm căn cứ. AMENDS giữ văn bản gốc, cần quản trị cập nhật nội dung/mức phạt tương ứng. Sửa quan hệ và mức phạt dùng version chống ghi đè.
-
-Mức phạt `data`: behavior, vehicle, unit_id, minFine/maxFine (đồng), points (0–12), additional, reviewed. Các số là số nguyên không âm; maxFine >= minFine. Xuất bản cần reviewed=true và văn bản cha đã xuất bản/còn hiệu lực; không suy đoán mức phạt từ chatbot.
-
-Từ thư mục gốc chạy `WebApp/scripts/import-question-bank.ps1` để nhập nháp/ghép ảnh, kiểm duyệt trên UI rồi `WebApp/scripts/verify-stack.ps1 -WithExam`. Compose cung cấp FE ở cổng 8081 (Nginx proxy `/api`); Vite local vẫn dùng proxy cổng 8080. Kiểm tra trên MySQL thật dùng database riêng theo hướng dẫn ở phần Chạy.
+Admin `/admin/kag/status`, `/pipeline`, `/benchmark/datasets`, `/sample` và `/retrieve` đọc readiness, receipt, SAMPLE và eligibility; không chạy builder/benchmark. SAMPLE chưa phải production; Production WRITE bị chặn.

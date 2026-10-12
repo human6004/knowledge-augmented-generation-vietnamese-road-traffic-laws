@@ -1,81 +1,78 @@
 # Mô hình miền pháp lý
 
-Nguồn tri thức: corpus pháp lý trong `data/`. Mô hình có đúng ba loại node:
+Corpus trong `data/` có đúng ba loại node:
 
-- **LegalDocument**: văn bản production, identity giữ nguyên `doc_id`.
-- **LegalUnit**: đơn vị nội dung, identity giữ nguyên `unit_id`; `unitType`
-  nhận đúng `Dieu`, `Khoan`, `Diem`, `QCVN`, `QCVN_Muc`.
-- **TrafficSign**: bản ghi biển theo phiên bản QCVN, identity giữ nguyên
-  `sign_id`. Không gộp theo `ma_bien` hoặc giữa phiên bản 2019/2024.
+- **LegalDocument**: văn bản thuộc whitelist graph, giữ exact `doc_id`.
+- **LegalUnit**: đơn vị nội dung, giữ exact `unit_id`; `unitType` chỉ nhận
+  `Dieu`, `Khoan`, `Diem`, `QCVN`, `QCVN_Muc`.
+- **TrafficSign**: record theo phiên bản QCVN, giữ exact `sign_id`; không gộp
+  theo `ma_bien` hoặc giữa phiên bản 2019/2024.
 
-`name` kỹ thuật bằng `id`; hiển thị dùng `title`, `ten`, `maBien` từ nguồn.
-Không bỏ hậu tố occurrence, chuẩn hóa Unicode, dùng title/order làm khóa hoặc
-tạo UUID thay ID nguồn. Provenance dùng đường dẫn tương đối, SHA-256 file và
-số dòng bắt đầu từ 1; provenance không phải identity node.
+`name=id` là nhãn kỹ thuật; hiển thị dùng `title/ten/maBien` từ nguồn.
+Không bỏ occurrence suffix, normalize Unicode, trim ID, dùng title/order/text
+hash làm khóa hoặc tạo UUID thay ID nguồn. Provenance gồm path tương đối,
+SHA-256 file và số dòng từ 1; provenance không phải identity node.
 
 ## Cây đơn vị
 
 `LegalDocument.hasUnit → LegalUnit` chỉ nối root có `parent_id=null`.
-`LegalUnit.hasChild → LegalUnit` theo `parent_id` thực, hai đầu cùng văn bản.
-Quyền sở hữu mọi unit vẫn thể hiện qua `docId` và đường đi trong cây.
+`LegalUnit.hasChild → LegalUnit` dùng parent_id nguồn, hai đầu cùng văn bản.
+Quyền sở hữu unit thể hiện qua `docId` và đường đi trong cây.
 
-Một loại LegalUnit phục vụ truy vấn text/ID và traversal chung. QCVN là
-occurrence trong văn bản nguồn, có thể chỉ là đoạn dẫn; không tạo văn bản QCVN
-giả hoặc gộp theo `qcvnId`. Không tự tạo cây từ số mục 1.1/1.1.1. `order` dùng
-sắp xếp, `unit_id` làm tie-break xác định; không coi tie-break là thứ tự pháp lý.
-Text cha có thể lặp text con, không coi hai tầng là hai chứng cứ độc lập.
+QCVN là occurrence trong văn bản nguồn, có thể chỉ là đoạn dẫn; không tạo văn
+bản QCVN giả hoặc gộp theo `qcvnId`. Không tự dựng cây từ số mục 1.1/1.1.1.
+`order` dùng sắp xếp, exact unit_id làm tie-break xác định; tie-break không
+phải thứ tự pháp lý. Text cha có thể lặp text con, không tính thành hai chứng
+cứ độc lập.
 
 ## Xử phạt và biển báo
 
-Penalty gộp vào thuộc tính `penalty*` của LegalUnit: nguồn có 1.966 record,
-quan hệ nguồn 1:0..1, `penalty_id=unit_id`, không có vòng đời độc lập.
-Unit không có penalty giữ toàn bộ thuộc tính penalty vắng mặt. Không đổi
-null thành 0/false. Tước GPLX `[min,max]` giữ hai thuộc tính tháng; không lấy
-trung bình hoặc suy ra mọi biện pháp đồng thời áp dụng. Nếu cardinality nguồn
-thay đổi, adapter phải báo lỗi thay vì ghi đè.
+Penalty merge vào `penalty*` của LegalUnit theo unit_id, cardinality nguồn
+1:0..1 và `penalty_id=unit_id`; không có node/vòng đời độc lập. Unit không có
+penalty giữ các properties này vắng mặt. Không đổi null thành 0/false.
+Tước GPLX `[min,max]` giữ hai thuộc tính tháng; không lấy trung bình hoặc suy
+mọi biện pháp cùng áp dụng. Cardinality/join/doc mismatch phải báo lỗi, không ghi đè.
 
-`LegalUnit.hasSign → TrafficSign` theo `unit_id` thực của record biển.
-Giữ mã, tên, nhóm, biến thể, mô tả, QCVN và ngày từ nguồn; tên rỗng vẫn rỗng.
-Neo trích xuất hiện có thể là Điều rộng dưới QCVN: cạnh ghi nhận nguồn record,
-không khẳng định đó là điều định nghĩa độc quyền biển. Không tự reparent.
+`LegalUnit.hasSign → TrafficSign` dùng exact unit_id của record biển. Giữ mã,
+tên, nhóm, biến thể, mô tả, QCVN và ngày nguồn; tên rỗng vẫn rỗng.
+Neo trích xuất có thể là Điều rộng dưới QCVN: cạnh ghi nhận nguồn, không
+khẳng định đó là điều định nghĩa độc quyền biển. Không tự reparent.
 
 ## Quan hệ pháp lý
 
-LegalDocument có năm quan hệ cùng hướng nguồn → đích: `cites`, `amends`,
-`repeals`, `implements`, `consolidates`. Cả hai cờ corpus phải true và cả hai
-ID phải thuộc production. Không sinh thêm cạnh từ danh sách metadata văn bản.
-Thiếu/rỗng evidence vẫn bảo toàn trong provenance; không sáng tác trích dẫn.
-Quan hệ sửa đổi/bãi bỏ không đủ suy ra phạm vi hoặc hiệu lực từng unit.
-Văn bản hợp nhất giữ identity riêng với bản gốc.
+LegalDocument có năm quan hệ hướng nguồn → đích: `cites`, `amends`, `repeals`,
+`implements`, `consolidates`. Hai cờ corpus phải true, hai IDs thuộc whitelist.
+Không sinh thêm cạnh từ metadata văn bản. Missing/rỗng evidence giữ trong
+provenance; không sáng tác citation. Sửa đổi/bãi bỏ không đủ suy hiệu lực từng
+unit; văn bản hợp nhất giữ identity riêng.
 
-Xref chỉ tạo cạnh khi classification ngoài repo là **SAFE_EDGE** và qua gate
-hash/join/endpoint trong [schema.md](schema.md). `is_exclusion=false` dùng
-`citesUnit`; true dùng `excludesUnit`. Exclusion ghi nhận ngữ cảnh ngoại lệ,
-không phải citation khẳng định, phủ định tuyệt đối hoặc bãi bỏ. Giữ self-reference
-và mọi record evidence/provenance đã duyệt. Không tạo node Evidence.
+Xref chỉ thành cạnh khi ledger là **SAFE_EDGE** và qua gate hash/join/endpoint
+trong [schema](schema.md#gate-safe_edge-bên-ngoài). `is_exclusion=false` dùng
+`citesUnit`, true dùng `excludesUnit`. Exclusion ghi ngữ cảnh ngoại lệ, không
+phải citation khẳng định, phủ định tuyệt đối hoặc bãi bỏ. Giữ self-reference
+và mọi evidence/provenance đã duyệt; không tạo node Evidence.
 
-Khóa cạnh ứng dụng là SHA-256 canonical JSON của type nguồn fully qualified,
-ID nguồn, predicate vật lý, type đích fully qualified, ID đích. Evidence nằm
-ngoài identity; nhiều record cùng cạnh được gộp xác định, không ghi đè.
-Khóa cục bộ này phục vụ tái lập, logging, dedup cục bộ và tổng hợp evidence.
-Identity server là **(node nguồn, predicate vật lý, node đích)**; khóa ứng dụng
-không điều khiển uniqueness server. Server cập nhật thuộc tính cạnh theo
-**LAST_WRITE_WINS**: Builder gộp evidence/provenance trước, rồi ghi đầy đủ thuộc
-tính cạnh. Codec và quy tắc ghi theo [schema.md](schema.md).
+Khóa cạnh ứng dụng là SHA-256 canonical JSON của fully-qualified source type,
+source ID, physical predicate, fully-qualified target type, target ID.
+Evidence ngoài identity. Server dùng tuple **(node nguồn, predicate, node đích)**
+và **LAST_WRITE_WINS** cho properties; Builder gộp evidence xác định trước
+ghi đầy đủ properties. Khóa ứng dụng không điều khiển uniqueness server.
+Codec/aggregation contract: [schema](schema.md).
 
 ## Phạm vi graph production
 
-Whitelist gồm document có record, `scope != out_of_scope` và Markdown tương ứng
-trong `processed/documents/`: corpus có 91 document, loại `22_VBHN_BXD`.
-Giữ văn bản lịch sử/Superseded. Theo nguồn có 55.597 unit, 887 biển,
-238 quan hệ văn bản nội bộ; penalty chỉ merge thuộc tính. 8.144 SAFE_EDGE
-là số record được duyệt, không phải số cạnh duy nhất sau gộp provenance.
+Whitelist yêu cầu record document, `scope != out_of_scope`, Markdown tương ứng
+trong `processed/documents/`; loại `22_VBHN_BXD`, giữ văn bản lịch sử/Superseded.
+Expected source counts nằm trong
+[schema_contract.json](../kag/schema/schema_contract.json); không phải counts
+của graph đang chạy hoặc quyền production WRITE. SAFE_EDGE counts là số record
+được duyệt, khác số cạnh unique sau gộp.
 
-Loại `processed/out_of_scope/**`, penalty bị loại, `processed/eval/**`, `raw/**`;
-eval không đi vào retrieval corpus hoặc sinh tri thức. Metadata/manifest chỉ
-phục vụ provenance. Tham chiếu ngoài corpus và classification khác SAFE_EDGE
-giữ ngoài graph; không tạo placeholder. ID trùng, join penalty sai, endpoint
-thiếu, lệch doc hoặc parent cycle phải fail closed; không suy đoán sửa dữ liệu nguồn.
+Loại `processed/out_of_scope/**`, penalties bị loại, `processed/eval/**` và
+`raw/**`. Eval không vào retrieval corpus hoặc sinh tri thức; metadata/manifest
+chỉ dùng provenance. Tham chiếu ngoài corpus và classification khác SAFE_EDGE
+giữ ngoài graph, không tạo placeholders. ID trùng, penalty join sai, endpoint
+thiếu/lệch doc hoặc parent cycle phải fail closed; không sửa nguồn theo suy đoán.
 
 Mô hình không kết luận pháp luật hiện hành ngoài corpus. Chunking, suy luận
-thời gian và độ chính xác neo biển/QCVN nằm ngoài phạm vi schema miền.
+thời gian và độ chính xác neo biển/QCVN không do schema miền bảo đảm.

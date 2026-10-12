@@ -1,49 +1,64 @@
 # Backend identity và physical database proof
 
-`BackendIdentitySession` is one live preflight authority, shared by sample and
-production. It resolves the complete pinned ProjectClient list, requires one
-name/namespace match and one ID match, and independently looks up that ID.
-Only explicit Neo4j URI and database in project `graph_store` are accepted.
-Credentials remain in transport memory; no runtime default database is used.
+`BackendIdentitySession` xác minh target đang chạy trước khi runner, writer hoặc
+GraphLock dùng graph. Session đọc toàn bộ danh sách project từ SDK đã pin,
+yêu cầu đúng một kết quả theo `name + namespace` và đúng một ID, rồi đọc lại
+độc lập theo ID. `graph_store` phải khai báo Neo4j URI và database; không lấy
+database mặc định từ runtime. Credential chỉ nằm trong bộ nhớ transport.
 
-The transport binds reads to that project URI. `DockerBackendTransport` checks
-the running OpenSPG and Neo4j containers, host published ports, common network,
-backend alias and DNS from inside OpenSPG. It reads the database catalog inside
-the OpenSPG namespace with `Neo4jReadClient`, independently of the host verifier.
-The default Docker adapter requires local Docker CLI/inspection/exec access and
-supports the audited standalone HTTP/Bolt layout (8887/7474/7687). Missing access,
-different ports, TLS or an unproved route fail closed. Such deployments must
-supply a trusted in-process transport with equivalent live routing evidence;
-JSON runner configuration cannot supply a proof or enable WRITE.
+Mã nguồn: [backend_identity.py](../kag/backend_identity.py).
 
-Catalog reads are parameterized `SHOW DATABASES` on `system`. A case variant is
-accepted only when exactly one canonical catalog row resolves it. That row must
-be ONLINE, with nonempty databaseID/serverID and a unique physical databaseID.
-Backend and verifier must match canonical name, physical ID and serverID.
-Runtime identity also binds Docker container/image/network identities.
-These catalog fields are documented in the
-[Neo4j database catalog](https://neo4j.com/docs/operations-manual/current/database-administration/standard-databases/listing-databases/).
-`database_identity()` retains its existing string API.
+## Xác minh đường đi và database
 
-Only the exact immutable proof instance issued by an active session is accepted.
-`validate()` re-reads project configuration, backend routing and both catalogs.
-Copied, fabricated, mutated, stale or closed-session proof is refused before
-dispatch. `lastStartTime` is not a freshness gate; the sample returns null.
-Receipts explicitly serialize stable allowlisted identity only. They cannot
-restore active authority. Resume creates a new session and re-proves live target;
-no nonce/session token enters the run hash.
+Transport phải chứng minh request đi tới URI của project. Hai adapter Docker
+phục vụ hai kiểu kết nối:
 
-Production discovery still validates the scope/C3 input contract offline first. WriterConfig requires
-the matching session/proof; constructor and shared `_invoke` guard enforce it for
-native, inherited invoke/ainvoke, node and edge entry points. An existing writer
-cannot swap its config, client or backend binding. Scope/vector/node barrier
-checks remain required. GraphLock validates the same proof at construction and
-acquisition; its filename remains SHA256(physical databaseID), so proven aliases
-compete for one lock. Source-only locks do not use backend authority.
+- `DockerBackendTransport`: cần Docker CLI, quyền inspect/exec local và layout
+  HTTP/Bolt `8887/7474/7687`. Kiểm container đang chạy, port publish, network
+  chung, alias và DNS từ bên trong OpenSPG; đọc catalog tại namespace OpenSPG
+  độc lập với verifier host. Thiếu quyền, đổi port, TLS hoặc route chưa chứng
+  minh đều bị chặn.
+- `DockerPrivateBackendTransport`: đọc Docker socket bằng GET inspection,
+  không cần publish port quản trị. Runner phải dùng đúng network namespace
+  OpenSPG; kiểm Compose project/service, container/image/network và volume
+  Neo4j đã bind. Serving containers không mount socket này.
 
-Production WRITE stays BLOCKED independently of a successful identity proof.
-Production execution needs a fresh proof of the real project/runtime and separate
-execution authority. No sample project/physical ID is a production default. Offline writer
-intent capture proves pinned request serialization before HTTP; it is TEST
-evidence, separate from LIVE backend identity evidence. See the current
-[product architecture](architecture.md) and [runtime operations](runner.md).
+Deployment khác cần transport tin cậy trong cùng process, cung cấp bằng chứng
+route tương đương. JSON config và receipt không thể thay transport hoặc mở WRITE.
+
+Catalog được đọc bằng `SHOW DATABASES` trên `system`, với parameters. Tên khác
+hoa/thường chỉ được chấp nhận khi có đúng một hàng canonical. Database phải
+ONLINE, `databaseID`/`serverID` không rỗng và physical databaseID duy nhất.
+Backend và verifier phải khớp tên canonical, physical ID và serverID.
+Proof còn bind identity container/image/network; adapter private bind cả volume.
+`database_identity()` vẫn trả string.
+
+## Vòng đời proof
+
+Chỉ đúng instance proof bất biến do session đang hoạt động cấp được chấp nhận.
+`validate()` đọc lại project config, route và hai catalog trước dispatch.
+Proof sao chép, giả, sửa, hết hiệu lực hoặc thuộc session đã đóng đều bị chặn.
+`lastStartTime` không dùng làm gate freshness; giá trị null không thay thế
+xác minh live.
+
+Receipt chỉ lưu các trường identity được cho phép, không lưu credential hoặc
+session token. Receipt không khôi phục quyền vận hành. Resume phải tạo session
+mới và chứng minh lại target live; nonce/session token không vào run hash.
+
+## Writer và lock
+
+Production discovery kiểm scope/C3 offline trước. `WriterConfig` cần session và
+proof đúng target. Constructor và `_invoke` dùng chung guard cho native write,
+inherited `invoke/ainvoke`, node và edge. Writer đã tạo không được thay config,
+client, REST route hoặc backend binding. Scope, vector và full node readback
+barrier vẫn bắt buộc; xem [writer scope](production-writer-scope.md).
+
+GraphLock xác minh cùng proof khi tạo và acquire. Tên lock là
+SHA-256(physical databaseID), nên các alias đã được chứng minh cạnh tranh cùng
+một lock. Source-only mode chỉ dùng lock theo run directory.
+
+Backend identity hợp lệ không mở `PRODUCTION WRITE`. Runner chỉ cho phép WRITE
+trong `FRESH_SAMPLE` với manifest giới hạn và backend cô lập đã được chứng minh.
+Không dùng sample project/physical ID làm mặc định production. Offline capture
+request writer chỉ kiểm serialization trước HTTP; không chứng minh backend live.
+Quy trình chạy và resume: [runner](runner.md).

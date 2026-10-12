@@ -1,61 +1,41 @@
 # Kiểm thử core Python
 
-Các suite hiện có kiểm Builder, Retriever, Solver, runner, bootstrap/schema và
-Evaluation Framework. Đây là kiểm thử offline bằng fixtures/doubles; PASS
-không xác nhận graph live, provider identity hoặc benchmark pháp lý official.
+Các suite kiểm Builder, Retriever, Solver, runner, runtime/schema, HTTP API và Evaluation Framework bằng fixtures/doubles. Kết quả offline không xác nhận graph live, provider identity hoặc benchmark pháp lý chính thức.
 
 ## Runtime và cách chạy
 
-Chạy từ root checkout, với **CPython 3.10.16/Linux amd64**, đủ dependencies và
-vendor đúng pin theo [setup runtime](../docs/runtime.md). Solver/runtime import
-SDK thật; Python host khác version không thay thế runtime chuẩn. Schema parser
-cần `six`. Giữ source read-only, network denied; fixtures/output nằm ngoài repo.
+Dùng **CPython 3.10.16/Linux amd64**, dependencies và vendor đúng pin theo [runtime](../docs/runtime.md). SDK parser cần `six`. Chạy từ root checkout; giữ source read-only, chặn mạng và để fixtures/output ngoài repo.
 
-Mỗi suite chạy trong process riêng để tránh module fixture cùng tên và registry
-đã cache. Chọn suite cần kiểm tra; các lệnh dưới đây không là yêu cầu chạy lại
-toàn bộ test hay full benchmark:
+Mỗi suite chạy trong process riêng để tránh module fixture trùng tên và registry đã cache. Chọn suite phù hợp:
 
 ```sh
-python -B -m unittest discover -s tests/evaluation -p 'test_*.py' -v
-python -B -m unittest discover -s tests/solver -p 'test_*.py' -v
-python -B -m unittest discover -s tests/retriever -p 'test_*.py' -v
-python -B -m unittest discover -s tests/runtime -p 'test_*.py' -v
-python -B -m unittest discover -s tests/schema -p 'test_*.py' -v
-python -B -m unittest discover -s tests/builder -p 'test_*.py' -v
-python -B -m unittest discover -s tests/runner -p 'test_*.py' -v
+python -B -m unittest discover -s tests/evaluation -p "test_*.py" -v
+python -B -m unittest discover -s tests/solver -p "test_*.py" -v
+python -B -m unittest discover -s tests/retriever -p "test_*.py" -v
+python -B -m unittest discover -s tests/runtime -p "test_*.py" -v
+python -B -m unittest discover -s tests/schema -p "test_*.py" -v
+python -B -m unittest discover -s tests/builder -p "test_*.py" -v
+python -B -m unittest discover -s tests/runner -p "test_*.py" -v
+python -B -m unittest discover -s tests/http_api -p "test_*.py" -v
 ```
+
+Không gộp discovery toàn `tests/` trong một process. Python host khác version không thay thế runtime chuẩn.
 
 ## Trách nhiệm từng suite
 
-- **Builder:** [hướng dẫn riêng](builder/README.md), codec/mapping/graph plan,
-  writer scope, retry/checkpoint và embedding chunk fallback trên fixtures.
-- **Schema:** [hướng dẫn riêng](schema/README.md), parser/contract, inheritance,
-  codec và SAFE_EDGE.
-- **Retriever:** [test_retriever.py](retriever/test_retriever.py) kiểm vector/index
-  gates, exact ID/source hydration, bounded expansion và mocked read transport;
-  [test_evaluation.py](retriever/test_evaluation.py) kiểm frozen slice/exact ranking.
-  ReadFixture và embedding callable dùng dữ liệu synthetic, không graph/model live.
-- **Solver:** [test_legal_solver.py](solver/test_legal_solver.py) dùng pinned SDK,
-  FakeLLM và retrieval fixtures; kiểm planning/deduction, public answer/aanswer,
-  citations/spans, hiệu lực/applicability, conflicts và safe abstention. Network
-  bị audit hook chặn; không thay public Solver bằng implementation benchmark-only.
-- **Runtime:** [test_bootstrap.py](runtime/test_bootstrap.py) dùng fresh subprocess
-  cho initialize-first/preload-builder/preload-solver, kiểm idempotence,
-  origins và registry identity; [test_inputs.py](runtime/test_inputs.py) kiểm SHA input.
-- **Runner:** [tests](runner/) kiểm ledger/outbox/resume, CLI, scope, physical
-  backend identity và readback trên mocks. Suite lock cần canonical bind mount
-  thật mà [run_state.py](../kag/run_state.py) xác minh; xem
-  [runner và lock](../docs/runner.md). Dùng lock root ngoài repo cho identity
-  fixture `physical-fixture-db`, không dùng production database; không spoof
-  mountinfo hoặc bypass `_shared_lock_root` để làm test PASS. Audit hook cho
-  symlink unlink phải xét directory entry, không resolve rồi chặn nhầm target.
-- **Evaluation:** [tests](evaluation/) kiểm dataset/lifecycle/import, G1/G2,
-  metrics/eligibility/reports/CLI trên fixtures. Đây là kiểm framework, không
-  chạy bộ benchmark nguồn hoặc paid judge.
+- [Builder](builder/README.md): codec, input/mapping/graph plan, writer scope/barrier và vectorizer retry/checkpoint/chunk fallback.
+- [Schema](schema/README.md): parser pinned, contract, inheritance, codec và SAFE_EDGE.
+- [Retriever](retriever/): vector/index gates, exact ID/source hydration, bounded expansion và ranking trên synthetic read/embedding fixtures.
+- [Solver](solver/): public answer/aanswer, planning/deduction, citations/spans, hiệu lực/applicability, conflicts và abstention với FakeLLM; audit hook chặn network.
+- [Runtime](runtime/): bootstrap trong fresh subprocess, import origins, registry identity và SHA input.
+- [Runner](runner/): ledger/outbox/resume, CLI, scope, backend identity và readback trên mocks.
+- [HTTP API](http_api/): request/auth/admission, query/SSE, release/proof, SAMPLE inspection, read broker và provider budgets trên fixtures.
+- [Evaluation](evaluation/): dataset/lifecycle/generation/import, G1/G2, metrics/eligibility/reports/CLI; không chạy bộ benchmark pháp lý hay paid judge.
+
+Runner lock cần bind mount thật từ `D:/study/caoDATA-workspace/runs/.graph-locks` tới `/run/kag-locks`, đúng kiểm tra tại [runner.py](../kag/runner.py). Dùng identity fixture `physical-fixture-db`; không dùng database production, spoof mountinfo hoặc bypass `_shared_lock_root`. Xem [runner và lock](../docs/runner.md).
+
+Nếu harness dùng audit hook chặn ghi, khi unlink symlink phải kiểm directory entry; không resolve sang target rồi chặn nhầm.
 
 ## WebApp
 
-Java/H2 và database MySQL kiểm thử riêng: [backend](../WebApp/backend/README.md#chạy).
-Frontend test/typecheck/build: [frontend](../WebApp/frontend/README.md#phát-triển-và-kiểm-thử).
-Kiểm tra Docker/API thật tạo state: [WebApp](../WebApp/README.MD), thực hiện theo
-quyền vận hành riêng. HTTP API và Admin SAMPLE đã có; Production WRITE vẫn BLOCKED.
+Java/H2 và MySQL kiểm thử riêng: [backend](../WebApp/backend/README.md#chạy). Frontend test/typecheck/build: [frontend](../WebApp/frontend/README.md#phát-triển-và-kiểm-thử). Kiểm tra Docker/API tạo tài khoản và state theo [WebApp](../WebApp/README.MD); cần phạm vi vận hành riêng.
