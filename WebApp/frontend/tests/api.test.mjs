@@ -16,6 +16,18 @@ globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Phiên đ
 await assert.rejects(api('/questions'), /Phiên đã hết hạn/)
 assert.equal(expired, true)
 assert.equal(values.has(tokenKey), false)
+
+values.set(tokenKey, 'test-token'); expired = false
+globalThis.fetch = async () => new Response('Unauthorized', { status: 401 })
+await assert.rejects(api('/chat'), error => error.status === 401 && /đăng nhập/.test(error.message))
+assert.equal(expired, true)
+assert.equal(values.has(tokenKey), false)
+
+values.set(tokenKey, 'test-token'); expired = false
+globalThis.fetch = async () => new Response(JSON.stringify({ message: 'KAG chưa khả dụng' }), { status: 503 })
+await assert.rejects(api('/chat', send('POST', { message: 'Câu hỏi tiếng Việt' })), error => error.status === 503)
+assert.equal(expired, false)
+assert.equal(values.get(tokenKey), 'test-token')
 globalThis.fetch = async () => { throw new Error('offline') }
 await assert.rejects(api('/questions'), /Không kết nối được backend/)
 assert.equal(send('POST', { selected: 0 }).body, '{"selected":0}')

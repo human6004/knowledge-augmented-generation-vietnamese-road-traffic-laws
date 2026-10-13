@@ -27,6 +27,9 @@ public class ChatService {
     }
     private Map<String,Object> request(UUID owner,ChatRequest input) { return Map.of("user_id",owner,"message",input.message(),"context_id",input.contextId()==null?"":input.contextId(),"schema_contract",schema.identity()); }
     private void complete(ChatMessage chat,JsonNode response) {
+        if(response!=null&&response.isObject()&&response.size()==1&&response.path("state").isTextual()&&response.path("state").asText().equals("KAG_ABSTAINED")) {
+            chat.state="KAG_ABSTAINED"; chats.save(chat); return;
+        }
         if(response==null||!response.path("answer").isTextual()||response.path("answer").asText().isBlank()||response.path("answer").asText().length()>20000||!response.path("citations").isArray()||response.path("citations").isEmpty()||response.path("citations").size()>20)
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"KAG trả về câu trả lời thiếu căn cứ");
         for(var citation:response.path("citations")) {

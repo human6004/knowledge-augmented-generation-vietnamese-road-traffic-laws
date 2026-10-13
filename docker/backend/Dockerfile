@@ -5,6 +5,9 @@ RUN mvn -B -q dependency:go-offline
 COPY WebApp/backend/src src
 COPY WebApp/docs/imports/questions-draft.json /build/WebApp/docs/imports/questions-draft.json
 COPY kag/schema/schema_contract.json kag/schema/VietRoadTraffic.schema /build/kag/schema/
+ENV TZ=Asia/Saigon
+RUN useradd --create-home --uid 10002 builder && mv /root/.m2 /home/builder/.m2 && chown -R builder:builder /build /home/builder/.m2
+USER 10002
 RUN mvn -B -q verify
 
 FROM eclipse-temurin:21-jre

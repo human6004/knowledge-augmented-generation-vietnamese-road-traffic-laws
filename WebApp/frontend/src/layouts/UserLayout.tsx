@@ -1,7 +1,7 @@
 import LogoMark from '../components/LogoMark';
 import { AccountMenu } from '../auth'
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 interface NavItem {
   to: string
@@ -49,12 +49,13 @@ const navItems: NavItem[] = [
 export default function UserLayout() {
   const [isCollapsed, setIsCollapsed] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--color-bg)' }}>
+    <div className="flex h-dvh overflow-hidden" style={{ background: 'var(--color-bg)' }}>
       {/* Sidebar with collapse support */}
       <aside
-        className={`flex flex-col shrink-0 h-full border-r border-line transition-all duration-200 select-none ${
+        className={`hidden md:flex flex-col shrink-0 h-full border-r border-line transition-all duration-200 select-none ${
           isCollapsed ? 'w-16' : 'w-60'
         }`}
         style={{ background: 'var(--color-sidebar)' }}
@@ -146,9 +147,16 @@ export default function UserLayout() {
       </aside>
 
       {/* Main Content Area */}
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        <Outlet />
-      </main>
+      <div className="min-w-0 flex-1 flex flex-col">
+        <div className="md:hidden flex items-center gap-3 p-3 border-b border-line">
+          <LogoMark size={18} />
+          <select aria-label="Điều hướng người dùng" value={navItems.find(item => location.pathname === item.to || location.pathname.startsWith(item.to + '/'))?.to ?? '/chat'} onChange={event => navigate(event.target.value)} className="min-w-0 flex-1 bg-bg border border-line rounded-md px-2 py-2">
+            {navItems.map(item => <option key={item.to} value={item.to}>{item.label}</option>)}
+          </select>
+          <AccountMenu collapsed />
+        </div>
+        <main className="min-w-0 flex-1 overflow-y-auto"><Outlet /></main>
+      </div>
     </div>
   )
 }

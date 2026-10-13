@@ -6,6 +6,7 @@ LegalDocument(LegalDocument): EntityType
       constraint: NotNull
     title(title): Text
       constraint: NotNull
+      index: Vector
     loai(loai): Text
       constraint: NotNull
     coQuan(coQuan): Text
@@ -80,6 +81,7 @@ LegalUnit(LegalUnit): EntityType
       constraint: NotNull, Enum="Dieu,Khoan,Diem,QCVN,QCVN_Muc"
     text(text): Text
       constraint: NotNull
+      index: Vector
     order(order): Integer
       constraint: NotNull
     parentId(parentId): Text
@@ -142,10 +144,12 @@ TrafficSign(TrafficSign): EntityType
       constraint: NotNull
     ten(ten): Text
       constraint: NotNull
+      index: Vector
     bienPhuVariant(bienPhuVariant): Text
       constraint: NotNull
     moTa(moTa): Text
       constraint: NotNull
+      index: Vector
     ngayHieuLuc(ngayHieuLuc): Text
       constraint: NotNull
     ngayHetHieuLuc(ngayHetHieuLuc): Text

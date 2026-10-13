@@ -8,6 +8,8 @@ venv/
 !/.env.example
 !/.env.kag.example
 
+/kag/kag_config.yaml
+
 .pytest_cache/
 .idea/
 .vscode/

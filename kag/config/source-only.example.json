@@ -1,0 +1,13 @@
+{
+  "scope": "SOURCE_ONLY_DRY_RUN",
+  "write_mode": "NO_OP",
+  "paths": {
+    "c3_manifest": "/external/builder-c3/graph-plan/manifest.json",
+    "run_root": "/evidence/runs"
+  },
+  "input_sha256": {
+    "c3_manifest": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "batch_size": 64,
+  "heartbeat_seconds": 5
+}

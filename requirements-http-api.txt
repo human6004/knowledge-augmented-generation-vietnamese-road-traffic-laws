@@ -1,0 +1,4 @@
+# Canonical packages are inherited unchanged from the pinned runtime image.
+# Install offline with --no-index --no-deps --require-hashes and the verified wheel.
+-c requirements.txt
+fastapi==0.115.12 --hash=sha256:e94613d6c05e27be7ffebdd6ea5f388112e5e430c8f7d6494a9d1d88d43e814d

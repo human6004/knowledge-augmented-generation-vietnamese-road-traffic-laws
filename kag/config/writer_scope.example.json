@@ -1,0 +1,22 @@
+{
+  "scope": "DENY",
+  "profiles": {
+    "host": {
+      "runtime_location": "host",
+      "host_addr": "http://127.0.0.1:28887",
+      "neo4j_uri": "bolt://127.0.0.1:27687"
+    },
+    "container": {
+      "runtime_location": "container",
+      "host_addr": "http://openspg-server:8887",
+      "neo4j_uri": "bolt://openspg-neo4j:7687"
+    }
+  },
+  "production": {
+    "project_name": "<EXACT_PRODUCTION_PROJECT_NAME>",
+    "namespace": "VietRoadTraffic",
+    "expected_project_id": null,
+    "vector_dimensions": 3072,
+    "confirmation": null
+  }
+}

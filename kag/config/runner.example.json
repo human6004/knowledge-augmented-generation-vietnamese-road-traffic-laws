@@ -1,0 +1,45 @@
+{
+  "scope": "DENY",
+  "runtime_location": "container",
+  "endpoints": {
+    "openspg": "http://127.0.0.1:8887",
+    "neo4j_http": "http://openspg-neo4j:7474",
+    "neo4j_uri": "bolt://openspg-neo4j:7687"
+  },
+  "database": "vietroadtraffic",
+  "project_id": 2,
+  "project_name": "VietRoadTrafficC43A10Pct",
+  "namespace": "VietRoadTraffic",
+  "vector_dimensions": 3072,
+  "confirmation": null,
+  "paths": {
+    "c3_manifest": "/external/builder-c3/graph-plan/manifest.json",
+    "sample_manifest": "/external/builder-c4/c4_3a_real_e2e/sample_manifest.json",
+    "vector_artifact": "/external/builder-c4/c4_3a_real_e2e/vectorized_nodes.complete.jsonl",
+    "provenance": "/external/builder-c4/c4_3a_real_e2e/vectorization_provenance.json",
+    "chunk_manifest": "/external/builder-c4/c4_3a_real_e2e/chunk_manifest.json",
+    "source_checkpoint": "/external/builder-c4/c4_3a_real_e2e/embedding_recovery_state.sqlite3",
+    "run_root": "/runs",
+    "lock_root": "/run/kag-locks"
+  },
+  "input_sha256": {},
+  "batch_size": 64,
+  "heartbeat_seconds": 5,
+  "write_mode": "DENY",
+  "vector_policy": "replay-existing",
+  "model_identity": "https://api.vilao.ai/v1|dg/text-embedding-3-large",
+  "embedding_model": null,
+  "fallback_config": {
+    "enabled": true,
+    "max_chunk_chars": 8000,
+    "overlap_chars": 500,
+    "min_chunk_chars": 1000,
+    "max_split_depth": 3,
+    "chunking_version": "boundary_offsets_v1"
+  },
+  "credential_env": {
+    "neo4j_username": "KAG_NEO4J_USERNAME",
+    "neo4j_password": "KAG_NEO4J_PASSWORD",
+    "embedding_key": "KAG_EMBEDDING_KEY"
+  }
+}

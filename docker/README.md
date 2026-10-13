@@ -1,87 +1,62 @@
-Dockerfile của backend, frontend và MinIO nằm tại đây. Hai stack dùng hai file Compose tại root repository, chạy các lệnh dưới đây từ root.
+Hai cấu hình triển khai chính: `docker-compose.yml` cho WebApp và `docker-compose.kag.yml` cho KAG/OpenSPG/API/HAProxy, tổng 11 services (5 + 6). Chạy lệnh từ root repository. Số services khai báo không chứng minh tất cả đang chạy/healthy.
 
-| Stack | File Compose | Project | Cấu hình môi trường |
-| --- | --- | --- | --- |
-| WebApp | `docker-compose.yml` | `webapp` | `.env` |
-| KAG / OpenSPG | `docker-compose.kag.yml` | `kag` | `.env.kag` |
+Dùng PowerShell 7 (`pwsh`) cho scripts UTF-8; Windows PowerShell 5.1 có thể đọc sai tiếng Việt và báo ParserError trước khi kiểm Compose.
 
-Hai stack có image, mạng, database, tài khoản và volume riêng. Không có dependency Compose giữa hai stack. WebApp tích hợp với adapter KAG qua HTTP `KAG_BASE_URL` và cùng identity schema contract (`namespace`, `schema_sha256`, `contract_sha256`). Chạy/dừng/build từng stack bằng file tương ứng; không ghép hai file bằng nhiều cờ `-f` vào một project.
+Clone repo chưa đủ để chạy SAMPLE. Cần vendor đúng pin, cached runtime/API/MinIO images đúng identity, offline FastAPI wheel và vendor Git objects khi build, external env/tokens, graph SAMPLE/release/proof, publication còn hiệu lực và provider/proxy đúng route. Chat proxy tại host cổng 8317 không thuộc 11 services Compose. Không tự restore/build graph hoặc mở provider khi kiểm cấu hình.
 
-## Chạy WebApp độc lập
+SAMPLE Community query dùng `STEP8_QUERY_PROFILE=community-query-1.0` cùng proof hash do operator pin, publication/snapshot WebApp thực tế và ledger bền vững dùng chung. API vẫn chỉ nối readbus nội bộ, không có credential database. HAProxy gateway nghe `:8898` trong container, không publish host port; ACL tra Docker DNS `kag-api` và kiểm token riêng. Bootstrap tắt gateway bằng ACL khi query profile rỗng. Hai file ledger/lock là các bind writable duy nhất; chỉ `egress.token` vào ingress.
 
-```powershell
-./docker/init-env.ps1 # Chỉ chạy khi chưa có .env
-# Nếu .env đã có: ./docker/init-env.ps1 -Update
-docker compose up -d --build
-./docker/check-config.ps1 -Stack WebApp
-./WebApp/scripts/verify-stack.ps1
-```
+Proxy chat ngoài Compose phải chạy trên máy người nhận: `STEP8_CHAT_PROXY_HOST` mặc định `host.docker.internal`, `STEP8_CHAT_PROXY_PORT` mặc định `8317`. Có thể chọn DNS host/port riêng; không điền IP container/Wi-Fi hoặc URL vào biến host. Docker Desktop cung cấp host gateway; Linux cần proxy có DNS và listener cho Docker truy cập, firewall giới hạn Docker, không tự mở LAN/Internet. `/v1/models` và `/v1/chat/completions` đi qua proxy; `/v1/embeddings` giữ provider đã attested `api.vilao.ai:443`. Credentials, model route và proof phải do operator cung cấp/kiểm chứng; đổi endpoint không cấp serving authority.
 
-WebApp gồm frontend, backend Spring Boot, MySQL nghiệp vụ, Redis và MinIO. Giao diện ở http://127.0.0.1:8081, API ở http://127.0.0.1:8080/api. WebApp chạy được mà không cần OpenSPG hoặc `.env.kag`; chat KAG báo chưa khả dụng khi adapter Python chưa chạy.
+Profile thông thường giới hạn embedding 3, chat 7; caller cũ vẫn 3/3. Ledger đếm trước send, tắt retry/redirect. Query cần ít nhất 4 chat attempts còn lại; cache embedding chỉ tái sử dụng khi câu hỏi/hash/model/vector khớp. Profile phát triển SAMPLE được cấp riêng dùng proof `h1-community-query-2.0`, `development_policy.scope=SAMPLE_DEVELOPMENT`, hash yêu cầu phê duyệt và baseline counts; limits embedding/chat là `null`. Operator phải pin lại toàn bộ proof. Ledger/lock/binding và mọi attempts lịch sử giữ nguyên; không reset để đổi profile. Deadline 180 giây, tối đa 5 iteration và không retry vẫn áp dụng. Bỏ policy cần trở về proof có cap hợp lệ; ledger vượt cap sẽ fail closed.
 
-Backend dùng tài khoản `luatgt` và `DB_PASSWORD`, không dùng root. MySQL 8.4.11 ở `127.0.0.1:3306`, database `luatgt`, volume `webapp_kag-data`; Redis/MinIO dùng `webapp_redis-data` và `webapp_minio-data`. Văn bản dùng `utf8mb4_0900_bin`, thời gian lưu UTC.
+Readiness kiểm tra graph/broker/proof/model metadata thật, không gọi inference. Response thiếu/sai model bị chặn và vẫn tính attempt. Ngoại lệ phát triển chỉ nhận response version đã được trace upstream chứng minh và pin trong `model_route`; đây là chứng cứ request route/response version, không chứng minh exact backend identity hay high thinking. `KAG_QUERY_TIMEOUT_SECONDS=180` đồng bộ timeout query/SSE WebApp, mặc định 30. `KAG_INSPECTION_TIMEOUT_SECONDS=25` cho inspection SAMPLE kiểm graph đầy đủ, mặc định 2, phạm vi 2–25 giây. Câu hỏi bắt đầu đúng `Trích nội dung văn bản: ` và chứa duy nhất một số hiệu có thể trả nguyên văn nguồn kèm nhãn không xác nhận hiệu lực hiện hành; citation vẫn kiểm document, toàn span, parent/context và publication. Câu hỏi pháp luật hiện hành vẫn abstain khi hiệu lực từng phần thiếu phạm vi xác minh. Readiness không chứng minh đáp án pháp lý. Production authority vẫn DENY/BLOCKED.
 
-Đây là schema MySQL mới; Flyway V1/V2 đã chuyển cú pháp từ PostgreSQL, V3 thêm đơn vị pháp lý. Không chạy các migration này lên PostgreSQL. Volume cũ `webapp_postgres-data` không bị sửa/xóa và không tự chuyển dữ liệu sang MySQL. Người dùng đã xác nhận chưa có dữ liệu cần chuyển.
+## WebApp
 
-Backend build từ root để Maven đóng gói trực tiếp `kag/schema/schema_contract.json` và `VietRoadTraffic.schema` cùng source Java tại `WebApp/`. Build context chỉ lấy source WebApp và hai file schema; runtime/core KAG không nằm trong image Java. Backend kiểm tra SHA-256 của schema đóng gói khớp `runtime_contract.schema_sha256`; khi contract hoặc schema đổi cần build lại backend. Namespace vẫn là `VietRoadTraffic`, với 75 thuộc tính logical, 69 thuộc tính khai báo và sáu thuộc tính `id/name` kế thừa OpenSPG `Thing`.
+WebApp giữ project `webapp`, MySQL nghiệp vụ, Redis, MinIO, Spring Boot và React hiện có. Không dùng database/volume OpenSPG hoặc legacy.
+
+`docker/init-env.ps1` chỉ tạo/bổ sung cấu hình WebApp, không ghi đè credentials hiện có. Cung cấp `KAG_TOKEN_FILE` và `KAG_INSPECT_TOKEN_FILE` trỏ tới hai file token khác nhau bên ngoài repository. Backend mount chúng tại `/run/secrets/kag_query_token` và `/run/secrets/kag_inspect_token`; browser chỉ dùng JWT WebApp.
+
+Docker backend dùng `KAG_BASE_URL=http://kag-ingress:8080`, nối network ingress có sẵn. Điền cùng `STEP8_KAG_PROJECT` trong env WebApp và KAG; khởi động KAG trước WebApp để external network tồn tại. Java chạy trực tiếp trên host dùng `http://127.0.0.1:38000`. Host ports vẫn chỉ bind localhost. Không cần IP máy tác giả hoặc IP container cố định.
 
 ```powershell
-# Build hoặc dừng riêng WebApp:
-docker compose build backend frontend minio
-docker compose down
+./docker/check-config.ps1 -Stack WebApp -WebAppEnvFile <external-webapp-env>
 ```
 
-## Chạy KAG / OpenSPG độc lập
+Backend build đóng gói schema gốc, không đưa Python/vendor vào Java image. Flyway chỉ chạy trên database WebApp được cấp quyền. Tests H2/mock không thay thế MySQL thật.
+
+## KAG primary Compose
+
+`docker-compose.kag.yml` sử dụng sáu service Step8: `openspg-mysql`, `openspg-neo4j`, `openspg-minio`, `openspg-server`, `kag-api`, `kag-ingress`. External `STEP8_KAG_PROJECT` bắt buộc có tiền tố `kag-s8-`; volumes/networks thuộc project đó. Không tái sử dụng project `kag`, `docker` hoặc legacy storage.
+
+Fresh sample dùng `STEP8_DATABASE='vietroadtraffic'` và `STEP8_NEO4J_STORAGE_REVISION='-fresh-20261011'` để khởi tạo default database trên volume mới; volume trước giữ rollback. Runner FRESH_SAMPLE phải đối chiếu volume revised và physical identity trước WRITE.
+
+`POST /v1/retrieve/vector` nhận `evidence_id` từ release SAMPLE sealed, không gọi embedding/chat. Runtime kiểm toàn bộ graph, provenance, database và source trước/sau retrieval. Enterprise giữ attestation reader RBAC riêng. Community dùng proof `h1-community-sample-1.0`: broker chỉ đọc trong OpenSPG server giữ DB credential; API chỉ giữ broker token, kiểm physical identity/read-only, hash code, DNS/IP binding và actual TCP denial tới DB/Java. Proof thiếu hoặc drift → 503; không tuyên bố tài khoản Community least-privilege. NL/query và production WRITE giữ gate riêng.
+
+Community cấu hình external `STEP8_BROKER_CREDENTIALS_DIR`, `STEP8_BROKER_DATABASE_ID`, `STEP8_BROKER_SERVER_ID`, `STEP8_BROKER_URL='http://openspg-server:8899'`. Backend-only directory chứa `neo4j.password` và `broker.token`; API-only directory chứa cùng broker token và `sample-proof.sha256`, không có DB credential. Static `STEP8_SAMPLE_PROOF_SHA256` phải rỗng trong mode này. Mint proof từ actual container/network IDs sau deployment, ghi hash vào file rồi restart cùng API container; không recreate làm lệch identity. Khi chuyển máy hoặc recreate container, đo lại isolation/DNS/backend identity và pin lại supplemental SAMPLE/query proofs cùng hash gateway config; không sao chép IP cũ, không sửa descriptor/graph/publication để né gate. IDs trong receipt là provenance operator; runtime independently kiểm DNS/IP, TCP denial, code và backend trạng thái. Initializer để broker chưa cấu hình, không cấp serving authority.
+
+Direct live runner dùng `ProviderBudget` với ledger cố định xuyên Retriever/Planner/Deduce. Reserve trước transport, mọi failure/timeout tính attempt; SDK/planner/JSON retries tắt. Không suy ra HTTP query READY từ direct retrieval hoặc provider response.
+
+Catalog SAMPLE có thể giữ `parent_id`/`unit_id` nguồn nằm ngoài sample. Parent hiện diện phải cùng document; mọi endpoint trong `graph_context` phải có trong catalog. Release ngoài SAMPLE vẫn yêu cầu đầy đủ parent closure.
+
+Dùng external env do `docker/init-step8-env.ps1` tạo và wheel cache/vendor objects đã xác minh. `docker/init-env.ps1 -Kag` và `.env.kag` giữ compatibility lịch sử; không dùng cho primary Compose mới.
 
 ```powershell
-./docker/init-env.ps1 -Kag
-docker compose --env-file .env.kag -f docker-compose.kag.yml up -d --build
-./docker/check-config.ps1 -Stack Kag
-docker compose --env-file .env.kag -f docker-compose.kag.yml logs --tail 100 openspg-server
+./docker/check-config.ps1 -Stack Kag -KagEnvFile <external-kag-env>
+./docker/test-compose.ps1 -KagEnvFile <external-kag-env>
 ```
 
-KAG/OpenSPG gồm server, MySQL metadata, Neo4j và MinIO, chạy trực tiếp dưới project `kag`, không cần profile hay WebApp đang chạy. Adapter/builder/retriever/solver Python của project chưa triển khai; stack này hiện khởi chạy engine OpenSPG, chưa phải dịch vụ hỏi đáp KAG hoàn chỉnh.
+`check-config.ps1` kiểm cấu hình không startup/pull/build. `test-compose.ps1` còn tạo fixture/env thử trong thư mục tạm và kiểm cached API image identity; không phải thao tác chỉ đọc filesystem. Mạng `private` internal chỉ chứa DB/MySQL/MinIO/OpenSPG; `readbus` internal chứa OpenSPG/API/HAProxy. Java bind `127.0.0.1:8887`, broker không publish host port. HAProxy nối `readbus` và `ingress`, chỉ publish `127.0.0.1:38000`. API không nối mạng DB. API/HAProxy giữ non-root, read-only rootfs, cap-drop ALL, no-new-privileges và resource limits zero swap.
 
-Tham chiếu [Compose chính thức](https://github.com/OpenSPG/openspg/blob/ceeb3ef549df79ca4c4878e7ff452c73584991f3/dev/release/docker-compose-west.yml), đối chiếu [KAG đã pin](https://github.com/OpenSPG/KAG/blob/fdab15b3929d2ee40dfcdd388f90233096a6afc9/README.md). MySQL upstream có sẵn SQL khởi tạo OpenSPG; không thay bằng image MySQL trắng hoặc PostgreSQL.
+Production WRITE BLOCKED; operational proof và provider egress DENY. Liveness 200 không thành readiness. Release artifact không chứng minh physical Neo4j identity, live indexes hoặc source readback. Không mở quyền bằng biến môi trường.
 
-| Dịch vụ | Địa chỉ từ host | Địa chỉ trong mạng KAG |
-| --- | --- | --- |
-| OpenSPG UI/API | http://127.0.0.1:28887 | http://openspg-server:8887 |
-| MySQL metadata | 127.0.0.1:23306 | openspg-mysql:3306 |
-| Neo4j Browser / Bolt | http://127.0.0.1:27474 / 127.0.0.1:27687 | openspg-neo4j:7687 |
-| MinIO API / Console | http://127.0.0.1:29000 / http://127.0.0.1:29001 | openspg-minio:9000 |
+`/v1/pipeline/status` và `/v1/benchmark/datasets` là inspect-only GET. Không có endpoint chạy pipeline/benchmark. Progress chưa đo và metrics chưa chạy giữ null. `STEP8_EVALUATION_ENABLED` chỉ đọc dataset tại `<STEP8_RELEASE_DIR>/evaluation` qua mount read-only hiện có; không tạo/đóng băng/sửa dataset. FROZEN integrity không thay thế gold review, graph catalog hoặc quyền chạy benchmark.
 
-Các cổng chỉ bind localhost, không trùng WebApp hoặc stack cũ trong ảnh. Mạng KAG là `kag_openspg`; các alias `mysql`, `neo4j`, `minio` chỉ dùng bên trong mạng này. Tên volume giữ nguyên:
+Question Generation và G1/G2 Framework đã có trong `kag/evaluation/`; bộ câu hỏi chính thức chưa hoàn thành. SAMPLE 32 nodes / 22 edges / 42 vectors không chứng minh chất lượng toàn corpus hoặc production readiness. Publication/proof có thời hạn; không sửa ngày/hash của sealed bundle để làm readiness PASS.
 
-```text
-kag_openspg-mysql-data
-kag_openspg-neo4j-data
-kag_openspg-neo4j-logs
-kag_openspg-minio-data
-```
+Chỉ dùng `docker-compose.kag.yml` cho KAG và `docker-compose.yml` cho WebApp, kể cả kiểm thử và recovery. Cached image phải khớp exact local identity và source đã review trước deployment.
 
-```powershell
-# Build/pull hoặc dừng riêng KAG:
-docker compose --env-file .env.kag -f docker-compose.kag.yml build openspg-minio
-docker compose --env-file .env.kag -f docker-compose.kag.yml pull openspg-server openspg-mysql openspg-neo4j
-docker compose --env-file .env.kag -f docker-compose.kag.yml down
-```
+## Bảo toàn và migration
 
-Muốn chạy cả hai, chạy lần lượt hai lệnh `up` ở trên; chúng vẫn là hai project độc lập. Các lệnh `down` giữ volume. Không dùng `down -v` nếu cần giữ dữ liệu. Không tự lấy dữ liệu từ stack `vietroadtraffic_b2c` hoặc các volume tên cũ.
-
-## Biến môi trường và kiểm tra
-
-`.env.example` và `.env.kag.example` là hai mẫu cấu hình không chứa mật khẩu. `docker/init-env.ps1` tạo `.env` chỉ cho WebApp; `-Kag` tạo `.env.kag` chỉ cho OpenSPG. Chạy lại `-Update` hoặc `-Kag` chỉ bổ sung biến thiếu, giữ thông tin hiện có. Khi lần đầu tách cấu hình cũ, `-Kag` tái sử dụng các biến `OPENSPG_*` trong `.env` nếu có. Cấu hình local hiện tại đã chuyển các biến này sang `.env.kag`, giữ nguyên giá trị. `WebApp/scripts/init-env.ps1` tiếp tục hoạt động bằng cách gọi script chung.
-
-```powershell
-# Kiểm tra cả hai cấu hình, tên project, dependency, cổng, volume:
-./docker/check-config.ps1
-# Kiểm tra bootstrap/env độc lập trong fixture tạm; không cần Docker Engine:
-./docker/test-compose.ps1
-```
-
-Trong OpenSPG UI, cấu hình lưu trữ MinIO theo URL `minio://openspg-minio:9000?accessKey=<OPENSPG_MINIO_USER>&secretKey=<OPENSPG_MINIO_PASSWORD>` với giá trị từ `.env.kag`. Nếu image có kết nối mặc định dùng mật khẩu mẫu upstream, cập nhật kết nối trước khi upload/build. MySQL và Neo4j nhận kết nối/mật khẩu trực tiếp qua tham số server.
-
-Image server/MySQL/Neo4j mặc định dùng `latest` như upstream. Để tái lập bộ đã kiểm thử, đặt `OPENSPG_SERVER_IMAGE`, `OPENSPG_MYSQL_IMAGE`, `OPENSPG_NEO4J_IMAGE` trong `.env.kag` thành image `@sha256:...`. MinIO dùng Dockerfile đã pin nguồn của project. JVM mặc định 2–8 GB, Neo4j heap tối đa 4 GB và page cache 1 GB. Có thể chỉnh `OPENSPG_JAVA_XMS`, `OPENSPG_JAVA_XMX`, `OPENSPG_BUILDER_CONCURRENCY` (mặc định 4).
-
-OpenSPG engine không cung cấp `/v1/query` và `/v1/query/stream` mà WebApp gọi. Giữ `KAG_BASE_URL` trong `.env` cho adapter Python tại cổng 8000; không trỏ tới OpenSPG UI cổng 28887. Không tự import dataset/schema hoặc bật ingestion khi khởi động. Core KAG sẽ triển khai riêng; Builder phải tuân thủ [contract runtime](../docs/schema.md#contract-runtime-và-yêu-cầu-builder), kiểm tra dữ liệu, codec và gộp provenance xác định trước khi ghi graph.
+Không restart/migrate legacy, restore/build graph hoặc gọi provider từ scripts config. Migration runtime cần phê duyệt riêng; source/static PASS không thành migration PASS. Không dùng prune/xóa volumes. Giữ external credentials, backup và dataset.

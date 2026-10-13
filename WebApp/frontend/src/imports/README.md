@@ -1,5 +1,11 @@
 # LuậtGT - Chatbot luật giao thông đường bộ & hệ thống ôn thi lái xe
 
+> Tài liệu thiết kế lịch sử nhập cùng UI; nội dung gốc giữ bên dưới để đối chiếu.
+> Tính năng, thư mục đề xuất, dependencies và lệnh “dự kiến” không mô tả code hiện tại.
+> Setup/routes hiện tại: [frontend](../../README.md), [WebApp](../../../README.MD),
+> [kiến trúc sản phẩm](../../../../docs/architecture.md).
+> HTTP query adapter chưa triển khai; H1/H2 NOT_STARTED, production WRITE BLOCKED.
+
 Ứng dụng giúp người dùng **tra cứu luật giao thông đường bộ** bằng chatbot (có trích dẫn căn cứ pháp lý) và **ôn luyện thi sát hạch giấy phép lái xe** (học theo chương, biển báo, thi thử). Chatbot dùng **KAG** (Knowledge Augmented Generation) trên đồ thị tri thức luật để trả lời chính xác, có suy luận nhiều bước.
 
 ## Tính năng

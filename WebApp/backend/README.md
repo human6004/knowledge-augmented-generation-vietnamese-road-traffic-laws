@@ -1,6 +1,6 @@
 # Backend LuậtGT
 
-Một ứng dụng Spring Boot 3.5.16 / Java 21, kiến trúc **monolith, MVC**. React là lớp hiển thị; backend phục vụ REST và SSE. KAG Python là tích hợp bên ngoài, được xây dựng riêng sau.
+Một ứng dụng Spring Boot 3.5.16 / Java 21, kiến trúc **monolith, MVC**. React là lớp hiển thị; backend phục vụ REST và SSE. Core KAG Python đã có implementation riêng; HTTP query/SSE adapter đã triển khai tại `kag/http_api/`. Xem [kiến trúc](../../docs/architecture.md).
 
 ```text
 src/main/java/vn/luatgt/
@@ -24,19 +24,17 @@ Controller không truy cập repository. Service giữ giao dịch và quy tắc
 
 Từ thư mục gốc repository (thư mục cha của `WebApp`), với Docker Desktop đã cài và chạy:
 
-```powershell
-./docker/init-env.ps1
-docker compose up -d --build
-```
+Khởi tạo môi trường/build stack theo [Docker WebApp](../../docker/README.md#webapp).
 
-Nếu đã có `.env`, dùng `./docker/init-env.ps1 -Update` để bổ sung biến còn thiếu. `docker-compose.yml` chỉ chứa WebApp, project `webapp`; OpenSPG dùng `docker-compose.kag.yml`, project `kag` và `.env.kag` riêng. WebApp dùng MySQL 8.4.11, database/tài khoản `luatgt`, cổng host 3306. Schema dùng UUID `BINARY(16)`, thời gian `DATETIME(6)` theo UTC, nội dung JSON/văn bản `LONGTEXT`, khóa ngoại cấp bảng. Volume MySQL mới không tự chứa dữ liệu PostgreSQL cũ; xem [hướng dẫn Docker](../../docker/README.md).
+Nếu đã có `.env`, dùng `./docker/init-env.ps1 -Update` để bổ sung biến còn thiếu. `docker-compose.yml` chỉ chứa WebApp, project `webapp`; KAG dùng `docker-compose.kag.yml`, project `kag-s8-*` và external Step8 env riêng. Hai Compose khai báo 11 services; cần các prerequisites tại hướng dẫn Docker. WebApp dùng MySQL 8.4.11, database/tài khoản `luatgt`, cổng host 3306. Schema dùng UUID `BINARY(16)`, thời gian `DATETIME(6)` theo UTC, nội dung JSON/văn bản `LONGTEXT`, khóa ngoại cấp bảng. Volume MySQL mới không tự chứa dữ liệu PostgreSQL cũ; xem [hướng dẫn Docker](../../docker/README.md).
 
 API: `http://127.0.0.1:8080/api`; health: `/actuator/health`. Mật khẩu ADMIN lấy từ `.env`, không phải tài khoản demo trên FE. Tự đăng ký chỉ tạo USER. Bootstrap chỉ tạo ADMIN nếu email chưa tồn tại; không tự nâng USER thành ADMIN, không đặt lại mật khẩu ADMIN cũ.
 
-Để chạy Java trên máy, khởi động `docker compose up -d mysql redis minio`, đặt các biến `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD` trong môi trường rồi chạy `mvn spring-boot:run` tại `backend`. `REDIS_URL` phải chứa mật khẩu từ `.env`; Java không tự đọc `.env`.
+Để chạy Java trên máy, từ root repository dùng `docker compose --env-file <webapp-env> -f docker-compose.yml up -d mysql redis minio`, đặt các biến `DB_PASSWORD`, `REDIS_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `MINIO_USER`, `MINIO_PASSWORD` trong môi trường rồi chạy `mvn spring-boot:run` tại `WebApp/backend`. `REDIS_URL` phải chứa mật khẩu từ `.env`; Java không tự đọc `.env`.
 
 ```powershell
-cd backend
+# Từ root repository:
+cd WebApp/backend
 mvn verify
 ```
 
@@ -93,11 +91,46 @@ Văn bản: `externalId`/`doc_id`, `title`, `so_hieu`, `source`, ngày hiệu l�
 
 ## Hợp đồng KAG Python
 
-`POST /v1/query` nhận `{ "user_id": "uuid", "message": "...", "context_id": "...", "schema_contract": { "namespace": "VietRoadTraffic", "schema_sha256": "<runtime_contract.schema_sha256>", "contract_sha256": "<SHA-256 của bytes file contract>" } }`, trả `{ "answer": "...", "citations": [{ "doc_id": "...", "unit_id": "...", "quote": "..." }] }`. Adapter Python cần đối chiếu identity này với core khi triển khai. Mỗi trích dẫn phải thuộc unit đã duyệt/xuất bản, gắn đúng văn bản đã xuất bản/còn hiệu lực trên BE; quote phải có nguyên văn trong `LegalUnit.text`. Thiếu/sai căn cứ thì BE từ chối cả câu trả lời.
+Python HTTP API đã triển khai, dùng KAGIterativePlanner/KAGIterativePipeline,
+Legal Retriever/Deduce và SafeLegalGenerator. `KAG_BASE_URL`: Docker backend
+`http://kag-ingress:8080` trên external network `${STEP8_KAG_PROJECT}_ingress` có sẵn; env WebApp/KAG phải cùng project và KAG khởi động trước. Java local `http://127.0.0.1:38000`.
+Query và inspect dùng hai external token files riêng; browser chỉ giữ JWT WebApp.
 
-`POST /v1/query/stream` cùng request, trả SSE `event: delta` với `data: {"text":"..."}`, kết thúc bằng `event: done` với response đầy đủ như REST. BE proxy delta, kiểm tra và lưu kết quả cuối; nếu stream lỗi hoặc không có done, phát `error`, không đánh dấu câu trả lời hoàn tất. Frontend phải coi delta là nội dung tạm và chỉ xác nhận khi có done. Timeout đọc 30 giây, response 256 KB, circuit breaker và rate limit Redis. KAG chưa chạy thì REST trả 503; SSE trả event error. Không có câu trả lời giả.
+`POST /v1/query` nhận `{user_id,message,context_id,schema_contract}`, context_id
+rỗng, identity namespace `VietRoadTraffic` cùng schema/contract SHA-256.
+Backend thêm release/snapshot/as_of headers. Success trả `answer` và 1..20
+citations `{doc_id,unit_id,sign_id,evidence_id,field,start,end,quote}`:
+sign_id null, field text, start 0, end là độ dài Unicode code points của
+whole-field quote. KagClient kiểm identity/media/structure/limits; ChatService
+kiểm document/unit xuất bản, hiệu lực và quote thuộc đúng nguồn.
+Thiếu/sai căn cứ bị từ chối cả câu trả lời.
 
-Pipeline dựng graph/vector và benchmark chờ core Python; các trang tương ứng hiển thị chưa triển khai và không tự ingest vào OpenSPG. Core KAG sẽ phát triển riêng dựa trên sườn `kag-legal-assistant`, dùng schema `VietRoadTraffic` và [contract runtime](../../docs/schema.md#contract-runtime-và-yêu-cầu-builder). Builder phải kiểm tra required/enum/Integer, ghi node trước cạnh và gộp evidence/provenance xác định trước cập nhật `LAST_WRITE_WINS`. Quan hệ nghiệp vụ `REPLACES/AMENDS` dùng UUID để lọc hiệu lực WebApp; không tự chuyển thành cạnh graph `repeals/amends` hoặc đổi chiều quan hệ của contract. Tra cứu mức phạt có cấu trúc chạy độc lập với KAG và chỉ dùng dữ liệu đã kiểm duyệt gắn văn bản còn hiệu lực. Trang hạ tầng kiểm tra DB/Redis/MinIO, không điều khiển Docker.
+`POST /v1/query/stream` dùng cùng request; API hiện trả `done` sau verification,
+Java còn nhận legacy `delta/done`. Thiếu done hoặc upstream error bị từ chối;
+Java phát downstream `error`. Frontend hiện dùng REST.
+Connect timeout 2s; query read 30s mặc định, cấu hình
+`KAG_QUERY_TIMEOUT_SECONDS` từ 30–180s. Inspection mặc định 2s,
+`KAG_INSPECTION_TIMEOUT_SECONDS` từ 2–25s. Response/stream tối đa 256KiB,
+chat rate 20/60s mỗi owner, 8 streams mỗi monolith, circuit breaker hiện hữu.
+
+Native `AnswerResult` có abstention và unit/document/sign citations.
+Projection v1 chỉ biểu diễn LegalUnit.text đủ publication; abstention và
+citation không biểu diễn được trả non-2xx, Java lưu UNAVAILABLE.
+Không drop support hoặc tạo unit_id giả để ép success.
+Xem [hợp đồng HTTP](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
+
+Admin dùng `/api/admin/kag/status`; dưới tiền tố `/api/admin/kag` còn có
+`GET /pipeline`, `GET /benchmark/datasets`, `GET /sample` và `POST /retrieve`.
+Graph/Pipeline/Benchmark đọc dữ liệu SAMPLE/receipt/eligibility; không chạy
+builder/benchmark hoặc điều khiển Docker. Question Generation/Evaluation đã
+có, bộ câu hỏi chính thức chưa hoàn thành. Chat/citations và Admin SAMPLE có
+nghiệm thu 11–12/10/2026; không tự xác nhận runtime hiện tại.
+
+SAMPLE gồm 32 nodes / 22 edges / 42 vectors, không phải production.
+Production WRITE BLOCKED. Quan hệ nghiệp vụ REPLACES/AMENDS của WebApp không
+tự trở thành cạnh graph; mức phạt chỉ dùng nội dung đã kiểm duyệt.
+Clone repo chưa đủ: cần cache/runtime/vendor, graph/release/proof,
+provider/proxy và publication hợp lệ theo [Docker](../../docker/README.md).
 
 ## Nghiệp vụ bổ sung và chạy kiểm tra thật
 
