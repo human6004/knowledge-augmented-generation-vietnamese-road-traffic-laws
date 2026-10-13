@@ -26,6 +26,23 @@ docker compose up -d --build
 
 Giao diện: http://127.0.0.1:8081. API: http://127.0.0.1:8080/api. Đăng nhập ADMIN bằng `ADMIN_EMAIL`/`ADMIN_PASSWORD` trong `.env`; tài khoản người học tự đăng ký, chỉ nhận USER. Nếu đổi thông tin ADMIN sau lần tạo đầu tiên, backend không tự đặt lại tài khoản đã có.
 
+Nếu đăng nhập báo `502`, kiểm tra Docker Desktop đang chạy và backend đã khởi động:
+
+```powershell
+docker compose ps -a
+docker compose logs --tail=100 backend frontend
+```
+
+Frontend Nginx chuyển `/api` tới backend; `502` thường có nghĩa backend chưa sẵn sàng hoặc đã dừng. Đợi các dịch vụ khởi động xong rồi thử lại. Sai email/mật khẩu được backend trả về `401`, không phải `502`.
+
+Sau `docker compose down`, có thể chỉ bật backend cùng MySQL, Redis và MinIO (các dịch vụ backend cần):
+
+```powershell
+docker compose up -d backend
+```
+
+API sẽ ở http://127.0.0.1:8080/api; lệnh này không bật giao diện frontend. Muốn chạy lại cả WebApp, dùng `docker compose up -d`. Các lệnh `down` giữ dữ liệu trong volume; tránh `docker compose down -v` nếu cần giữ dữ liệu.
+
 Sau khi nhập, vào **Ngân hàng câu hỏi**, đối chiếu đáp án, câu điểm liệt và ảnh rồi duyệt xuất bản. Script nhập không xuất bản tự động và mặc định bỏ qua mã đã tồn tại. Sau khi ngân hàng đủ các chương đã được duyệt:
 
 ```powershell

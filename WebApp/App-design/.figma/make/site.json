@@ -1,0 +1,10 @@
+{
+  "description": "This application streamlines project management by offering customizable task tracking and collaboration tools, enhancing productivity for teams.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

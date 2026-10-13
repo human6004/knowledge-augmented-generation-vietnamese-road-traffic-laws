@@ -1,0 +1,3 @@
+openspg-kag
+fastapi
+uvicorn[standard]
