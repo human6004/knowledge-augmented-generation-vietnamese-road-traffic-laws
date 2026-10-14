@@ -11,3 +11,6 @@
 !kag/schema/
 !kag/schema/schema_contract.json
 !kag/schema/VietRoadTraffic.schema
+
+WebApp/backend/src/test/
+WebApp/backend/src/test/**

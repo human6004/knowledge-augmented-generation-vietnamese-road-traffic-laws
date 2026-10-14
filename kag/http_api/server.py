@@ -1,7 +1,8 @@
-"""Portable Step8 entry point. H1 alone owns auth, admission and serving authority."""
+"""KAG API entry point; auth, admission and source validation stay in the API."""
 from __future__ import annotations
 
 from ipaddress import ip_address
+import logging
 import os
 from pathlib import Path
 import re
@@ -63,7 +64,7 @@ def server_options():
 def create_app():
     """Uvicorn factory: local artifact reads only; never instantiate remote clients."""
     server_options()
-    from .app import ApiSettings, create_app as h1_app
+    from .app import ApiSettings, create_app as api_app
     from . import artifacts
     from .contract import ApiFailure
     from .runtime import RuntimeSettings
@@ -87,7 +88,7 @@ def create_app():
                     or reader_user.lower() in ('root','admin','neo4j')))):
             raise ConfigurationError()
         provider_keys = {name:_secret('KAG_HTTP_'+name.upper()+'_KEY_FILE') for name in ('embedding','chat')}
-        app = h1_app(settings,enable_sample_routes=True)
+        app = api_app(settings,enable_sample_routes=True)
         evaluation_root = os.environ.get('KAG_HTTP_EVALUATION_ROOT')
         if evaluation_root:
             if not Path(evaluation_root).is_absolute():
@@ -137,7 +138,13 @@ def create_app():
                 query_proof_sha256=query_pin,provider_gateway=gateway,provider_gateway_token=gateway_token,
                 attempt_ledger=ledger,development_policy=development)
         return app
-    except (ApiFailure,artifacts.ArtifactFailure,OSError,ValueError,TypeError):
+    except artifacts.ArtifactFailure:
+        # Invalid or absent data disables serving, not authenticated service startup.
+        app.state.serving_release = None
+        app.state.runtime_settings = None
+        logging.getLogger(__name__).warning('KAG serving data unavailable; query readiness disabled.')
+        return app
+    except (ApiFailure,OSError,ValueError,TypeError):
         raise ConfigurationError() from None
 
 

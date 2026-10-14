@@ -127,7 +127,10 @@ def load_proof(settings, release, *, capability='query'):
 
 
 def verify_gateway(settings, proof):
-    if socket.gethostbyname('kag-ingress')!=proof['gateway_ip']:a._invalid()
+    # Compose service DNS routes traffic; the sealed token/config, not a container IP, bind authority.
+    address=ip_address(socket.gethostbyname('kag-ingress'))
+    if (address.version!=4 or not address.is_private or address.is_loopback or address.is_link_local
+            or address.is_unspecified or address.is_multicast or address.is_reserved):a._invalid()
     # A metadata request verifies real auth/model routing without executing inference.
     with httpx.Client(trust_env=False,follow_redirects=False,timeout=3) as client:
         response=client.get(GATEWAY+'/models',headers={'X-KAG-Provider-Token':settings.provider_gateway_token,

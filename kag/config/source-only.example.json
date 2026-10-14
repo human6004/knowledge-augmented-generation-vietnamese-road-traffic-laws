@@ -2,7 +2,7 @@
   "scope": "SOURCE_ONLY_DRY_RUN",
   "write_mode": "NO_OP",
   "paths": {
-    "c3_manifest": "/external/builder-c3/graph-plan/manifest.json",
+    "c3_manifest": "/external/graph-plan/manifest.json",
     "run_root": "/evidence/runs"
   },
   "input_sha256": {

@@ -18,8 +18,10 @@ STAGES = ('preflight', 'plan', 'vectorize', 'export-artifact', 'write-nodes',
 SOURCE_STAGES = ('source-nodes', 'source-edges', 'source-verify', 'source-complete')
 ROOT = Path(__file__).resolve().parents[1]
 ZERO = '0' * 64
+GRAPH_LOCK_VOLUME = 'kag-builder-graph-locks'
 MESSAGES = {'CONFIG': 'Invalid runner configuration.', 'SCOPE': 'Scope verification refused.',
     'INTEGRITY': 'Run or artifact integrity verification refused.', 'LOCK': 'Database writer lock unavailable.',
+    'LOCK_MOUNT': 'Shared graph lock requires the canonical writable Docker named volume.',
     'PLAN': 'Source plan verification refused.', 'VECTORS': 'Required vectors are not verified.',
     'NODES': 'Node verification refused.', 'EDGES': 'Edge verification refused.',
     'INDEX': 'Vector index verification refused.', 'PROVENANCE': 'Vector provenance verification refused.',
@@ -71,8 +73,34 @@ def validate_run_directory(run_root, run_id, *, repo_root=ROOT, read_only_paths=
     return directory
 
 
+def _shared_lock_root(path):
+    """One local Docker volume for every managed writer, regardless of mount path."""
+    try:
+        root = Path(path).resolve()
+        if not Path(path).is_absolute() or not root.is_dir():
+            raise ValueError
+        # Compose owns provisioning; mountinfo proves this process uses the shared disk root.
+        volume = os.environ.get('KAG_GRAPH_LOCK_VOLUME', GRAPH_LOCK_VOLUME)
+        if not re.fullmatch(r'(?:[a-z0-9][a-z0-9_-]*_)?kag-builder-graph-locks', volume):
+            raise ValueError
+        suffix = '/' + volume + '/_data'
+        unescape = lambda value: re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), value)
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            fields = line.split()
+            boundary = fields.index('-')
+            if (unescape(fields[4]) == str(root) and unescape(fields[3]).endswith(suffix)
+                    and 'rw' in fields[5].split(',') and 'rw' in fields[boundary + 3].split(',')
+                    and fields[boundary + 1] in ('ext4', 'xfs', 'btrfs')):
+                return {'mountpoint': str(root), 'volume': volume}
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        pass
+    raise RunBlocked('LOCK_MOUNT')
+
+
 class GraphLock:
-    def __init__(self, lock_root, database_id, owner, *, backend_proof=None, backend_session=None):
+    def __init__(self, lock_root, database_id, owner, *, backend_proof=None, backend_session=None,
+                 shared=True):
+        self.shared = shared
         self._backend_proof, self._backend_session = backend_proof, backend_session
         if (backend_proof is not None or backend_session is not None
                 or owner.get('scope') in ('PRODUCTION', 'C4_3A_MANIFEST_SAMPLE')):
@@ -105,10 +133,13 @@ class GraphLock:
     def acquire(self):
         if self._backend_proof is not None:
             self._validate_backend(self.metadata['database_id'])
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.shared:
+            _shared_lock_root(self.path.parent)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
+        except OSError:
             raise RunBlocked('LOCK') from None
         with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
             stream.write(canonical_json(self.metadata) + '\n')
@@ -116,13 +147,19 @@ class GraphLock:
             os.fsync(stream.fileno())
         self.acquired = True
 
-    def release(self):
+    def assert_owned(self, database_id):
+        if self.shared:
+            _shared_lock_root(self.path.parent)
         try:
             actual = json.loads(self.path.read_bytes())
         except (OSError, ValueError):
             raise RunBlocked('LOCK') from None
-        if not self.acquired or actual != self.metadata:
+        if (not self.acquired or actual != self.metadata or database_id != self.metadata['database_id']
+                or self.metadata['pid'] != os.getpid() or self.metadata['hostname'] != socket.gethostname()):
             raise RunBlocked('LOCK')
+
+    def release(self):
+        self.assert_owned(self.metadata['database_id'])
         self.path.unlink()
         self.acquired = False
 

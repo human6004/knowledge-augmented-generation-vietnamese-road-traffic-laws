@@ -1,32 +1,43 @@
 # Frontend LuậtGT
 
-React/TypeScript/Vite/Tailwind. Giao diện người dùng và quản trị gọi API Spring Boot. Quy tắc thiết kế: [rule.md](../rule.md).
+React/TypeScript/Vite/Tailwind; gọi API Spring Boot. Cài sản phẩm: [INSTALL](../../docs/INSTALL.md). Hướng dẫn này dành cho phát triển; tuân thủ [rule.md](../rule.md).
 
 ## Phát triển và kiểm thử
 
-Dùng Node 24 và pnpm 10.11.0 như [Dockerfile](../../docker/frontend/Dockerfile). Từ `WebApp/frontend/`:
+**Bước 1 — Dependencies:** dùng Node 24, pnpm 10.11.0 như [Dockerfile](../../docker/frontend/Dockerfile). Từ root repository:
 
 ```powershell
+Set-Location WebApp/frontend
 pnpm install --frozen-lockfile
+```
+
+Kết quả: dependencies đúng lockfile.
+
+**Bước 2 — Dev server:**
+
+```powershell
 pnpm dev --port 5174
+```
+
+UI ở `http://localhost:5174`, proxy `/api` tới `127.0.0.1:8080`; cần backend đã chạy.
+
+**Bước 3 — Kiểm thay đổi:** chọn kiểm tra phù hợp, trong cùng thư mục:
+
+```powershell
 pnpm test
 node node_modules/typescript/bin/tsc --noEmit
 pnpm build
 ```
 
-Vite chuyển `/api` đến `http://127.0.0.1:8080`. Docker/Nginx phục vụ UI ở `http://127.0.0.1:8081`; hướng dẫn stack và nhập dữ liệu tại [WebApp](../README.MD).
+Kết quả kiểm hợp đồng frontend, kiểu và bundle; không xác nhận graph/provider live.
 
-## Mã nguồn
+## Mã nguồn và hợp đồng
 
-- [App.tsx](src/App.tsx): route và phân vai USER/ADMIN.
-- [pages/server/](src/pages/server/): chat, tra cứu, ôn/thi và quản trị đang sử dụng.
-- [api.ts](src/api.ts), [auth.tsx](src/auth.tsx): API, JWT và phiên đăng nhập.
-- [admin/](src/admin/): UI quản trị và đọc dữ liệu nhập.
-- [imports/](src/imports/README.md): ảnh thiết kế tham chiếu.
-- `tests/`: kiểm tra auth, import, API, chat và KAG inspection.
+- [App.tsx](src/App.tsx): routes/phân vai; [pages/](src/pages/): trang đang dùng; [pages/server/](src/pages/server/): nội dung, KAG và state/API dùng chung.
+- [api.ts](src/api.ts), [auth.tsx](src/auth.tsx): API/JWT; JWT ở sessionStorage, vai trò từ `/auth/me`, server kiểm quyền. Logout/401 xóa phiên và bài thi đang chọn.
+- [admin/](src/admin/): UI/state Demo; [pages/design/](src/pages/design/) và [imports/](src/imports/README.md): thiết kế tham chiếu.
+- [tests/](tests/): auth/import/API/chat/inspection. API lỗi phải hiện lỗi, không thay bằng dữ liệu mẫu.
 
-JWT lưu trong sessionStorage; vai trò lấy từ `/auth/me`, server kiểm phân quyền. Logout/401 xóa phiên và bài thi đang chọn. Backend lỗi thì UI hiển thị lỗi; không thay bằng dữ liệu demo.
+Nhập dùng preview/confirm backend, giữ nháp; JSON đáp án từ 0, CSV/XLSX 1–4. Chat UI dùng REST, backend còn hỗ trợ SSE. Browser không điều khiển Docker/Python.
 
-Nhập dữ liệu đi qua preview/confirm server, giữ bản nháp trước kiểm duyệt. Đáp án JSON bắt đầu từ 0; CSV/XLSX dùng 1–4. ZIP ảnh nhận PNG/JPEG theo mã.
-
-Chat dùng REST; backend có SSE. Admin Graph/Pipeline/Benchmark đọc API SAMPLE và cho kiểm tra Retrieval giới hạn; không điều khiển Docker/build/benchmark. SAMPLE chưa phải production, bộ câu hỏi benchmark chính thức chưa hoàn thành. Xem [hợp đồng HTTP](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).
+Phạm vi thật/Demo và các giới hạn chức năng chỉ duy trì tại [USER-GUIDE](../../docs/USER-GUIDE.md). Hợp đồng KAG: [kiến trúc](../../docs/architecture.md#hợp-đồng-http-và-chính-sách-tương-thích).

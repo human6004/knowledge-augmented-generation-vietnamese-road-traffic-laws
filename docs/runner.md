@@ -1,177 +1,67 @@
-# Vận hành Builder, resume và verification
+# Builder và runner
 
-CLI `python -B -m kag` gọi `kag.runner.run` hoặc `kag.runner.verify_run`.
-Legal answering và dataset CLI có entrypoints riêng trong
-[kiến trúc](architecture.md#entrypoints-và-lệnh-ổn-định). `--help` không nạp SDK;
-lệnh dùng SDK bootstrap theo [runtime](runtime.md).
+Runner dựng/kiểm graph theo batch, giữ tiến độ để dừng và tiếp tục an toàn. Không chạy lúc startup. [Runtime](runtime.md) quy định Python/SDK; [schema](schema.md) và [backend identity](backend-identity.md) quy định dữ liệu/target.
 
-```sh
-python -B -m kag run --config /evidence/runtime.json --run-id sample-validation
-python -B -m kag resume --config /evidence/runtime.json --run-id sample-validation
-python -B -m kag verify --config /evidence/runtime.json --run-id sample-validation
-```
+## Điều khiển từ Pipeline ADMIN
 
-`/evidence/runtime.json` là placeholder config ngoài Git; operator chuẩn bị inputs
-và mounts trước chạy. `verify` đọc graph, ghi verification/receipt vào run directory
-ngoài repo. Exit 0 = PASS, 1 = ERROR runtime/transport/provider, 2 = BLOCKED
-scope/lock/config/integrity. Xem `stage/error_code` trong status; lỗi chỉ lưu thông
-báo cố định, không exception body, source text hoặc credential.
+Spring Boot kiểm ADMIN, gửi control token riêng tới `openspg-server:8010`; BuilderControl chạy Runner trong một thread, không dùng Docker Socket.
 
-## Source-only validation
+Phần **Dựng đồ thị & vector · Builder thật** có status/tiến độ/mã lỗi. Build/Stop/Resume chỉ mở khi backend cho phép. Stop đợi batch/readback/checkpoint; Resume cùng run ID sau stop sạch. Delete vô hiệu hóa; chưa có stream log/lịch sử job đầy đủ. Catalog Demo không chạy Runner.
 
-[kag/config/source-only.example.json](../kag/config/source-only.example.json)
-dùng `scope=SOURCE_ONLY_DRY_RUN`, `write_mode=NO_OP`. Điền SHA-256 byte thật của
-`c3_manifest` và `run_root` ngoài repo; example SHA toàn zero sẽ bị chặn.
-Chỉ nhận scope/write_mode/paths/input_sha256/batch_size/heartbeat_seconds;
-endpoint, project, vector/provider/checkpoint hoặc WRITE fields bị từ chối.
-
-Luồng: preflight → plan → source-nodes → source-edges → source-verify →
-source-complete. Không tạo graph clients/provider/writer hoặc đọc graph.
-Receipt có `kind=SOURCE_ONLY_DRY_RUN`, `graph_verified=false`, dispatch counters
-zero; không có graph verify/release. `verify` chỉ nhận source run đã hoàn tất.
-Lock theo run directory; không lấy database lock.
-
-C3 JSONL validation dùng SQLite index trên disk, cache 2 MiB. Index seal
-read-only, byte hash bind proof revalidation. Run giữ `source-validation.sqlite3`;
-caller không có run directory dùng temporary index ngoài repo, đặt TMPDIR ở
-workspace ngoài Git. Semantic plan hash giữ canonical JSON năm fields;
-không đổi golden/schema/input hoặc production proof. Production preflight dùng
-lazy disk mappings, không copy toàn corpus thành dict.
-
-Source resume đối chiếu ledger/durable outbox qua TEMP SQLite index, kể cả intents
-chưa flush. Mỗi key chỉ một INTENT → CONFIRMED; foreign graph stages, batch
-deleted/extra/changed/reconfirmed đều bị chặn. O(batch) source payload không
-chứng minh peak RSS hoặc bộ nhớ full production vectors.
+**Mặc định Builder BLOCKED; production WRITE bị chặn.** Worker chỉ xét `FRESH_SAMPLE/WRITE/replay-existing` với grant và backend biệt lập. Serving Compose không đáp ứng admission thử ghi; không thêm grant hoặc đổi identity để né bảo vệ.
 
 ## Config
 
-Copy [runner.example.json](../kag/config/runner.example.json) ra ngoài repo.
-Template mặc định DENY; điền scope, policy, inputs và SHA-256 thật. Unknown fields
-bị từ chối.
+Copy [runner.example.json](../kag/config/runner.example.json) ra ngoài repo; template mặc định DENY, cần inputs/hashes/target thật. [runner.py](../kag/runner.py) là nguồn chuẩn validator, từ chối unknown fields.
 
-- `scope`: `C4_3A_MANIFEST_SAMPLE`, `FRESH_SAMPLE` hoặc `PRODUCTION`; thiếu = DENY.
-  C4.3a giữ ID 2, `VietRoadTrafficC43A10Pct`, namespace `VietRoadTraffic`,
-  chỉ `NO_OP/replay-existing`. Runner chặn `PRODUCTION WRITE`.
-  C4.3a chọn partition 5 theo `int(sha256(doc_id.encode('utf-8')).hexdigest(),16) % 10`;
-  chỉ giữ edges có cả hai endpoints thuộc sample, đối chiếu exact manifest.
-- `FRESH_SAMPLE`: chỉ target `FreshSample_*`, manifest C3 subset có 1–128 nodes
-  và 1–256 edges, endpoints thuộc subset, batch ≤ 32, `replay-existing`.
-  WRITE cần backend cô lập và manifest target khớp physical DB/runtime/volume
-  theo [writer scope](production-writer-scope.md); không dùng scope này cho full graph.
-- `runtime_location`: `host` hoặc `container`; endpoints explicit, không fallback.
-  `endpoints` có đúng `openspg`, `neo4j_http`, `neo4j_uri`, không
-  userinfo/query/fragment. OpenSPG sample bắt buộc loopback.
-- `database`, `project_id`, `project_name`, `namespace`: khớp discovery.
-  `vector_dimensions` là native integer 3072; `batch_size` là positive native int;
-  `heartbeat_seconds` là positive finite number.
-- `write_mode`: `NO_OP` hoặc `WRITE`; thiếu = DENY.
-  `vector_policy`: `replay-existing` hoặc `provider`, với giới hạn sample ở trên.
-  `model_identity` là `endpoint|model`, không credential.
-  `embedding_model=null` khi replay; provider nhận đúng
-  `{type: openai, base_url, model, timeout}`, khớp model_identity.
-- `fallback_config`: cấu hình bounded của ResilientVectorizer; aggregate replay
-  phải khớp enabled/version/size/overlap/depth trong provenance.
-- `confirmation`: null cho C4.3a; production dùng exact confirmation scope.
-  Preflight bind C3/schema/input bytes và
-  [backend session/proof](backend-identity.md) với writer/GraphLock.
-  Host/port/config khớp không thay live proof; proof không mở production WRITE.
-- `paths`: absolute `c3_manifest`, `sample_manifest`, `vector_artifact`,
-  `provenance`, `chunk_manifest`, `source_checkpoint`, `run_root`, `lock_root`.
-  Provider có thể dùng null cho replay inputs; production sample_manifest có thể
-  null. C3 JSONL và `plan.sha256` nằm cạnh c3_manifest; roots không overlap repo/inputs.
-- `input_sha256`: đúng một byte hash cho từng non-null input, không gồm hai roots.
-  C3/schema/input validator kiểm thêm các canonical checksums.
-- `credential_env`: tên biến `neo4j_username`, `neo4j_password`, `embedding_key`,
-  không phải giá trị secret. Replay không cần embedding key; credential chỉ ở RAM.
+- `scope`: `C4_3A_MANIFEST_SAMPLE` chỉ NO_OP/replay trên manifest đã pin; `FRESH_SAMPLE` chỉ subset 1–128 nodes, 1–256 edges, batch ≤32, replay; `PRODUCTION` không được WRITE. Không dùng SAMPLE cho full graph.
+- `runtime_location`, `endpoints`, `database`, project/name/namespace: explicit và khớp discovery; không fallback endpoint hoặc dùng ID/container cũ. Container dùng OpenSPG loopback và DNS Neo4j theo deployment. Điều kiện thử biệt lập: [backend identity](backend-identity.md#xác-minh-đường-đi-và-database).
+- `write_mode`: NO_OP/WRITE; `vector_policy`: replay/provider trong giới hạn scope. `model_identity=endpoint|model`, dimension 3072; replay không fallback provider. Provider config/fallback phải khớp provenance.
+- `paths`: inputs và run/lock roots tuyệt đối; roots ngoài repo, không chồng inputs. `input_sha256` bind đúng bytes từng non-null input, không gồm roots. C3 JSONL/`plan.sha256` nằm cạnh manifest.
+- `credential_env`: tên biến secrets, không phải giá trị; credentials chỉ trong RAM. Confirmation/proof không tự mở quyền production.
 
-Host profile có endpoints mẫu `http://127.0.0.1:28887`,
-`http://127.0.0.1:27474`, `bolt://127.0.0.1:27687`. Common lock guard hiện yêu cầu
-Linux container và mount xác minh bên dưới; host Python trực tiếp không thay guard.
+Trong Compose: config `/builder-input/runner.json`, run root `/builder-runs`, lock `/run/kag-locks`; giữ mounts theo [Docker](../docker/README.md#storage-và-secrets).
 
-Container profile dùng OpenSPG loopback `http://127.0.0.1:8887` khi chia sẻ đúng
-network namespace OpenSPG; Neo4j `http://openspg-neo4j:7474`,
-`bolt://openspg-neo4j:7687`. Kiểm alias/network/database của deployment thật,
-không dùng container ID hoặc receipt cũ làm cấu hình hiện tại.
-Private stack cần transport private tin cậy được library caller truyền vào;
-CLI JSON riêng không chọn transport private hoặc cấp backend proof.
+## Chạy CLI
 
-Chuẩn bị credentials trong environment riêng; không paste vào command/log.
-Không recreate stack hoặc đổi volumes để chạy runner.
+**Bước 1:** chuẩn bị config/inputs/credentials và mounts ngoài Git, dùng runtime chuẩn. `/external/runner.json` bên dưới là đường ví dụ, thay bằng config đã chuẩn bị.
 
-## Stage và bộ nhớ
+**Bước 2:** chọn đúng thao tác:
 
-Thứ tự cố định: preflight → plan → vectorize → export-artifact → write-nodes →
-verify-nodes → write-edges → verify → release.
+```sh
+python -B -m kag run --config /external/runner.json --run-id sample-run
+python -B -m kag resume --config /external/runner.json --run-id sample-run
+python -B -m kag verify --config /external/runner.json --run-id sample-run
+```
 
-Counters theo stage: preflight một identity; plan nodes + edges; vectorize nodes;
-export-artifact vector batches; write-nodes/verify-nodes nodes; write-edges edges;
-verify/release một gate. Không cộng các đơn vị khác nhau.
+Kết quả: status/artifacts trong run directory. `verify` không sửa graph/index nhưng ghi verification/receipt. Exit 0: hoàn tất; 1: lỗi runtime/transport/provider; 2: bị chặn scope/lock/config/integrity. Đọc `stage/error_code`; không log credentials/source/exception body.
 
-Vector JSONL vào disk index; ResilientVectorizer xử lý một source batch.
-Checkpoint/batch/export thuộc run ngoài repo. O(batch) vectors không cam kết
-chỉ một batch object tồn tại ở boundary. Replay kiểm source/model/dimension,
-provenance/chunk sidecar và checkpoint trước import; thiếu job/vector thì BLOCK,
-không fallback provider. Provider dùng BatchVectorizer/OpenAIVectorizeModel
-đã pin, tắt name generation.
+## Source-only validation
 
-Export fsync và publish atomic JSONL/hash receipt trước graph stages.
-NO_OP đọc lại exact từng batch, không tạo writer. WRITE được cho phép dùng scoped
-NativeIntegerKGWriter, full node barrier và live backend guard.
+[source-only.example.json](../kag/config/source-only.example.json) dùng `SOURCE_ONLY_DRY_RUN/NO_OP`; thay hash zero bằng byte hash thật và đặt run root ngoài repo. Chỉ nhận fields trong template, không endpoints/provider/WRITE.
 
-Verifier không sửa graph/index. Kiểm identities/payload, native Integer sau
-outer JSON decode, vectors hữu hạn 3072, duplicate/extra/missing, endpoints,
-provenance và bốn content VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện
-graph đổi trong kiểm tra. Neo4j HTTP boundary bỏ đúng một outer JSON layer;
-id/vectors giữ nguyên. Text giống số hoặc double encoding bị chặn; JSON Text
-storage không được gọi là native Neo4j Integer. Fingerprint chỉ canonical hóa
-signed zero (`-0.0/0.0`); component nonzero so exact, không tolerance/quantization.
+Luồng source: preflight → plan → source-nodes → source-edges → source-verify → source-complete. Không mở graph/provider/writer; `graph_verified=false`, counters zero. `verify` chỉ nhận source run đã hoàn tất; lock theo run directory.
+
+Validation/resume dùng disk SQLite index, không nạp toàn corpus vào dict. Đặt TMPDIR ngoài repo nếu caller không có run directory. Kiểm semantic hashes/input/golden; không sửa nguồn để qua gate. O(batch) payload không phải cam kết peak RAM của full production vectors.
+
+## Stage và readback
+
+Graph: preflight → plan → vectorize → export-artifact → write-nodes → verify-nodes → write-edges → verify → release. Không cộng counters các stage dùng đơn vị khác nhau.
+
+- Replay kiểm model/dimension/source, provenance/chunk sidecar/checkpoint; thiếu job/vector thì chặn. Provider dùng vectorizer upstream, tắt name generation.
+- Export fsync/publish atomic trước ghi. NO_OP không tạo writer; WRITE dùng scoped NativeIntegerKGWriter, node barrier và live backend guard.
+- Verify kiểm IDs/payload, native Integer sau outer decode, vectors hữu hạn, duplicate/extra/missing/endpoints/provenance và bốn VECTOR indexes ONLINE. Hai scans/fingerprint phát hiện graph đổi; chỉ canonical signed zero, không làm tròn vectors.
 
 ## Resume, trạng thái và lock
 
-`<run_root>/<run-id>` chứa ledger/expected SQLite, checkpoint, JSONL batches/export,
-`status.json`, `events.jsonl`, `batches.jsonl`, `receipt.json`.
-Status/receipt atomic, timestamps UTC. Heartbeat tiếp tục trong batch lâu;
-publish lỗi được báo tại boundary kế tiếp. Stage result, PASS status và outbox
-commit cùng transaction. Events/batches append-only có sequence/previous_hash/
-record_hash; resume đối chiếu SQLite outbox. Tail sai/torn bị chặn, không truncate.
+Run chứa ledger/expected SQLite, checkpoint, batches/export, `status.json`, `events.jsonl`, `batches.jsonl`, `receipt.json`. Status/receipt atomic, audit append-only có hash chain/outbox; tail hỏng/torn bị chặn, không truncate.
 
-Resume giữ config/input/target/model/batch boundaries. CONFIRMED không gọi lại
-vectorizer/writer nhưng output hash vẫn phải đúng. Completed stages kiểm durable
-artifacts; node barrier/full verify đọc lại. Graph write INTENT chưa confirmed
-chỉ đọc lại: exact existing state mới confirm; thiếu/khác/không chắc thì BLOCK,
-không blind resend sau timeout.
+Resume giữ config/input/target/model/batch boundaries, kiểm artifacts và đọc lại node barrier/graph. Batch CONFIRMED không gửi lại writer/vectorizer. Graph INTENT chưa confirmed chỉ đọc lại; thiếu/khác/không chắc thì BLOCKED, **không resend mù sau timeout**.
 
-`graph_writes/embedding_calls` đếm durable dispatch intents trước adapter,
-giữ qua crash/resume. Timeout không xác nhận remote completion; crash giữa persist
-intent và dispatch có thể đếm dư một. Counters không phải số ACK/remote mutations.
-NO_OP/replay zero còn được guard không gọi writer/provider chứng minh.
+`graph_writes/embedding_calls` đếm durable dispatch intents, không phải ACK hay số mutations. Crash có thể đếm dư một; timeout không xác nhận remote completion.
 
-Lock theo physical databaseID, không endpoint alias hoặc project counter.
-Guard single-machine hiện chỉ nhận `/run/kag-locks`, bind exact
-`D:/study/caoDATA-workspace/runs/.graph-locks` ngoài Git; kernel mountinfo phải
-xác nhận filesystem 9p, drive D và đúng root. Đây là ràng buộc mã nguồn hiện tại,
-không phải placeholder. Mọi runner cùng DB dùng mount này; layout khác BLOCK
-đến khi common storage được chứng minh. Không phải distributed fencing.
+GraphLock khóa theo **physical databaseID**, mọi writer cùng DB trên một host dùng chung volume local `KAG_GRAPH_LOCK_VOLUME`. Kernel kiểm mount disk writable đúng root volume; private directory/tmpfs/readonly bị chặn. Không phải distributed fencing, không chặn admin/writer ngoài cơ chế.
 
-Lock có owner token/PID/hostname/run/project/endpoint identity. Có lock thì BLOCK.
-Handled exit chỉ owner release; hard crash giữ stale lock. Không force-unlock
-hoặc heartbeat-expiry takeover; kiểm owner/process/run identity trước manual recovery.
+Chỉ owner release khi thoát sạch; crash giữ stale lock. Không force-unlock hoặc takeover theo heartbeat. Trước phục hồi thủ công, kiểm owner/process/run/target và tình trạng ghi; không sửa ledger/receipt/hash để ép tiếp tục.
 
-Library `stop_after_batch=(stage, ordinal)` dùng test/rehearsal, ordinal từ 1.
-Nó ghi ERROR/INTERRUPTED sau durable confirmation và release owned lock.
-CLI không có skip-stage/force-unlock. Graph `verify` cần run đã export, chia sẻ
-preflight/artifact checks, ghi `verification.json` và cập nhật receipt/audit anchors.
-
-Release C4.3a là `SAMPLE/NO_OP`; fresh sample giữ `FRESH_SAMPLE/<write_mode>`.
-Receipt chứa runtime/schema/C3/input/config hashes, counters, artifact/fingerprint
-và audit chain anchors. Runner receipt không cấp serving authority hoặc quyền
-production. Serving proof/rebind/provider budget theo [INSTALL](INSTALL.md) và
-[UPDATE](UPDATE.md). Bối cảnh chọn ledger/rehearsal nằm ở
-[thiết kế](superpowers/specs/2026-10-06-runner-verify-rehearsal-design.md).
-
-## Regression offline
-
-Lệnh suites, runtime canonical và mount cho tests nằm tại
-[hướng dẫn kiểm thử](../tests/README.md). Chạy mỗi discovery trong process riêng,
-network denied; network/provider dùng fixtures. Offline checks không tự chạy
-sample live hoặc cấp quyền graph/provider.
+Receipt ghi identity/counters/artifact/audit anchors, không cấp serving authority hoặc quyền production. Resume tạo session mới và xác minh target live. Bảo trì giữ run/state/lock theo [UPDATE](UPDATE.md); [tests](../tests/README.md) kiểm offline bằng fixtures.

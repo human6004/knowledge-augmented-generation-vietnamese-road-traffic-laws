@@ -164,11 +164,12 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(server.ConfigurationError):
                 server.create_app()
 
-    def test_unsealed_release_is_rejected_without_network(self):
+    def test_unsealed_release_disables_serving_without_stopping_service(self):
         with patch.dict(os.environ, {'KAG_HTTP_RELEASE_ID':'release-1',
                                     'KAG_HTTP_RELEASE_ROOT':str(self.root)}):
-            with self.assertRaises(server.ConfigurationError):
-                server.create_app()
+            app = server.create_app()
+        self.assertIsNone(app.state.serving_release)
+        self.assertIsNone(app.state.runtime_settings)
 
     def test_sealed_fixture_is_loaded_locally_but_proof_still_denies(self):
         from test_artifacts import EvidenceFixture
@@ -258,11 +259,12 @@ class PackagedASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.json()['status'],'alive')
 
     async def test_capability_readiness_remains_503_without_provider_probe(self):
-        for capability,token in [('retrieve','i'),('query-v1','q')]:
+        for capability,token in [('retrieve','i'),('retrieve-vector','i'),('query-v1','q')]:
             result = await self.client.get('/v1/health',params={'mode':'ready','capability':capability},
                 headers={'authorization':'Bearer '+token*64})
             self.assertEqual(result.status_code,503)
             self.assertEqual(result.json()['error']['code'],'NOT_READY')
+            self.assertEqual(result.json()['capability'],capability)
             self.assertEqual(result.json()['production_write'],'blocked')
             self.assertEqual(result.json()['provider_transport'],'not_probed')
 

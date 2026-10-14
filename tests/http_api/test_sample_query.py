@@ -175,7 +175,9 @@ class SampleQueryProofTests(unittest.TestCase):
 
     def test_production_missing_publication_wrong_model_or_direct_db_denied(self):
         for settings in (replace(self.settings,chat_model='other'),replace(self.settings,reader_username='neo4j'),
-                         replace(self.settings,attempt_ledger='/tmp/reset.json')):
+                         replace(self.settings,attempt_ledger='/tmp/reset.json'),
+                         replace(self.settings,provider_gateway='http://other-gateway:8898/v1'),
+                         replace(self.settings,provider_gateway_token='x'*43)):
             with self.assertRaises(Exception):self.load(settings=settings)
         for release in (replace(self.fx.release,release_kind='PRODUCTION'),replace(self.fx.release,publication=None)):
             with self.assertRaises(Exception):self.load(release=release)
@@ -200,15 +202,26 @@ class SampleQueryProofTests(unittest.TestCase):
             self.proof['development_policy']['baseline_attempts']['chat']=9;self.seal()
             with self.assertRaises(Exception):self.load()
 
-    def test_gateway_metadata_auth_model_failure_and_dns_drift(self):
+    def test_gateway_metadata_auth_model_failure_and_ip_change_without_rebind(self):
         proof,_,_=self.load()
+        retained_proof=(self.fx.root/'sample-query.json').read_bytes()
+        retained_pin=self.settings.query_proof_sha256
         def response(status=200,model=self.module.CHAT_MODEL):return httpx.Response(status,json={'data':[{'id':model}]})
         def exercise(reply,ip='172.20.0.4'):
-            client=httpx.Client(transport=httpx.MockTransport(lambda request:reply),trust_env=False)
+            def send(request):
+                self.assertEqual(str(request.url),'http://kag-ingress:8898/v1/models')
+                self.assertEqual(request.headers['X-KAG-Provider-Token'],'t'*43)
+                self.assertEqual(request.headers['Authorization'],'Bearer offline-chat')
+                return reply
+            client=httpx.Client(transport=httpx.MockTransport(send),trust_env=False)
             with patch.object(self.module.socket,'gethostbyname',return_value=ip),patch.object(self.module.httpx,'Client',return_value=client):
                 return self.module.verify_gateway(self.settings,proof)
         exercise(response())
-        for reply,ip in ((response(401),'172.20.0.4'),(response(model='other'),'172.20.0.4'),(response(),'172.20.0.9')):
+        exercise(response(),ip='172.20.0.9')
+        self.assertEqual((self.fx.root/'sample-query.json').read_bytes(),retained_proof)
+        self.assertEqual(self.settings.query_proof_sha256,retained_pin)
+        for reply,ip in ((response(401),'172.20.0.9'),(response(403),'172.20.0.9'),
+                         (response(model='other'),'172.20.0.9'),(response(),'8.8.8.8')):
             with self.assertRaises(Exception):exercise(reply,ip)
         self.assertEqual(self.budget().counts(),{'embedding':0,'chat':0})
 

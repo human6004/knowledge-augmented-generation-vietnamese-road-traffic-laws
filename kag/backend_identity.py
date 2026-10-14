@@ -5,6 +5,10 @@ import json
 import io
 import re
 import subprocess
+import os
+import socket
+import base64
+import hmac
 from urllib.parse import urlsplit
 
 
@@ -48,6 +52,21 @@ def client_route(client, endpoint):
     if api is not None and (api.configuration.host != endpoint or api.url_prefix != '/public/v1'):
         raise BackendIdentityError()
     return rest, api
+
+
+def bound_sdk_requests(client):
+    """Bound the pinned SDK transport without replacing GraphClient/KGWriter."""
+    api = vars(client._rest_client).get('api_client')
+    if api is None:
+        return
+    request = api.request
+    def bounded(*args, **kwargs):
+        if kwargs.get('_request_timeout') is None:
+            kwargs['_request_timeout'] = (10, 60)
+        return request(*args, **kwargs)
+    api.request = bounded
+    # Never retry an ambiguous graph POST behind the Runner intent/readback ledger.
+    api.rest_client.pool_manager.connection_pool_kw['retries'] = False
 
 
 def _store(record):
@@ -175,6 +194,61 @@ class BackendIdentitySession:
         self._project_route = None
 
 
+def _isolated_builder_password():
+    password = os.environ.get('KAG_ISOLATED_BUILDER_PASSWORD', '')
+    # A deployment credential plus a loopback-only kernel namespace, never a manifest grant.
+    if len(password) < 32 or {name for _, name in socket.if_nameindex()} != {'lo'}:
+        raise BackendIdentityError()
+    return password
+
+
+class NativeBackendTransport:
+    """Read the actual graph-store Bolt catalog in the OpenSPG service namespace."""
+    def __init__(self, openspg_endpoint):
+        self.openspg_endpoint = openspg_endpoint
+
+    def read(self, store, verifier):
+        try:
+            from neo4j import GraphDatabase, Query, READ_ACCESS
+            parsed = urlsplit(store['uri'])
+            host = '[' + parsed.hostname + ']' if ':' in parsed.hostname else parsed.hostname
+            endpoint = parsed.scheme + '://' + host + ':' + str(parsed.port)
+            if verifier.database.lower() != store['database'].lower():
+                raise BackendIdentityError()
+            # Credentials are never placed in the driver URI or identity receipt.
+            auth = (store.get('user') or parsed.username, store.get('password') or parsed.password)
+            if not all(isinstance(value, str) and value for value in auth):
+                raise BackendIdentityError()
+            marker = 'native-bolt-v1'
+            if 'KAG_ISOLATED_BUILDER_PASSWORD' in os.environ:
+                password = _isolated_builder_password()
+                routes = (self.openspg_endpoint, endpoint, verifier.endpoint)
+                expected_auth = 'Basic ' + base64.b64encode((auth[0] + ':' + password).encode()).decode()
+                if (not all(urlsplit(route).hostname in ('127.0.0.1', '::1') for route in routes)
+                        or not hmac.compare_digest(auth[1].encode(), password.encode())
+                        or not hmac.compare_digest(getattr(verifier, '_auth', ''), expected_auth)):
+                    raise BackendIdentityError()
+                marker = 'native-bolt-isolated-v1'
+            with GraphDatabase.driver(endpoint, auth=auth, connection_timeout=10,
+                    connection_acquisition_timeout=10, max_transaction_retry_time=0) as driver:
+                with driver.session(database='system', default_access_mode=READ_ACCESS) as session:
+                    rows = session.run(Query('SHOW DATABASES YIELD name,databaseID,serverID,currentStatus '
+                        'RETURN name,databaseID,serverID,currentStatus', timeout=60),
+                        database=store['database']).data()
+            matches = [row for row in rows if row.get('name') == store['database'].lower()]
+            if len(matches) != 1:
+                raise BackendIdentityError()
+            row = matches[0]
+            _metadata(row, store['database'])
+            if sum(other.get('databaseID') == row['databaseID'] for other in rows) != 1:
+                raise BackendIdentityError()
+            return row, (marker, self.openspg_endpoint, endpoint, verifier.endpoint)
+        except BackendIdentityError:
+            raise
+        except Exception:
+            raise BackendIdentityTransportError() from None
+
+
 class DockerBackendTransport:
     """Attest Docker routing, then read catalog inside the OpenSPG namespace.
 
@@ -260,7 +334,7 @@ class DockerPrivateBackendTransport:
     here performs GET inspection only; serving containers never mount this socket.
     """
     def __init__(self, project, server_id, database_id, runtime_id, storage_revision=''):
-        if (not re.fullmatch(r'kag-s8-[a-z0-9][a-z0-9-]*',project)
+        if (not re.fullmatch(r'kag(?:-[a-z0-9][a-z0-9-]*)?',project)
                 or not isinstance(storage_revision,str)
                 or storage_revision and not re.fullmatch(r'-fresh-[a-z0-9-]{1,40}',storage_revision)):
             raise BackendIdentityError()
@@ -268,10 +342,14 @@ class DockerPrivateBackendTransport:
         self.storage_revision=storage_revision
         self.server_id,self.database_id,self.runtime_id=server_id,database_id,runtime_id
 
-    def _inspect(self, container_id):
+    @staticmethod
+    def _inspect(container_id, *, kind='containers'):
         import http.client
         import socket
-        if not re.fullmatch(r'[0-9a-f]{64}',container_id): raise BackendIdentityError()
+        if (kind not in ('containers', 'volumes') or not isinstance(container_id, str)
+                or not re.fullmatch(r'(?:[0-9a-f]{12}|[0-9a-f]{64})' if kind == 'containers'
+                                    else r'[A-Za-z0-9][A-Za-z0-9_.-]{0,254}', container_id)):
+            raise BackendIdentityError()
         class Connection(http.client.HTTPConnection):
             def connect(inner):
                 inner.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
@@ -279,7 +357,7 @@ class DockerPrivateBackendTransport:
                 inner.sock.connect('/var/run/docker.sock')
         connection=Connection('localhost',timeout=10)
         try:
-            connection.request('GET','/containers/'+container_id+'/json')
+            connection.request('GET', '/'+kind+'/'+container_id+('/json' if kind == 'containers' else ''))
             response=connection.getresponse()
             if response.status != 200: raise BackendIdentityError()
             return json.loads(response.read())

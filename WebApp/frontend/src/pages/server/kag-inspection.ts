@@ -4,6 +4,32 @@ export type KagCheck = { state: 'ALIVE' | 'READY' | 'NOT_READY' | 'UNAVAILABLE' 
 export type KagStatus = Record<'liveness' | 'queryReadiness' | 'retrievalReadiness' | 'vectorRetrievalReadiness' | 'release', KagCheck>
 export type Retrieval = { contract_version: string; request_id: string; release_id: string; source_snapshot_id: string; schema_contract: Record<string, string>; items: { entity_type: string; entity_id: string; doc_id: string | null; unit_id: string | null; sign_id: string | null; source_texts: Record<string, string | null>; score: number | null; vector_sources: unknown[]; graph_context: unknown[] }[] }
 export type PipelineStatus = { contract_version: string; phase: 'idle' | 'running' | 'draining' | 'closed' | 'unavailable'; active_requests: number | null; draining: boolean | null; closed: boolean | null; progress: null; execution_allowed: false; operational_proof: 'DENY'; production_write: 'BLOCKED'; provider_egress: 'DENY' }
+export type BuilderState = 'IDLE' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'COMPLETE' | 'BLOCKED'
+export type BuilderStatus = { contract_version: 'builder-control-v1'; state: BuilderState; run_id: string | null; target: { project_id: number; database: string; namespace: 'VietRoadTraffic' } | null; progress: { stage: string; done: number; total: number } | null; error_code: string | null; actions: { build: boolean; stop: boolean; resume: boolean; delete: false }; delete_reason: 'DELETE_NOT_AUTHORIZED'; production_write: 'BLOCKED' }
+export function builderStateLabel(state: BuilderState) {
+  return { IDLE: 'Chưa build', RUNNING: 'Đang build', STOPPING: 'Đang dừng...', STOPPED: 'Đã dừng an toàn', COMPLETE: 'Hoàn tất', BLOCKED: 'Bị chặn' }[state]
+}
+function validateBuilder(value: BuilderStatus): BuilderStatus {
+  if (!value || Object.keys(value).sort().join() !== ['contract_version', 'state', 'run_id', 'target', 'progress', 'error_code', 'actions', 'delete_reason', 'production_write'].sort().join() ||
+    value.contract_version !== 'builder-control-v1' || !['IDLE', 'RUNNING', 'STOPPING', 'STOPPED', 'COMPLETE', 'BLOCKED'].includes(value.state) || value.production_write !== 'BLOCKED' || value.delete_reason !== 'DELETE_NOT_AUTHORIZED' ||
+    !value.actions || Object.keys(value.actions).sort().join() !== ['build', 'stop', 'resume', 'delete'].sort().join() ||
+    value.actions.build !== ['IDLE', 'COMPLETE'].includes(value.state) || value.actions.stop !== (value.state === 'RUNNING') || value.actions.resume !== (value.state === 'STOPPED') || value.actions.delete !== false ||
+    (value.run_id === null ? !['IDLE', 'BLOCKED'].includes(value.state) : typeof value.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.run_id))) throw new ApiError('Trạng thái Builder không hợp lệ', 502)
+  const target = value.target, progress = value.progress
+  if (target === null ? value.state !== 'BLOCKED' : !target || Object.keys(target).sort().join() !== ['project_id', 'database', 'namespace'].sort().join() || !Number.isInteger(target.project_id) || target.project_id < 1 || !/^(?:vietroadtraffic|freshsample[a-z0-9]{8,40})$/.test(target.database) || target.namespace !== 'VietRoadTraffic') throw new ApiError('Cấu hình đích Builder không hợp lệ', 502)
+  if (progress !== null && (!progress || Object.keys(progress).sort().join() !== ['stage', 'done', 'total'].sort().join() || !['preflight', 'plan', 'vectorize', 'export-artifact', 'write-nodes', 'verify-nodes', 'write-edges', 'verify', 'release'].includes(progress.stage) || !Number.isSafeInteger(progress.done) || !Number.isSafeInteger(progress.total) || progress.done < 0 || progress.total < progress.done)) throw new ApiError('Tiến độ Builder không hợp lệ', 502)
+  if (value.error_code !== null && (typeof value.error_code !== 'string' || !/^[A-Z_]{1,32}$/.test(value.error_code))) throw new ApiError('Lỗi Builder không hợp lệ', 502)
+  return value
+}
+export async function loadBuilderStatus(signal?: AbortSignal): Promise<BuilderStatus> {
+  return validateBuilder(await api<BuilderStatus>('/admin/kag/builder/status', { signal }))
+}
+export async function runBuilderAction(action: 'build' | 'stop' | 'resume', run_id: string): Promise<BuilderStatus> {
+  if (!['build', 'stop', 'resume'].includes(action) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(run_id)) throw new ApiError('Yêu cầu Builder không hợp lệ', 422)
+  const result = validateBuilder(await api<BuilderStatus>(`/admin/kag/builder/${action}`, send('POST', { run_id })))
+  if (result.run_id !== run_id) throw new ApiError('Run Builder không khớp', 502)
+  return result
+}
 export type BenchmarkDatasets = { contract_version: string; state: 'AVAILABLE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'LIMIT_EXCEEDED'; datasets: { id: string; dataset_status: 'FROZEN' | 'PROVISIONAL' | null; dataset_eligibility: 'ELIGIBLE' | 'BLOCKED'; reason: string | null; dataset_hash: string | null; record_count: number | null; official_benchmark: boolean }[]; execution_allowed: false; execution_blockers: string[]; metrics: null }
 const states = ['ALIVE', 'READY', 'NOT_READY', 'UNAVAILABLE', 'NOT_CONFIGURED', 'RELEASE_UNAVAILABLE']
 export function inspectionError(error: unknown) {

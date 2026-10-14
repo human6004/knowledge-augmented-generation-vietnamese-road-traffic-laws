@@ -1,122 +1,93 @@
 # Sử dụng LuậtGT
 
-Mở [LuậtGT](http://127.0.0.1:8081) trên máy chạy Docker.
-[Cài đặt](INSTALL.md) và [cập nhật](UPDATE.md) dành cho người vận hành.
-Chatbot hoạt động khi dịch vụ KAG sẵn sàng và dữ liệu nguồn đã được xuất bản.
+Mở [WebApp](http://127.0.0.1:8081) hoặc địa chỉ người vận hành cấp. Cài hệ thống theo [INSTALL](INSTALL.md); nâng phiên bản theo [UPDATE](UPDATE.md).
 
-## USER: đăng ký và đăng nhập
+## Đăng nhập
 
-1. Trang `/login`: chọn **Chưa có tài khoản? Đăng ký**.
-2. Nhập họ tên, email và mật khẩu từ 12 ký tự, tối đa 72 byte; chọn **Tạo tài khoản**.
-   Tài khoản mới thuộc USER, không có quyền Admin.
-3. Đã có tài khoản: chọn **Đã có tài khoản? Đăng nhập**, nhập email/mật khẩu và
-   chọn **Đăng nhập**. USER vào `/chat`.
+**Bước 1:** USER mới chọn **Chưa có tài khoản? Đăng ký**, điền họ tên, email và mật khẩu 12 ký tự trở lên, tối đa 72 byte.
 
-Thông báo lỗi hiển thị trên form. Phiên hết hạn thì đăng nhập lại.
-Menu tài khoản có chức năng đăng xuất. Không chia sẻ mật khẩu hoặc token.
+**Bước 2:** chọn **Tạo tài khoản** hoặc đăng nhập bằng tài khoản có sẵn. ADMIN do người vận hành cấp, không có đăng ký ADMIN công khai.
 
-## USER: hỏi và đọc nguồn
+Kết quả: USER vào chat, ADMIN vào tổng quan. Phiên hết hạn thì đăng nhập lại; đăng xuất qua menu tài khoản. Không chia sẻ mật khẩu/token.
 
-Trang **Tra cứu luật** (`/chat`):
+## USER — Hỏi luật
 
-1. Nhập câu hỏi tiếng Việt vào **Câu hỏi luật giao thông**, tối đa 4.000 ký tự.
-   Chọn **Gửi** hoặc Enter; Shift+Enter xuống dòng.
-2. Chờ backend xử lý. **Dừng chờ** chỉ dừng chờ ở trình duyệt; backend có thể
-   còn xử lý. Đọc lại lịch sử trước khi gửi lại câu hỏi.
-3. Khi **Đã trả lời**, đọc câu trả lời; mở toàn bộ nếu nội dung dài.
-4. Mở **Nguồn …** để đọc trích đoạn. Chọn **Đối chiếu chi tiết nguồn** để đọc
-   số hiệu văn bản, loại đơn vị và kiểm trích đoạn với nội dung backend.
-   **Toàn văn đơn vị nguồn** mở nội dung đầy đủ của unit.
-5. Nếu cần, chọn **Hữu ích**, **Phản hồi sai**, **Thiếu căn cứ** hoặc **Hết hiệu lực**
-   để gửi phản hồi cho Admin.
+**Bước 1:** mở **Trò chuyện với trợ lý**, nhập câu hỏi tối đa 4.000 ký tự rồi chọn **Gửi**/Enter; Shift+Enter xuống dòng. Mỗi lượt độc lập, lịch sử không tự thành ngữ cảnh lượt sau.
 
-Trích đoạn khớp nguồn không tự xác nhận hiệu lực pháp luật hiện hành.
-Câu trả lời có nhãn **Trích nội dung văn bản — không xác nhận hiệu lực hiện hành**
-chỉ cung cấp nội dung nguồn. Chat hiện hiển thị căn cứ từ đơn vị văn bản đã
-xuất bản; một số kết quả về thông tin văn bản hoặc biển báo chưa được hỗ trợ.
+**Bước 2:** đọc câu trả lời và bấm mã trích dẫn → **Đối chiếu chi tiết nguồn**. Kết quả hiển thị nguyên văn đơn vị nguồn đã xuất bản. Trích dẫn khớp nguồn chưa xác nhận hiệu lực hiện hành; đối chiếu văn bản chính thức trước khi áp dụng.
 
-## Trạng thái trả lời và lịch sử
+**Bước 3:** chọn mục lịch sử để đọc lại; phản hồi **Hữu ích**, `WRONG`, `NO_BASIS` hoặc `OUTDATED` để ADMIN xem. Backend lưu phản hồi. **Tạo lại** chỉ điền câu hỏi vào ô nhập, cần Gửi để hỏi lại; ghim chỉ giữ trong phiên giao diện.
 
-Lịch sử nằm cùng trang; **Tải lại lịch sử** đọc bản ghi đã lưu, không chạy lại
-câu hỏi. Mỗi bản ghi có trạng thái để phân biệt:
+**Dừng chờ** không chắc dừng backend: tải lại lịch sử trước khi gửi lại. **Cuộc trò chuyện mới** không xóa lịch sử.
 
-- **Đang xử lý**: chưa có câu trả lời.
-- **Đã trả lời**: đọc câu trả lời và trích dẫn bên dưới.
-- **Chưa đủ căn cứ**: hệ thống hiển thị
-  **Hiện tôi chưa tìm được đủ căn cứ pháp lý được xác minh để trả lời chính xác
-  câu hỏi này.** Không có câu trả lời hoặc trích dẫn.
-- **Dịch vụ chưa sẵn sàng**: hệ thống hiển thị **Dịch vụ tra cứu pháp luật hiện
-  đang gặp sự cố hoặc chưa sẵn sàng. Vui lòng thử lại sau.** Đợi dịch vụ phục hồi
-  hoặc báo người quản trị; không có câu trả lời hoặc trích dẫn.
+- Thiếu căn cứ: chatbot từ chối trả lời; không suy ra quy định không tồn tại.
+- Dịch vụ lỗi/chưa sẵn sàng: người vận hành cần kiểm graph/provider/kết nối; đây không phải kết luận thiếu luật.
+- Chat hiện chỉ tích hợp trích dẫn đơn vị văn bản; kết quả document/biển báo của KAG chưa biểu diễn đầy đủ qua API chat.
 
-Ứng dụng không tự gửi lại câu hỏi khi lỗi. Lịch sử giữ trạng thái đã lưu;
-không tự đổi bản ghi lỗi cũ thành thiếu căn cứ.
+## USER — Tra cứu và học biển báo
 
-Thiếu căn cứ không có nghĩa luật không tồn tại hoặc câu hỏi đã được xác định
-ngoài phạm vi. SAMPLE không bao phủ mọi vấn đề pháp luật giao thông.
+**Bước 1:** tại **Tra cứu mức phạt**, chọn phương tiện, nhập hành vi và lọc tình tiết; hoặc tại **Thư viện biển báo**, tìm theo mã/tên/nhóm.
 
-## USER: các trang khác
+**Bước 2:** chọn **Xem chi tiết** hoặc thẻ biển để đọc nội dung, nguồn và thông tin áp dụng. **Hỏi Chatbot KAG về biển này** chỉ mở câu hỏi điền sẵn; cần Gửi và chatbot sẵn sàng.
 
-- **Tra cứu mức phạt** (`/tra-cuu`): tìm quy tắc phạt và căn cứ đã xuất bản.
-- **Biển báo** (`/bien-bao`): đọc biển báo và nội dung đã xuất bản.
-- **Ôn thi** (`/on-thi`, `/tien-do`): trả lời câu hỏi, xem giải thích và tiến độ học.
-- **Thi thử** (`/exam`): tạo bài thi, lưu đáp án, nộp bài và mở lịch sử thi.
+Kết quả lấy từ nội dung đã xuất bản. Danh sách rỗng không khẳng định không có quy định. Liên kết mức phạt theo từng biển hiện chưa được nạp.
 
-Các trang này phụ thuộc dữ liệu được Admin duyệt và xuất bản. Danh sách rỗng
-hoặc chưa đủ câu hỏi nghĩa là dữ liệu hiện chưa đáp ứng tính năng tương ứng.
+## USER — Ôn và thi thử
 
-## ADMIN: quản lý dữ liệu WebApp
+**Bước 1:** mở **Ôn thi theo chương**, chọn **Tiếp tục học/Ôn tập lại**. Chọn một phương án để backend chấm ngay, đọc giải thích rồi **Câu tiếp theo**. Kết quả và tiến độ được lưu; chương rỗng cần ADMIN nhập/duyệt câu hỏi.
 
-Đăng nhập bằng tài khoản ADMIN do người vận hành cấp; không có đăng ký Admin
-công khai. ADMIN vào `/admin/dashboard`. Chọn trang ở menu bên trái hoặc
-**Điều hướng quản trị** trên màn hình nhỏ.
+**Bước 2:** tại `/exam`, chọn **B → Đề ngẫu nhiên → Bắt đầu thi**. Backend cần đủ câu đã xuất bản. Cấu hình luyện tập: **30 câu, 20 phút, đạt từ 27 câu đúng và không sai/bỏ trống câu điểm liệt**; không tự cập nhật quy định và không thay kỳ sát hạch chính thức.
 
-- **Văn bản pháp luật**, **Đơn vị pháp lý**, **Ngân hàng câu hỏi**, **Biển báo**:
-  tạo/sửa bản nháp, duyệt và xuất bản hoặc ngừng xuất bản. Kiểm nguồn trước khi
-  xác nhận đã đối chiếu. Văn bản có tệp PDF nguồn; câu hỏi/biển báo có ảnh nguồn.
-- **Nhập dữ liệu hàng loạt**: chọn loại dữ liệu, xem trước và xác nhận nhập.
-  Kiểm mã nguồn và lựa chọn cập nhật bản ghi đã có trước khi ghi.
-- **Mức phạt**: quản lý quy tắc phạt gắn với văn bản và unit làm căn cứ.
-- **Nhật ký chat & phản hồi**: xem lịch sử, phản hồi và xử lý phản hồi cần duyệt.
-- **Người dùng**: xem tài khoản, bật hoặc khóa tài khoản.
+**Bước 3:** chọn đáp án, điều hướng theo số câu, **Nộp bài** và xác nhận; hết giờ server kiểm thời hạn. Xem điểm và **Lịch sử thi**; mục **Bài thi server** là bài thật.
 
-Những thao tác này ghi dữ liệu WebApp. Xuất bản nội dung WebApp không tự cập nhật
-graph, release hoặc serving proof KAG. Nội dung dùng cho citations phải khớp bộ
-nguồn/publication của release đang phục vụ.
+## ADMIN — Nội dung
 
-## ADMIN: kiểm tra KAG
+**Bước 1 — Nhập bản nháp:** mở trang Văn bản, Đơn vị pháp lý, Câu hỏi hoặc Biển báo; chọn thêm/sửa, điền mã nguồn và các trường bắt buộc, rồi lưu. Văn bản nhận PDF; ảnh nhận PNG/JPEG. Giữ mã nguồn và đúng cây đơn vị/văn bản.
 
-- **Tổng quan** (`/admin/dashboard`): số liệu nghiệp vụ và **Vận hành KAG SAMPLE**,
-  gồm liveness, Query/Retrieval/Vector readiness, graph và ledger provider.
-  **Kiểm tra KAG** không chạy inference.
-- **Đồ thị tri thức** (`/admin/graph`): đọc graph SAMPLE, fingerprint, database/
-  server identity. Tìm node theo mã/tên, đọc thuộc tính, evidence hash và quan hệ;
-  chọn **Mở …** để chuyển node liên quan. Trang chỉ đọc.
-- **Pipeline KAG** (`/admin/pipeline`): đọc slot runtime, request đang xử lý,
-  draining và receipt SAMPLE. Chưa có telemetry tiến độ Builder hoặc nút chạy
-  pipeline.
-- **Hạ tầng** (`/admin/docker`): kiểm MySQL/Redis/MinIO và KAG capabilities.
-  Liveness ALIVE khác readiness READY; release artifact không chứng minh serving.
-- **Kiểm thử Retrieval**, ngay trong Hạ tầng: nhập **Nội dung truy xuất**, chọn
-  1–10 kết quả, tùy chọn **Mở rộng graph context**, rồi **Chạy thử truy xuất**.
-  Kết quả gồm source texts, score, vector provenance và relation context.
-  Thao tác có thể tiêu thụ embedding provider/budget; chỉ chạy trong phạm vi được
-  cấp. Retriever không đưa ra kết luận pháp luật.
-- **Benchmark** (`/admin/benchmark`): đọc catalog dataset, validation/gold coverage
-  và execution artifacts hợp lệ đã có. Metrics chưa đo giữ trống/null.
-  Trang không khởi chạy benchmark chính thức.
-- **Cấu hình KAG** (`/admin/config`): xem schema identity, thuộc tính/quan hệ và
-  tải contract. Trang không đổi model/proof hoặc cấp quyền serving/production WRITE.
+**Bước 2 — Kiểm duyệt:** đối chiếu nguồn, nội dung và ngày áp dụng; câu hỏi cần kiểm đáp án, điểm liệt và ảnh. Lưu xác nhận kiểm duyệt.
 
-Pipeline, Graph và Benchmark là màn hình inspection. Phạm vi SAMPLE không chứng
-minh graph toàn corpus, chất lượng benchmark chính thức hoặc production readiness.
-Production WRITE giữ `BLOCKED`.
+**Bước 3 — Xuất bản:** chọn **Duyệt/Xuất bản** hoặc **Duyệt và xuất bản các câu đã chọn**; chỉ chọn bản ghi thật đã kiểm. Ngừng xuất bản bằng nút tương ứng. Kết quả: USER thấy nội dung đủ điều kiện. Xuất bản WebApp **không tự cập nhật graph KAG**; nguồn chatbot phải khớp bộ nguồn phục vụ.
 
-## Khi chưa có câu trả lời
+**Mức phạt:** mở trang Mức phạt → thêm/sửa → gắn văn bản/đơn vị căn cứ → nhập tiền phạt và hình thức bổ sung → xác nhận kiểm duyệt/xuất bản → **Lưu mức phạt**. Không coi mức phạt trích tự động là đã được kiểm chứng.
 
-Đọc thông báo UI và history trước gửi lại. Nếu phiên hết hạn, đăng nhập lại.
-Nếu KAG đang bận, đợi request hiện tại kết thúc.
+### Nhập nhiều bản ghi
 
-Admin mở Hạ tầng/Tổng quan để kiểm kết nối và khả năng phục vụ chatbot.
-Lỗi dịch vụ hoặc cấu hình cần báo người vận hành xử lý theo
-[hướng dẫn Docker](../docker/README.md).
+**Bước 1:** mở **Nhập dữ liệu hàng loạt**, chọn loại dữ liệu và JSON/CSV/XLSX. Xem preview/lỗi và lựa chọn cập nhật bản ghi đã có.
+
+**Bước 2:** chọn **Xác nhận nhập … dòng hợp lệ**. Kết quả là số thêm/cập nhật/bỏ qua, nội dung còn ở bản nháp; tiếp tục kiểm duyệt trước khi xuất bản.
+
+**Bước 3:** với câu hỏi/biển báo, tải ZIP ảnh PNG/JPEG theo mã sau khi nhập bản ghi. Kiểm các ảnh chưa ghép được. Đáp án JSON bắt đầu từ 0; CSV/XLSX dùng 1–4. Ngân hàng nháp đi kèm: [`WebApp/docs/imports/`](../WebApp/docs/imports/).
+
+Nhập đơn vị pháp lý dùng `/admin/content-imports?type=units`, preview rồi **Xác nhận nhập bản nháp**. Nút Nhập hàng loạt trên trang Đơn vị hiện chưa dẫn đúng loại; mở route này trực tiếp.
+
+## ADMIN — Tài khoản và phản hồi
+
+**Bước 1:** tại **Nhật ký chat**, đọc câu hỏi/kết quả/phản hồi, ghi chú và đánh dấu đã xử lý. Thao tác không tự hỏi lại hoặc sửa graph.
+
+**Bước 2:** tại **Người dùng**, tìm USER và bật/khóa trạng thái. Backend lưu thay đổi theo quyền quản trị.
+
+## ADMIN — KAG và hạ tầng
+
+**Bước 1 — Kết nối:** từ **Đóng gói Docker**, đọc **Trạng thái dịch vụ · API thật**, mở **Kết nối KAG & truy xuất evidence** rồi **Kiểm tra lại**. Kết quả là kết nối storage và readiness query/retrieval/vector; `ALIVE` khác `READY`.
+
+**Bước 2 — Graph/schema:** ở Graph chọn **VietRoadTraffic · SAMPLE thật** để tìm node/quan hệ. Ở Cấu hình, mở **Xem bảng schema và tải contract**. Các khối thật chỉ đọc, không sửa graph/runtime.
+
+**Bước 3 — Builder:** tại Pipeline đọc **Dựng đồ thị & vector · Builder thật**. Build/Stop/Resume chỉ khả dụng khi Worker cho phép; Stop đợi batch/checkpoint, Resume tiếp tục run cũ sau dừng sạch. Mặc định Builder bị chặn, ghi production chưa mở, Delete vô hiệu hóa. Crash/khóa tồn đọng/ghi chưa rõ kết quả cần người vận hành xử lý theo [runner](runner.md#resume-trạng-thái-và-lock); không xóa khóa. Chưa có stream log/lịch sử job thật đầy đủ.
+
+**Bước 4 — Truy xuất:** ở Hạ tầng, nhập **Nội dung truy xuất**, chọn 1–10 kết quả và tùy chọn mở rộng graph rồi **Chạy thử truy xuất**. Văn bản cũng có **Thử truy vấn · Retrieval thật**. Kết quả chỉ là nguồn/điểm/quan hệ, chưa phải kết luận luật; có thể tốn phí embedding, chỉ chạy trong phạm vi được cấp.
+
+**Bước 5 — Đánh giá:** ở Benchmark đọc **Artifact KAG · API thật** và metrics đã đo; chưa đo hiển thị **Chưa đo**. Benchmark chính thức chưa hoàn thành.
+
+## Phần Demo
+
+Các khối/nút ghi **Demo** dùng dữ liệu hoặc thao tác mô phỏng, không xác nhận backend thành công; nội dung luật mẫu chưa được xác minh:
+
+- Chat: đính kèm ảnh, sinh câu luyện tập; học: `+10 câu`, gợi ý thông minh.
+- Thi: hạng khác B, đề cố định và ôn câu sai; kết quả mẫu giữ ở trình duyệt.
+- Nội dung: dán URL, trích xuất/reindex/archive/delete; sinh hoặc xóa câu hỏi.
+- Người dùng: mời, đổi vai trò, đặt lại mật khẩu, xóa.
+- Graph: namespace khác SAMPLE thật, Cypher, export/restore/checksum.
+- Cấu hình/Docker: form model, YAML, Build/Pack/ZIP; không cấu hình provider hay triển khai hệ thống.
+- Pipeline: catalog CLI, chạy toàn bộ, log/lịch sử mẫu; Benchmark: Run/Smoke và cột HybridRAG/NativeRAG.
+
+Cài mới cần dữ liệu được duyệt và [graph/provider đã chuẩn bị](../docker/README.md#cấu-hình-chatbot); container healthy không đủ để dùng chatbot.

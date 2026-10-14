@@ -1,4 +1,4 @@
-param([string]$BaseUrl = 'http://127.0.0.1:8080/api', [switch]$WithExam)
+param([string]$BaseUrl = 'http://127.0.0.1:8080/api', [switch]$WithExam, [string]$EnvFile)
 . "$PSScriptRoot/api-common.ps1"
 try {
     Wait-TaskBackend

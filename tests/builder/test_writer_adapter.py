@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+import uuid
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 from dataclasses import replace
@@ -101,10 +102,10 @@ def _load_upstream_adapter():
         from kag.builder.model.sub_graph import Edge, Node, SubGraph
         from kag.builder.component.writer.kg_writer import KGWriter
         adapter = importlib.import_module('kag.builder.writer_adapter')
-        return adapter, KGWriter, Node, Edge, SubGraph
+        return adapter, KGWriter, Node, Edge, SubGraph, sys.modules['kag.backend_identity']
 
 
-ADAPTER, PINNED_KG_WRITER, NODE, EDGE, SUBGRAPH = _load_upstream_adapter()
+ADAPTER, PINNED_KG_WRITER, NODE, EDGE, SUBGRAPH, BACKEND = _load_upstream_adapter()
 
 
 class RecordingGraphClient:
@@ -199,9 +200,9 @@ class FakeProjectClient:
         return self.record if str(conditions.get('id')) == str(self.record.get('id')) else None
 
 
-def _backend_session(client, project_id, name):
+def _backend_session(client, project_id, name, database_id='physical-fixture-db'):
     from types import SimpleNamespace
-    metadata = {'name':'vietroadtraffic','databaseID':'physical-fixture-db',
+    metadata = {'name':'vietroadtraffic','databaseID':database_id,
                 'serverID':'fixture-server','currentStatus':'online'}
     records = client.project_get()
     for record in records:
@@ -215,10 +216,21 @@ def _backend_session(client, project_id, name):
 
 def _config(contract=CONTRACT, project_id=17, project_name='C4_1_SMOKE_OFFLINE_TEST'):
     record = {'id': project_id, 'name': project_name, 'namespace': contract['namespace']}
-    project = ADAPTER.discover_smoke_project(FakeProjectClient(record), project_id,
+    client = FakeProjectClient(record)
+    project = ADAPTER.discover_smoke_project(client, project_id,
                                              project_name, 'http://127.0.0.1:28887', contract)
+    session = _backend_session(client, project_id, project_name, 'offline-' + uuid.uuid4().hex)
     return ADAPTER.WriterConfig('http://127.0.0.1:28887', project,
-                                contract['namespace'], contract, scope='C4_1_SMOKE')
+        contract['namespace'], contract, scope='C4_1_SMOKE',
+        backend_session=session, backend_proof=session.prove())
+
+
+def _lock_config(config):
+    lock = ADAPTER.GraphLock('/run/kag-locks', config.backend_proof.physical_database_id,
+        {'run_id': 'offline-writer'}, backend_session=config.backend_session,
+        backend_proof=config.backend_proof)
+    lock.acquire()
+    return replace(config, graph_lock=lock), lock
 
 
 def _writer(contract=CONTRACT, client=None, project_id=17):
@@ -251,6 +263,62 @@ def _server_row(spec, contract=CONTRACT, *, type_name=None, id_value=None, chang
 
 
 class WriterAdapterTest(unittest.TestCase):
+    def setUp(self):
+        backend = patch.dict(sys.modules, {'kag.backend_identity': BACKEND})
+        backend.start()
+        self.addCleanup(backend.stop)
+        original = _config
+        configs = {}
+        def owned_config(contract=CONTRACT, project_id=17, project_name='C4_1_SMOKE_OFFLINE_TEST'):
+            key = (json.dumps(contract, sort_keys=True), project_id, project_name)
+            if key in configs: return configs[key]
+            config, lock = _lock_config(original(contract, project_id, project_name))
+            self.addCleanup(lambda: lock.release() if lock.acquired else None)
+            self.addCleanup(config.backend_session.close)
+            configs[key] = config
+            return config
+        patched = patch(__name__ + '._config', side_effect=owned_config)
+        patched.start()
+        self.addCleanup(patched.stop)
+
+    def test_direct_writer_requires_owned_graph_lock(self):
+        config = replace(_config(), graph_lock=None)
+        writer = ADAPTER.NativeIntegerKGWriter(config, RecordingGraphClient(config))
+        graph = ADAPTER.to_subgraphs([_node_spec()], 1, 'nodes', writer.config)[0]
+        with self.assertRaises(ValueError): writer.write_subgraph(graph, 'nodes')
+        self.assertEqual(writer.client.calls, [])
+
+    def test_staged_write_and_cleanup_cannot_bypass_lock_with_custom_writer(self):
+        config = replace(_config(), graph_lock=None)
+        writer = RecordingWriter(config)
+        nodes = [_node_spec()]
+        for invoke in (lambda: ADAPTER.write_nodes_then_edges({'nodes': nodes, 'edges': []},
+                            config, Readback({}, config), writer=writer),
+                       lambda: ADAPTER.cleanup_synthetic(writer, nodes, [], 'C4_1_SMOKE_', config)):
+            with self.assertRaises(ValueError): invoke()
+        self.assertEqual(writer.calls, [])
+
+    def test_released_lock_blocks_inherited_sync_async_and_cleanup(self):
+        config = _config()
+        writer = ADAPTER.NativeIntegerKGWriter(config, RecordingGraphClient(config))
+        graph = ADAPTER.to_subgraphs([_node_spec()], 1, 'nodes', config)[0]
+        config.graph_lock.release()
+        for invoke in (lambda: writer.write_subgraph(graph, 'nodes'), lambda: writer.invoke(graph),
+                       lambda: asyncio.run(writer.ainvoke(graph)),
+                       lambda: ADAPTER.cleanup_synthetic(writer, [_node_spec()], [],
+                                                         'C4_1_SMOKE_', config)):
+            with self.assertRaises(ValueError): invoke()
+        self.assertEqual(writer.client.calls, [])
+
+    def test_foreign_physical_database_lock_is_refused(self):
+        config = _config()
+        other = _config(project_id=18)
+        config = replace(config, graph_lock=other.graph_lock)
+        writer = ADAPTER.NativeIntegerKGWriter(config, RecordingGraphClient(config))
+        graph = ADAPTER.to_subgraphs([_node_spec()], 1, 'nodes', config)[0]
+        with self.assertRaises(ValueError): writer.write_subgraph(graph, 'nodes')
+        self.assertEqual(writer.client.calls, [])
+
     def test_uses_pinned_writer_and_structures(self):
         self.assertTrue(issubclass(ADAPTER.NativeIntegerKGWriter, PINNED_KG_WRITER))
         node_graph = ADAPTER.to_subgraphs([_node_spec()], 2, 'nodes', CONTRACT)[0]
@@ -401,7 +469,7 @@ class WriterAdapterTest(unittest.TestCase):
                 'edges': [_edge_spec()]}
         writer = RecordingWriter(_writer().config)
         with self.assertRaises(ADAPTER.NodeReadbackError):
-            ADAPTER.write_nodes_then_edges(plan, _writer().config, Readback({}),
+            ADAPTER.write_nodes_then_edges(plan, writer.config, Readback({}),
                                            writer=writer, batch_size=10)
         self.assertEqual([stage for stage, _ in writer.calls], ['nodes'])
 
@@ -412,7 +480,7 @@ class WriterAdapterTest(unittest.TestCase):
         writer = RecordingWriter(_writer().config)
         with self.assertRaises(ADAPTER.NodeReadbackError):
             ADAPTER.write_nodes_then_edges({'nodes': [node, node2], 'edges': [_edge_spec()]},
-                                           _writer().config, Readback({(node['type'], node['id']): bad}),
+                                           writer.config, Readback({(node['type'], node['id']): bad}),
                                            writer=writer, batch_size=10)
         self.assertEqual([stage for stage, _ in writer.calls], ['nodes'])
 
@@ -421,7 +489,7 @@ class WriterAdapterTest(unittest.TestCase):
         node2 = _node_spec('C4_1_SMOKE_NODE_002')
         writer = RecordingWriter(_writer().config)
         result = ADAPTER.write_nodes_then_edges(
-            {'nodes': [node, node2], 'edges': [_edge_spec()]}, _writer().config,
+            {'nodes': [node, node2], 'edges': [_edge_spec()]}, writer.config,
             Readback({(node['type'], node['id']): _server_row(node),
                       (node2['type'], node2['id']): _server_row(node2)}),
             writer=writer, batch_size=10)
@@ -448,7 +516,7 @@ class WriterAdapterTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ADAPTER.write_nodes_then_edges(
                 {'nodes': [_node_spec(), _node_spec('C4_1_SMOKE_NODE_002')],
-                 'edges': [_edge_spec()]}, _writer().config,
+                 'edges': [_edge_spec()]}, writer.config,
                 Readback({}), writer=writer, batch_size=10)
         self.assertEqual([stage for stage, _ in writer.calls], ['nodes'])
 
@@ -596,14 +664,20 @@ class ManifestWriterScopeTest(unittest.TestCase):
             nodes[0].update(node_change)
         if edge_change:
             edges[0].update(edge_change)
-        with TemporaryDirectory() as folder, patch.dict(ADAPTER._C43A_POLICY, self.POLICY):
+        with TemporaryDirectory() as folder, patch.dict(ADAPTER._C43A_POLICY, self.POLICY), \
+                patch.dict(sys.modules, {'kag.backend_identity': BACKEND}):
             path = Path(folder) / 'sample_manifest.json'
             path.write_text(json.dumps(manifest), encoding='utf-8')
             client = FakeProjectClient(record)
             session = _backend_session(client, 2, 'VietRoadTrafficC43A10Pct')
             config = ADAPTER.discover_manifest_project(client,
                 'http://127.0.0.1:28887', CONTRACT, path, nodes, edges, backend_session=session)
-            yield config, nodes, edges, path
+            config, lock = _lock_config(config)
+            try:
+                yield config, nodes, edges, path
+            finally:
+                lock.release()
+                session.close()
 
     def test_exact_project_manifest_writes_real_nodes_with_native_integer(self):
         with self.fixture() as (config, nodes, edges, _):

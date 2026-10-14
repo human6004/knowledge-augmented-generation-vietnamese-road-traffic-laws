@@ -11,6 +11,7 @@ from typing import Any
 
 from kag.builder.codec import BuilderContractError, canonical_json, decode_properties
 from kag.backend_identity import BackendIdentitySession, BackendIdentityProof, BackendIdentityError, client_route
+from kag.run_state import GraphLock
 from kag.builder.mapping import application_edge_key
 from kag.builder.production_scope import (ProductionSettings, ProductionScope,
     SAMPLE_PROJECT_ID, validate_production_scope, _PRODUCTION_PROOF)
@@ -95,6 +96,7 @@ class WriterConfig:
     production_scope: ProductionScope | None = None
     backend_session: BackendIdentitySession | None = field(default=None, repr=False, compare=False)
     backend_proof: BackendIdentityProof | None = None
+    graph_lock: GraphLock | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.project, _VerifiedSmokeProject):
@@ -267,7 +269,11 @@ def discover_manifest_project(project_client: Any, host_addr: str, contract: Map
 
 
 def _check_fresh_target(target, proof):
-    volume = (re.fullmatch(r'kag-s8-[a-z0-9][a-z0-9-]*_openspg-neo4j-data(-fresh-[a-z0-9-]{1,40})?',
+    native = (isinstance(proof, BackendIdentityProof) and len(proof.runtime_identity) == 5
+              and proof.runtime_identity[1] == 'native-bolt-isolated-v1'
+              and (proof.canonical_database_name == 'vietroadtraffic'
+                   or re.fullmatch(r'freshsample[a-z0-9]{8,40}', proof.canonical_database_name)))
+    volume = (re.fullmatch(r'kag(?:-[a-z0-9][a-z0-9-]*)?_openspg-neo4j-data(-fresh-[a-z0-9-]{1,40})?',
                           proof.runtime_identity[-1])
               if isinstance(proof, BackendIdentityProof) and proof.runtime_identity else None)
     if (not isinstance(target, Mapping) or not isinstance(proof, BackendIdentityProof)
@@ -280,9 +286,8 @@ def _check_fresh_target(target, proof):
                 proof.physical_database_id, list(proof.runtime_identity)) !=
                (target['project_id'],target['project_name'],target['namespace'],target['database'],
                 target['physical_database_id'],target['runtime_identity'])
-            or len(proof.runtime_identity) != 7
-            or volume is None
-            or target['database'] == 'vietroadtraffic' and volume.group(1) is None):
+            or not native and (len(proof.runtime_identity) != 7 or volume is None
+                or target['database'] == 'vietroadtraffic' and volume.group(1) is None)):
         raise WriterAdapterError('fresh sample target differs from its physical isolated backend')
 
 
@@ -501,10 +506,14 @@ class NativeIntegerKGWriter(KGWriter):
         config.__post_init__()
         self.config = self._identity_config = config
         self._backend_binding = config.backend_session, config.backend_proof
+        self._graph_lock = config.graph_lock
         self.kag_project_config = config
         self.project_id = config.project_id
         self.client = graph_client if graph_client is not None else GraphClient(
             host_addr=config.host_addr, project_id=config.project_id)
+        if graph_client is None:
+            from kag.backend_identity import bound_sdk_requests
+            bound_sdk_requests(self.client)
         _check_client_target(self.client, config, 'GraphClient')
         self._identity_client = self.client
         self._client_route = client_route(self.client, config.host_addr)
@@ -594,6 +603,9 @@ class NativeIntegerKGWriter(KGWriter):
                            if (edge.to_type, edge.to_id) not in self._verified_node_keys)
             if missing:
                 raise WriterAdapterError('edge write requires successful readback of every endpoint node')
+        if self.config.graph_lock is not self._graph_lock:
+            raise WriterAdapterError('writer graph lock changed after construction')
+        _check_graph_lock(self.config)
         self._verified_node_keys.difference_update((node.label, node.id) for node in input.nodes)
         return super()._invoke(input, alter_operation=alter_operation,
                                lead_to_builder=lead_to_builder, **kwargs)
@@ -695,6 +707,20 @@ def _plan_specs(plan_or_specs: Any) -> tuple[list[Mapping[str, Any]], list[Mappi
     if not isinstance(nodes, Sequence) or not isinstance(edges, Sequence):
         raise WriterAdapterError('plan must expose ordered nodes and edges sequences')
     return list(nodes), list(edges)
+
+
+def _check_graph_lock(config: WriterConfig) -> None:
+    lock = config.graph_lock
+    try:
+        _check_backend(config.backend_session, config.backend_proof,
+                       config.host_addr, config.project_id, config.project_name, config.namespace)
+        if (not isinstance(lock, GraphLock) or not lock.shared
+                or lock._backend_session is not config.backend_session
+                or lock._backend_proof is not config.backend_proof):
+            raise ValueError
+        lock.assert_owned(config.backend_proof.physical_database_id)
+    except ValueError:
+        raise WriterAdapterError('graph write requires its owned shared physical-database lock') from None
 
 
 def _check_writer_config(writer: Any, config: WriterConfig) -> None:
@@ -866,11 +892,13 @@ def write_nodes_then_edges(plan_or_specs: Any, config: WriterConfig, read_client
     _check_client_target(getattr(active_writer, 'client', None), config, 'writer')
     _check_client_target(read_client, config, 'readback')
     for batch in node_batches:
+        _check_graph_lock(config)
         active_writer.write_subgraph(batch, 'nodes')
     readback = verify_nodes(nodes, read_client, config)
     if isinstance(active_writer, NativeIntegerKGWriter):
         active_writer._mark_nodes_verified(readback['nodes'])
     for batch in edge_batches:
+        _check_graph_lock(config)
         active_writer.write_subgraph(batch, 'edges')
     return {'nodes_planned': len(nodes), 'nodes_written': len(nodes),
             'nodes_verified': readback['verified'], 'edges_planned': len(edges),
@@ -914,9 +942,11 @@ def cleanup_synthetic(writer: Any, node_specs: Sequence[Mapping[str, Any]],
     if type(batch_size) is not int or batch_size < 1:
         raise WriterAdapterError('batch_size must be a positive native int')
     for offset in range(0, len(exact_edges), batch_size):
+        _check_graph_lock(config)
         writer.delete_subgraph(SubGraph([], exact_edges[offset:offset + batch_size]), 'edges')
     node_values = list(exact_nodes.values())
     for offset in range(0, len(node_values), batch_size):
+        _check_graph_lock(config)
         writer.delete_subgraph(SubGraph(node_values[offset:offset + batch_size], []), 'nodes')
     return {'edges_deleted': len(exact_edges), 'nodes_deleted': len(node_values)}
 

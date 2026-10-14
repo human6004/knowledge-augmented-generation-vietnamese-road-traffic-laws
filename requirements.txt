@@ -1,5 +1,5 @@
 # Python 3.10.16 / Linux amd64; real pinned KAG registry import closure.
-# Captured from D0.1 C4 runtime; vendor source, not a second openspg-kag wheel.
+# Dependencies for pinned vendor source; do not install a second openspg-kag wheel.
 aiolimiter==1.2.1
 aliyun-log-python-sdk==0.8.8
 annotated-types==0.6.0
@@ -44,6 +44,7 @@ matplotlib==3.10.1
 mcp==1.6.0
 mdurl==0.1.0
 networkx==3.1
+neo4j==5.28.2
 numpy==2.2.4
 ollama==0.4.7
 openai==1.74.0

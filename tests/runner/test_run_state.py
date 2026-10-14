@@ -3,6 +3,8 @@ import hashlib
 import importlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -224,7 +226,7 @@ class RunStateTests(unittest.TestCase):
 
     def test_lock_contention_stale_owner_and_wrong_token_fail_closed(self):
         api = self.api()
-        root = Path(self.temp.name) / 'locks'
+        root = Path('/run/kag-locks')
         owner = api.GraphLock(root, 'physical-db-1', {'run_id': 'first', 'pid': 123})
         owner.acquire()
         other = api.GraphLock(root, 'physical-db-1', {'run_id': 'second', 'pid': 999999999})
@@ -236,6 +238,56 @@ class RunStateTests(unittest.TestCase):
         owner.release()
         other.acquire()
         other.release()
+
+    def test_missing_shared_directory_is_not_created(self):
+        root = Path(self.temp.name) / 'missing-lock-mount'
+        with self.assertRaises(self.api().RunBlocked):
+            self.api().GraphLock(root, 'physical-db-1', {'run_id': 'missing'}).acquire()
+        self.assertFalse(root.exists())
+
+    def test_portable_named_volume_mount_is_accepted(self):
+        from kag.runner import _shared_lock_root
+        self.assertEqual(_shared_lock_root('/alternative/shared-locks')['mountpoint'],
+                         '/alternative/shared-locks')
+
+    def test_private_directory_and_readonly_mount_are_refused(self):
+        from kag.runner import _shared_lock_root
+        for root in (self.temp.name, '/readonly-locks', '/private-locks'):
+            with self.subTest(root=root), self.assertRaisesRegex(self.api().RunBlocked, 'canonical'):
+                _shared_lock_root(root)
+
+    def test_writers_share_lock_across_container_mount_paths(self):
+        api = self.api()
+        owner = api.GraphLock('/run/kag-locks', 'portable-db', {'run_id': 'owner'})
+        owner.acquire()
+        self.addCleanup(owner.release)
+        child = """import sys
+from kag.run_state import GraphLock, RunBlocked
+lock = GraphLock(sys.argv[1], sys.argv[2], {'run_id': 'second'})
+try:
+    lock.acquire()
+except RunBlocked:
+    print('BLOCKED')
+else:
+    print('ACQUIRED')
+    lock.release()
+"""
+        def attempt(database):
+            return subprocess.check_output([sys.executable, '-B', '-c', child,
+                '/alternative/shared-locks', database], text=True).strip()
+        self.assertEqual(attempt('portable-db'), 'BLOCKED')
+        self.assertEqual(attempt('different-db'), 'ACQUIRED')
+
+    def test_owner_guard_rejects_released_and_foreign_database_lock(self):
+        api = self.api()
+        lock = api.GraphLock('/run/kag-locks', 'owned-db', {'run_id': 'owner'})
+        lock.acquire()
+        try:
+            lock.assert_owned('owned-db')
+            with self.assertRaises(api.RunBlocked): lock.assert_owned('foreign-db')
+        finally:
+            lock.release()
+        with self.assertRaises(api.RunBlocked): lock.assert_owned('owned-db')
 
     def test_run_paths_reject_traversal_repo_overlap_and_symlink_alias(self):
         api = self.api()

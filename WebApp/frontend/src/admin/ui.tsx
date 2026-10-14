@@ -124,10 +124,11 @@ export function Terminal({ lines, className = '' }: { lines: string[]; className
   )
 }
 
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+export function Toggle({ checked, onChange, label, disabled = false }: { checked: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       role="switch"
       aria-checked={checked}
       aria-label={label}

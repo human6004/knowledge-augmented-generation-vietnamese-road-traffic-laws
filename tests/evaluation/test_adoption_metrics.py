@@ -91,6 +91,8 @@ class AdoptionMetricTests(unittest.TestCase):
             self.assertIsNone(metric.value);self.assertEqual(metric.reason,'GOLD_OUTSIDE_CATALOG')
 
     def test_g2_outcome_native_bool_and_unanswered_not_error(self):
+        from kag.bootstrap import initialize
+        initialize()
         from kag.interface import SolverPipelineABC
         from kag.legal_solver import AnswerResult
         class Pipeline(SolverPipelineABC):
@@ -102,6 +104,8 @@ class AdoptionMetricTests(unittest.TestCase):
             self.assertIsNone(row.metrics['false_answer_rate'].value)
 
     def test_g2_error_keeps_metric_applicability_denominators(self):
+        from kag.bootstrap import initialize
+        initialize()
         from kag.interface import SolverPipelineABC
         class Pipeline(SolverPipelineABC):
             async def ainvoke(self,*args,**kwargs):raise ValueError('synthetic execution error')

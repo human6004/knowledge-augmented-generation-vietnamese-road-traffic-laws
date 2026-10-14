@@ -527,6 +527,14 @@ class RunnerExecutionTests(unittest.TestCase):
                        writer_factory=factory)
         self.assertEqual(api.run(self.config, **options), 1)
         self.assertEqual(len(writes), 1)
+        lock = writers[0].config.graph_lock
+        self.addCleanup(lambda: lock.release() if lock.acquired else None)
+        retained = lock.path.read_bytes()
+        self.assertEqual(api.run(self.config, resume=True, **options), 2)
+        self.assertEqual(lock.path.read_bytes(), retained)
+        self.assertEqual(len(writes), 1)
+        # Fixture-only recovery: the mocked writer has ended; never clear a live stale lock.
+        lock.release()
         self.assertEqual(api.run(self.config, resume=True, **options), 0)
         self.assertEqual(len(writes), 3)  # uncertain first node batch read back, remaining node and edge sent once
         self.assertEqual(self.record(run_id='production-fixture')['stages']['release']['graph_writes'], len(writes))
@@ -545,7 +553,11 @@ class RunnerExecutionTests(unittest.TestCase):
             _host_addr = self.config['endpoints']['openspg']
             _project_id = 37
             def write_graph(client, **kwargs): writes.append(kwargs['sub_graph'])
-        factory = lambda config: self.adapter.NativeIntegerKGWriter(config, graph_client=Graph())
+        locks = []
+        def factory(config):
+            locks.append(config.graph_lock)
+            self.addCleanup(lambda: config.graph_lock.release() if config.graph_lock.acquired else None)
+            return self.adapter.NativeIntegerKGWriter(config, graph_client=Graph())
         original = RunState.confirm_batch
         def crash(state, stage, key, result):
             if stage == 'write-nodes': raise RuntimeError('synthetic crash before ledger confirmation')
@@ -553,6 +565,12 @@ class RunnerExecutionTests(unittest.TestCase):
         options = dict(run_id='ack-fixture', reader=self.reader, project_client=self.projects, writer_factory=factory)
         with patch.object(RunState, 'confirm_batch', crash): self.assertEqual(api.run(self.config, **options), 1)
         self.assertEqual(len(writes), 1)
+        retained = locks[0].path.read_bytes()
+        self.assertEqual(api.run(self.config, resume=True, **options), 2)
+        self.assertEqual(locks[0].path.read_bytes(), retained)
+        self.assertEqual(len(writes), 1)
+        # Recovery is explicit and confined to the finished in-memory writer fixture.
+        locks[0].release()
         self.assertEqual(api.run(self.config, resume=True, **options), 0)
         self.assertEqual(len(writes), 3)
         self.assertEqual(self.record(run_id='ack-fixture')['stages']['release']['graph_writes'], len(writes))
@@ -579,6 +597,25 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         lock = GraphLock('/run/kag-locks', 'physical-fixture-db', {'run_id': 'other'})
         lock.acquire(); lock.release()
+
+    def test_failed_lock_release_still_closes_backend_authority(self):
+        api = self.api()
+        preflight = api.preflight
+        release = GraphLock.release
+        verified, rejected = [], []
+        def capture(*args, **kwargs):
+            result = preflight(*args, **kwargs)
+            verified.append(result)
+            return result
+        def unavailable(lock):
+            rejected.append(lock)
+            raise RunBlocked('LOCK_MOUNT')
+        self.addCleanup(lambda: release(rejected[0]) if rejected and rejected[0].acquired else None)
+        with patch.object(api, 'preflight', side_effect=capture), \
+                patch.object(GraphLock, 'release', autospec=True, side_effect=unavailable):
+            with self.assertRaises(RunBlocked): self.execute(run_id='release-unavailable')
+        with self.assertRaises(ValueError):
+            verified[0]['backend_session'].validate(verified[0]['backend_proof'])
 
     def test_invalid_provider_fallback_blocks_before_model_factory(self):
         self.config = self.production()

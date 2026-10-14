@@ -24,6 +24,13 @@ class WriterIntentTests(unittest.TestCase):
         config['write_mode'] = 'NO_OP'
         self.verified = self.case.preflight(config)
         self.config = self.verified['writer_config']
+        from kag.run_state import GraphLock
+        lock = GraphLock(self.case.config['paths']['lock_root'], self.config.backend_proof.physical_database_id,
+            {'run_id': 'intent-test'}, backend_proof=self.config.backend_proof,
+            backend_session=self.config.backend_session)
+        lock.acquire()
+        self.addCleanup(lock.release)
+        self.config = replace(self.config, graph_lock=lock)
         self.adapter = self.case.adapter
         self.calls = []
         self.writer = self.adapter.NativeIntegerKGWriter(self.config)

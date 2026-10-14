@@ -1,4 +1,4 @@
-param([string]$BaseUrl = 'http://127.0.0.1:8080/api')
+param([string]$BaseUrl = 'http://127.0.0.1:8080/api', [string]$EnvFile)
 . "$PSScriptRoot/api-common.ps1"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 try {

@@ -29,6 +29,8 @@ app:
   kag-url: ${KAG_BASE_URL:http://127.0.0.1:38000}
   kag-token-file: ${KAG_TOKEN_FILE:}
   kag-inspect-token-file: ${KAG_INSPECT_TOKEN_FILE:}
+  kag-builder-url: ${KAG_BUILDER_URL:}
+  kag-builder-token-file: ${KAG_BUILDER_TOKEN_FILE:}
   kag-release-id: ${KAG_RELEASE_ID:}
   kag-webapp-snapshot-id: ${KAG_WEBAPP_SNAPSHOT_ID:}
   kag-query-timeout-seconds: ${KAG_QUERY_TIMEOUT_SECONDS:30}

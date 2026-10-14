@@ -39,6 +39,15 @@ class PrivateBackendTests(unittest.TestCase):
         self.assertEqual(runtime,('server-id','server-image','database-id','database-image','network-id','kag-s8-new_openspg-neo4j-data'))
         self.assertEqual(metadata['databaseID'],'new-db')
 
+    def test_functional_and_legacy_project_names(self):
+        for project in ('kag','kag-local','kag-s8-new'):
+            with self.subTest(project=project):
+                transport=identity.DockerPrivateBackendTransport(project,'server-id','database-id','runner-id')
+                self.assertEqual(transport.project,project)
+        for project in ('webapp','../kag','kag_A','kag-A'):
+            with self.subTest(project=project),self.assertRaises(identity.BackendIdentityError):
+                identity.DockerPrivateBackendTransport(project,'server-id','database-id','runner-id')
+
     def test_private_backend_denies_legacy_volume(self):
         self.database['Mounts'][0]['Name']='kag-legal-neo4j-data'
         with self.assertRaises(identity.BackendIdentityError):self.read()

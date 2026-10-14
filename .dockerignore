@@ -1,0 +1,13 @@
+**/.git
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/target
+**/dist
+**/.env
+**/.env.*
+**/*.log
+tests/
+workspace/
+artifacts/
+logs/

@@ -31,7 +31,7 @@ from .security import admit_request, authorize, request_principal
 
 REQUEST_SECONDS = 25.0
 TRANSPORT_SECONDS = 5.0
-_CURRENT = ContextVar('h1_admitted_runtime', default=None)
+_CURRENT = ContextVar('kag_admitted_runtime', default=None)
 
 
 class RuntimeFailure(Exception):
@@ -386,7 +386,7 @@ def _new_embedding(settings, runtime):
 
 def _new_llm(settings, runtime):
     from kag.common.llm.openai_client import OpenAIClient
-    model = _sdk_instance(OpenAIClient,runtime,name='h1-'+uuid4().hex,model=settings.chat_model,
+    model = _sdk_instance(OpenAIClient,runtime,name='kag-'+uuid4().hex,model=settings.chat_model,
         api_key=settings.chat_key,base_url=settings.chat_url,enable_check=False,timeout=TRANSPORT_SECONDS)
     if settings.query_proof_sha256:
         from .sample_query import configure_model, provider_budget, response_model_matches
@@ -558,7 +558,7 @@ class RuntimeSupervisor:
     async def sample_inspect(self, request, settings, release):
         authorize(request_principal(request),'inspect',None)
         deadline=time.monotonic()+REQUEST_SECONDS
-        request.state.h1_deadline=deadline
+        request.state.request_deadline=deadline
         _require_configuration(settings,capability='retrieve-vector')
         if (type(release) is not ServingRelease or release.release_kind!='SAMPLE'
                 or release.release_id!=settings.release_id or settings.secrets!=request.app.state.http_settings.secrets):
@@ -584,7 +584,7 @@ class RuntimeSupervisor:
 
     async def sample_ready(self, request, settings, release, *, capability):
         deadline=time.monotonic()+REQUEST_SECONDS
-        request.state.h1_deadline=deadline
+        request.state.request_deadline=deadline
         _require_configuration(settings,capability=capability)
         async def operation():
             reader=None
@@ -650,7 +650,7 @@ class RuntimeSupervisor:
         # Entry precedes body consumption, so upload and every subsequent gate share 25s.
         deadline = time.monotonic()+(180.0 if settings.query_proof_sha256 else REQUEST_SECONDS)
         received_date = _today()
-        request.state.h1_deadline = deadline
+        request.state.request_deadline = deadline
         parsed = await admit_request(request,'query')
         if request.query_params:
             raise ApiFailure('INVALID_REQUEST')
@@ -674,7 +674,7 @@ class RuntimeSupervisor:
                 _require_operational_proof(settings,release)
                 initialize_runtime()
                 from kag.interface.common.llm_client import LLMCallCcontext, TokenMeterFactory
-                meter_context = LLMCallCcontext('h1-'+uuid4().hex,True)
+                meter_context = LLMCallCcontext('kag-'+uuid4().hex,True)
                 meter_context.__enter__()
                 runtime.reader = await asyncio.to_thread(_new_reader,settings,release,runtime.budget)
                 def preflight():
@@ -723,7 +723,7 @@ class RuntimeSupervisor:
 
     async def retrieve(self, request, settings, release, *, finalize=None, factory=None):
         deadline = time.monotonic()+REQUEST_SECONDS
-        request.state.h1_deadline = deadline
+        request.state.request_deadline = deadline
         parsed = await admit_request(request,'inspect',RetrieveRequest)
         if request.query_params:
             raise ApiFailure('INVALID_REQUEST')
@@ -771,7 +771,7 @@ class RuntimeSupervisor:
 
     async def sample_vector(self, request, settings, release, *, ready=False, finalize=None):
         deadline = time.monotonic()+REQUEST_SECONDS
-        request.state.h1_deadline = deadline
+        request.state.request_deadline = deadline
         if ready:
             authorize(request_principal(request),'inspect',None)
         parsed = None if ready else await admit_request(request,'inspect',SampleVectorRequest)

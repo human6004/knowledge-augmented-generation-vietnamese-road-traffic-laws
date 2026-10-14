@@ -64,6 +64,16 @@ class FreshSampleTests(unittest.TestCase):
         self.assertEqual(len(result['node_hashes']),3)
         self.assertEqual(result['writer_config'].scope,'FRESH_SAMPLE')
 
+    def test_fresh_sample_accepts_functional_volume_names(self):
+        for project in ('kag','kag-local'):
+            with self.subTest(project=project):
+                self.target['runtime_identity'][-1]=project+'_openspg-neo4j-data'
+                self.write_sample()
+                result=self.preflight(self.config,self.reader())
+                self.addCleanup(result['backend_session'].close)
+                self.addCleanup(result['source_index'].close)
+                self.assertEqual(result['writer_config'].scope,'FRESH_SAMPLE')
+
     def test_fresh_container_requires_loopback_openspg_with_private_neo4j_aliases(self):
         self.config.update(runtime_location='container',endpoints={
             'openspg':'http://127.0.0.1:8887','neo4j_http':'http://openspg-neo4j:7474',
@@ -207,6 +217,12 @@ class FreshExecutionTests(unittest.TestCase):
     def test_fresh_write_ack_crash_resume_and_read_only_verification(self):
         from kag.run_state import RunState
         api=self.api();writes=[];options=self.options(writes)
+        factory=options['writer_factory'];locks=[]
+        def tracked(config):
+            locks.append(config.graph_lock)
+            self.addCleanup(lambda: config.graph_lock.release() if config.graph_lock.acquired else None)
+            return factory(config)
+        options['writer_factory']=tracked
         original=RunState.confirm_batch
         def crash(state,stage,key,result):
             if stage=='write-nodes':raise RuntimeError('fixture interrupted before confirmation')
@@ -214,6 +230,12 @@ class FreshExecutionTests(unittest.TestCase):
         with patch.object(RunState,'confirm_batch',crash):
             self.assertEqual(api.run(self.config,**options),1)
         self.assertEqual(len(writes),1)
+        retained=locks[0].path.read_bytes()
+        self.assertEqual(api.run(self.config,resume=True,**options),2)
+        self.assertEqual(locks[0].path.read_bytes(),retained)
+        self.assertEqual(len(writes),1)
+        # Only this finished transport fixture is recovered; production never clears stale locks.
+        locks[0].release()
         self.assertEqual(api.run(self.config,resume=True,**options),0)
         self.assertEqual(len(writes),3)
         release=self.record(run_id='fresh-flow')['stages']['release']

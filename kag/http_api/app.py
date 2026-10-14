@@ -81,21 +81,21 @@ class _SafeHTTP:
         started = False
 
         async def authority():
-            if time.monotonic() >= scope['state']['h1_deadline']:
+            if time.monotonic() >= scope['state']['request_deadline']:
                 raise ApiFailure('QUERY_TIMEOUT')
-            if scope['state'].get('h1_query_verified'):
+            if scope['state'].get('query_verified'):
                 from .runtime import _today
-                if _today() != scope['state']['h1_as_of']:
+                if _today() != scope['state']['query_as_of']:
                     raise ApiFailure('DATE_BOUNDARY_CHANGED')
             try:
-                await asyncio.wait_for(asyncio.to_thread(scope['state']['h1_authority_guard']),
-                    scope['state']['h1_deadline']-time.monotonic())
+                await asyncio.wait_for(asyncio.to_thread(scope['state']['authority_guard']),
+                    scope['state']['request_deadline']-time.monotonic())
             except asyncio.TimeoutError:
                 raise ApiFailure('QUERY_TIMEOUT') from None
 
         async def safe_send(message):
             nonlocal started
-            verified = scope['state'].get('h1_query_verified') or scope['state'].get('h1_retrieve_verified')
+            verified = scope['state'].get('query_verified') or scope['state'].get('retrieve_verified')
             if verified:
                 await authority()
             if message['type'] == 'http.response.start':
@@ -106,17 +106,17 @@ class _SafeHTTP:
                     (b'x-request-id', scope['state']['request_id'].encode('ascii')),
                     (b'cache-control', b'no-store')]}
             if verified:
-                midnight_deadline = scope['state']['h1_deadline']
-                if scope['state'].get('h1_query_verified'):
+                midnight_deadline = scope['state']['request_deadline']
+                if scope['state'].get('query_verified'):
                     now = datetime.now(ZoneInfo('Asia/Saigon'))
                     midnight = datetime.combine(now.date()+timedelta(days=1),datetime.min.time(),now.tzinfo)
                     midnight_deadline = time.monotonic()+(midnight-now).total_seconds()
                 delivery = asyncio.create_task(send(message))
                 try:
                     while not delivery.done():
-                        left = min(scope['state']['h1_deadline'],midnight_deadline)-time.monotonic()
+                        left = min(scope['state']['request_deadline'],midnight_deadline)-time.monotonic()
                         if left <= 0:
-                            raise ApiFailure('DATE_BOUNDARY_CHANGED' if midnight_deadline < scope['state']['h1_deadline']
+                            raise ApiFailure('DATE_BOUNDARY_CHANGED' if midnight_deadline < scope['state']['request_deadline']
                                              else 'QUERY_TIMEOUT')
                         await asyncio.wait({delivery},timeout=min(.02,left))
                         if not delivery.done():
@@ -133,14 +133,14 @@ class _SafeHTTP:
             await self.app(scope, receive, safe_send)
         except (ApiFailure, RuntimeFailure) as exc:
             if not started:
-                scope['state']['h1_query_verified'] = False
-                scope['state']['h1_retrieve_verified'] = False
+                scope['state']['query_verified'] = False
+                scope['state']['retrieve_verified'] = False
                 response = _failure(Request(scope), exc.code)
                 await response(scope, receive, safe_send)
         except Exception:
             if not started:
-                scope['state']['h1_query_verified'] = False
-                scope['state']['h1_retrieve_verified'] = False
+                scope['state']['query_verified'] = False
+                scope['state']['retrieve_verified'] = False
                 response = _failure(Request(scope), 'INTERNAL_ERROR')
                 await response(scope, receive, safe_send)
 
@@ -261,7 +261,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
     app.add_middleware(_SafeHTTP)
 
     def sample_guard(request, release, runtime_settings):
-        if (time.monotonic() >= request.state.h1_deadline
+        if (time.monotonic() >= request.state.request_deadline
                 or app.state.serving_release is not release or app.state.runtime_settings is not runtime_settings
                 or app.state.http_settings.secrets != runtime_settings.secrets):
             raise ApiFailure('NOT_READY')
@@ -299,13 +299,17 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
         supervisor = getattr(app.state, 'runtime_supervisor', None)
         if capability == 'retrieve-vector' and enable_sample_routes:
             release, runtime_settings = app.state.serving_release, app.state.runtime_settings
-            if type(release) is not artifacts.ServingRelease or runtime_settings is None or supervisor is None:
-                raise ApiFailure('NOT_READY')
-            result = await supervisor.sample_vector(request,runtime_settings,release,ready=True)
-            sample_guard(request,release,runtime_settings)
-            request.state.h1_authority_guard = lambda:sample_guard(request,release,runtime_settings)
-            request.state.h1_retrieve_verified = True
-            return JSONResponse(result)
+            if type(release) is artifacts.ServingRelease and runtime_settings is not None and supervisor is not None:
+                try:
+                    result = await supervisor.sample_vector(request,runtime_settings,release,ready=True)
+                except ApiFailure as failure:
+                    if failure.code != 'NOT_READY':
+                        raise
+                else:
+                    sample_guard(request,release,runtime_settings)
+                    request.state.authority_guard = lambda:sample_guard(request,release,runtime_settings)
+                    request.state.retrieve_verified = True
+                    return JSONResponse(result)
         if capability in ('query-v1','retrieve') and enable_sample_routes:
             release,runtime_settings=app.state.serving_release,app.state.runtime_settings
             if (type(release) is artifacts.ServingRelease and runtime_settings is not None
@@ -320,7 +324,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                         'checks':{'auth':'pass',**supervisor.readiness()},
                         'provider_transport':'not_probed','production_write':'blocked'})
                 sample_guard(request,release,runtime_settings)
-                request.state.h1_authority_guard=lambda:sample_guard(request,release,runtime_settings)
+                request.state.authority_guard=lambda:sample_guard(request,release,runtime_settings)
                 return JSONResponse(result)
         checks = supervisor.readiness() if supervisor is not None else {
             'runtime': 'blocked', 'sources': 'unknown'}
@@ -374,7 +378,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                 raise ApiFailure('NOT_READY')
             value=await supervisor.sample_inspect(request,settings,release)
             sample_guard(request,release,settings)
-            request.state.h1_authority_guard=lambda:sample_guard(request,release,settings)
+            request.state.authority_guard=lambda:sample_guard(request,release,settings)
             raw=artifacts.canonical_json(value).encode('utf-8')
             if len(raw)>245760:raise ApiFailure('RESULT_LIMIT_EXCEEDED')
             return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
@@ -459,7 +463,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                         raise ApiFailure('RESULT_LIMIT_EXCEEDED')
                 if sources() != verified:
                     raise ApiFailure('SOURCE_VALIDATION_FAILED')
-                request.state.h1_authority_guard = identity
+                request.state.authority_guard = identity
                 return raw, {'X-KAG-Release-ID':release.release_id,
                     'X-WebApp-Snapshot-ID':settings.webapp_snapshot_id,'X-KAG-As-Of':instance.as_of.isoformat()},instance.as_of
             return await asyncio.to_thread(verified_bytes)
@@ -481,9 +485,9 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
             raw,headers,as_of = operation.result()
             if core._today() != as_of:
                 raise ApiFailure('DATE_BOUNDARY_CHANGED')
-            if time.monotonic() >= request.state.h1_deadline:
+            if time.monotonic() >= request.state.request_deadline:
                 raise ApiFailure('QUERY_TIMEOUT')
-            request.state.h1_query_verified, request.state.h1_as_of = True, as_of
+            request.state.query_verified, request.state.query_as_of = True, as_of
             if stream:
                 headers['X-Accel-Buffering'] = 'no'
                 return Response(raw,media_type='text/event-stream',headers=headers)
@@ -520,7 +524,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                         'schema_contract':asdict(release.schema_contract),'evidence_id':parsed.evidence_id,
                         'production_write':'blocked','items':result})
                     sample_guard(request,release,runtime_settings)
-                    request.state.h1_authority_guard = lambda:sample_guard(request,release,runtime_settings)
+                    request.state.authority_guard = lambda:sample_guard(request,release,runtime_settings)
                     return raw
                 return await asyncio.to_thread(verified)
 
@@ -537,7 +541,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                 if watcher in done and watcher.result():
                     raise asyncio.CancelledError
                 raw = await operation
-                request.state.h1_retrieve_verified = True
+                request.state.retrieve_verified = True
                 return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
             finally:
                 if not operation.done():
@@ -607,7 +611,7 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                         'schema_contract':asdict(release.schema_contract),'items':result}
                     raw = contract.encode_retrieve(payload)
                     sources()
-                    request.state.h1_authority_guard = identity
+                    request.state.authority_guard = identity
                     return raw
                 return await asyncio.to_thread(verified_bytes)
 
@@ -625,9 +629,9 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
                 if watcher in done and watcher.result():
                     raise asyncio.CancelledError
                 raw = operation.result()
-                if time.monotonic() >= request.state.h1_deadline:
+                if time.monotonic() >= request.state.request_deadline:
                     raise ApiFailure('QUERY_TIMEOUT')
-                request.state.h1_retrieve_verified = True
+                request.state.retrieve_verified = True
                 return Response(raw,media_type='application/json',headers={'X-KAG-Release-ID':release.release_id})
             except core.RuntimeFailure as exc:
                 raise ApiFailure(exc.code) from None

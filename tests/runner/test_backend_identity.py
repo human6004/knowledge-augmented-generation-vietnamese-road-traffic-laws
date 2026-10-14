@@ -150,7 +150,8 @@ class LockBindingTests(unittest.TestCase):
         from tempfile import TemporaryDirectory
         from kag.run_state import GraphLock, RunBlocked
         proof = self.session.prove()
-        with TemporaryDirectory() as root:
+        with TemporaryDirectory():
+            root = '/run/kag-locks'
             with self.assertRaises(ValueError):
                 GraphLock(root, 'wrong', {'scope':'PRODUCTION'},
                           backend_proof=proof, backend_session=self.session)

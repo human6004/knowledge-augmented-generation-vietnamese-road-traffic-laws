@@ -1,202 +1,98 @@
-# Cài đặt LuậtGT lần đầu
+# Cài đặt LuậtGT trên Windows
 
-LuậtGT cung cấp WebApp cho USER/ADMIN, nối KAG để tra cứu luật giao thông và
-đọc căn cứ nguồn. Hướng dẫn này dành cho triển khai **SAMPLE**. Production WRITE
-giữ `BLOCKED`; bộ benchmark chính thức chưa hoàn thành.
+Dành cho lần cài đầu. Máy đã có dữ liệu dùng [UPDATE](UPDATE.md), không tạo lại secrets.
 
-Đọc [cách sử dụng](USER-GUIDE.md), [cập nhật giữ dữ liệu](UPDATE.md) và
-[cấu hình Docker cho người vận hành](../docker/README.md).
+## Bước 1 — Cài công cụ
 
-## 1. Phần mềm và máy
+Cài [Git for Windows](https://git-scm.com/install/windows) và [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) theo yêu cầu Windows/WSL 2 của Docker. Bật ảo hóa, chọn Linux containers và đợi Docker Engine chạy.
 
-- Windows x64, Docker Desktop dùng Linux containers/WSL2, Git, PowerShell 7
-  (`pwsh`) và trình duyệt. Scripts UTF-8 dùng PowerShell 7.
-- Initializer/checker KAG gọi RTK bên trong; máy dùng các scripts đó cần `rtk`
-  trong PATH. App/container không cần RTK.
-- Docker cần plugin `docker compose`, BuildKit và `additional_contexts`.
-  KAG dùng nền tảng `linux/amd64`.
-- Chạy bằng Docker không cần cài Java, Node hoặc Python trên host. Khi phát triển
-  riêng: frontend dùng Node 24/pnpm 10.11.0, backend Java 21/Maven, KAG CPython
-  3.10.16 với dependencies đã pin.
-- Chuẩn bị RAM và SSD cho cả hai stack, images, build và backup. Tổng giới hạn
-  RAM khai báo riêng KAG là 5,25 GiB; cần thêm dung lượng cho WebApp, Docker và
-  hệ điều hành. Chưa xác định cấu hình tối thiểu hoặc khả năng chịu tải.
+Compose cần **từ 2.20.3** để hỗ trợ [include](https://docs.docker.com/compose/how-tos/multiple-compose-files/include/). Không cần Python, Java hay Node trên host. Dự án chưa công bố cấu hình máy tối thiểu đã đo; cần đủ RAM/disk cho 12 services, build và sao lưu.
 
-Kiểm công cụ:
+Mở PowerShell, kiểm engine và Compose:
 
 ```powershell
-git --version
-pwsh --version
 docker version
 docker compose version
-docker info --format '{{.OSType}} {{.Architecture}} {{.MemTotal}}'
 ```
 
-## 2. Lấy source và submodule
+Kết quả: thấy Docker Client/Server và phiên bản Compose phù hợp. Build cần mạng để tải source, images và dependencies.
 
-Clone branch `main`, rồi mở PowerShell 7 tại thư mục repository:
+## Bước 2 — Tải source
+
+Chạy tại thư mục muốn chứa dự án:
 
 ```powershell
-git clone --branch main https://github.com/human6004/knowledge-augmented-generation-vietnamese-road-traffic-laws.git
-git submodule update --init vendor/KAG
-git rev-parse HEAD
-git -C vendor/KAG rev-parse HEAD
-git -C vendor/KAG status --short
+git clone --recurse-submodules https://github.com/human6004/knowledge-augmented-generation-vietnamese-road-traffic-laws.git
+Set-Location knowledge-augmented-generation-vietnamese-road-traffic-laws
 ```
 
-Submodule `vendor/KAG` phải ở commit
-`fdab15b3929d2ee40dfcdd388f90233096a6afc9`, không có thay đổi local.
-Không dùng `submodule update --remote`. Khi triển khai, ghi lại commit source
-và đối chiếu phiên bản đó với bộ artifacts/images do người vận hành cung cấp.
+Kết quả: có source và `vendor/KAG` đúng phiên bản. **Các lệnh còn lại chạy tại thư mục gốc này, trong cùng cửa sổ PowerShell.** Source được cấp riêng cũng phải có `.env.example` và Compose chính tự include file KAG; không dùng hướng dẫn stack cũ để bù file thiếu.
 
-Các lệnh còn lại chạy từ root repository.
+## Bước 3 — Đặt cấu hình và mật khẩu
 
-## 3. Chuẩn bị phần vận hành ngoài Git
-
-Git chứa source, Compose, scripts, schema và dữ liệu nguồn. Clone không tạo graph
-Neo4j, dữ liệu MySQL WebApp, tài khoản, publication, provider keys hoặc serving
-proof. Chưa xác minh cài đặt hoàn chỉnh trên máy sạch.
-
-Người vận hành cần chuẩn bị:
-
-- Cached images đúng Compose và manifest identity: OpenSPG/HAProxy pin digest,
-  runtime `vietroadtraffic-kag-runtime:d0.2`, MinIO KAG và API image tương thích.
-  KAG dùng `pull_policy: never`; thiếu cache thì không startup.
-- Offline wheels theo `requirements-http-api.txt`, gồm FastAPI 0.115.12 đúng hash;
-  Git objects của submodule đúng pin khi build API.
-- Graph SAMPLE và dữ liệu WebApp tương ứng, gồm văn bản/units được duyệt và
-  xuất bản. Restore hoặc tạo graph cần kế hoạch vận hành riêng.
-- Release descriptor, source catalog, backend/authority receipts, SAMPLE/query
-  proofs, embedding cache và publication còn hiệu lực, cùng snapshot WebApp.
-- External env, query/inspect tokens khác nhau, credentials riêng cho broker/API/
-  gateway, ledger và lock bền vững.
-- Provider credentials, chat proxy ngoài Compose và model route phù hợp proof.
-  Repository không cài hoặc khởi động chat proxy.
-
-Lấy bộ artifacts qua kênh bàn giao của dự án; đối chiếu hash/identity trước dùng.
-Không đưa secrets vào Git. Proof gắn với deployment: chuyển máy hoặc recreate
-container cần đo lại backend identity, read-only, isolation, Docker DNS và ràng
-buộc proof mới. Không chép IP/identity máy cũ hay sửa ngày/hash sealed bundle
-để mở readiness.
-
-## 4. Tạo env và cấu hình
-
-Chỉ khởi tạo khi cài mới. Ví dụ `C:/kag-local` là thư mục ngoài Git do người
-vận hành chọn; thay bằng nơi lưu artifacts của bạn. Chuẩn bị wheel cache trước.
-`$ApiImageId` phải là ID image API đã đối chiếu với bộ bàn giao:
+Tạo `.env` riêng; lệnh từ chối ghi đè cấu hình đã có:
 
 ```powershell
-$ApiImageId = '<sha256-ID-image-API-da-doi-chieu>'
-pwsh -NoProfile -File docker/init-env.ps1
-pwsh -NoProfile -File docker/init-step8-env.ps1 -OutputDirectory C:/kag-local/secrets -WheelDirectory C:/kag-local/offline-wheels -ProjectName kag-s8-local -ApiImageId $ApiImageId
+if (Test-Path -LiteralPath .env) { throw 'Đã có .env; dùng UPDATE.' }
+Copy-Item -LiteralPath .env.example -Destination .env -ErrorAction Stop
+notepad .env
 ```
 
-Lệnh đầu tạo `.env` WebApp với credentials ngẫu nhiên. Lệnh thứ hai tạo external
-`C:/kag-local/secrets/kag.env`, tokens, thư mục release/credentials và ledger
-placeholder `{}`. Initializer không tạo graph, provider keys, proof hoặc
-publication; readiness vẫn chưa được cấp. Thư mục output phải chưa tồn tại.
-Không dùng image ID mặc định của initializer thay cho ID image đã bàn giao.
+Trong trình quản lý mật khẩu, sinh **chín giá trị độc lập**, mỗi giá trị 64 ký tự hexadecimal ngẫu nhiên (32 bytes). Điền các ô trống:
 
-Dùng trực tiếp `kag.env`; tên file không bắt buộc là `.env.kag`.
-`docker/init-env.ps1 -Kag` và `.env.kag.example` thuộc cấu hình compatibility
-`OPENSPG_*`, thiếu biến `STEP8_*` cho Compose chính.
+`ADMIN_PASSWORD`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `MINIO_PASSWORD`, `KAG_MYSQL_PASSWORD`, `KAG_NEO4J_PASSWORD`, `KAG_MINIO_PASSWORD`.
 
-Mở `.env` WebApp bằng editor riêng và thêm:
+Đặt `ADMIN_EMAIL`; lưu email/mật khẩu ADMIN để đăng nhập. Giữ `COMPOSE_PROJECT_NAME=luatgt`, `KAG_STATE_DIR=../luatgt-state` cho cài thông thường. Lưu file; không commit hoặc chia sẻ secrets. Không có mật khẩu ADMIN mặc định.
 
-```dotenv
-STEP8_KAG_PROJECT=kag-s8-local
-KAG_BASE_URL=http://kag-ingress:8080
-KAG_TOKEN_FILE=C:/kag-local/secrets/query.token
-KAG_INSPECT_TOKEN_FILE=C:/kag-local/secrets/inspect.token
-KAG_RELEASE_ID=<release-id-duoc-cap>
-KAG_WEBAPP_SNAPSHOT_ID=<snapshot-id-duoc-cap>
-KAG_QUERY_TIMEOUT_SECONDS=180
-KAG_INSPECTION_TIMEOUT_SECONDS=25
-```
+## Bước 4 — Tạo bốn token dịch vụ
 
-`STEP8_KAG_PROJECT` hai env phải giống nhau và bắt đầu bằng `kag-s8-`.
-Token files phải khớp KAG API; browser chỉ dùng JWT WebApp. Tài khoản ADMIN
-khởi tạo từ `ADMIN_EMAIL`/`ADMIN_PASSWORD` trong `.env`; USER đăng ký qua UI.
-
-Người vận hành hoàn thiện `kag.env` theo [Docker](../docker/README.md),
-[initializer](../docker/init-step8-env.ps1) và [Compose](../docker-compose.kag.yml).
-Giữ định dạng `KEY='value'`, không trùng key. Cần đúng paths, image IDs,
-database/storage revision, broker identity, release, provider/model và proof pins.
-SAMPLE broker dùng database `vietroadtraffic` đã seal read-only; storage revision
-phải khớp volume được cấp. Không đổi revision để vô tình tạo graph rỗng.
-
-Chat proxy dùng DNS host/port đã kiểm chứng; mặc định
-`host.docker.internal:8317`. URL/model logical trong proof khác transport gateway;
-không sửa endpoint hoặc model chỉ để vượt gate.
-
-## 5. Chạy KAG trước, WebApp sau
-
-Chỉ startup sau khi người vận hành chuẩn bị images, mounts và cấu hình phù hợp.
-Đây là lệnh chạy services, không thay quy trình restore hoặc cấp serving proof:
+Compose cần token riêng cho query, inspection, Builder và gateway. Với đường state mặc định, chạy một lần:
 
 ```powershell
-$KagEnv = 'C:/kag-local/secrets/kag.env'
-$WebEnv = '.env'
-pwsh -NoProfile -File docker/check-config.ps1 -Stack Kag -KagEnvFile $KagEnv
-docker compose --env-file $KagEnv -f docker-compose.kag.yml up -d --no-build --pull never
-pwsh -NoProfile -File docker/check-config.ps1 -Stack WebApp -WebAppEnvFile $WebEnv
-docker compose --env-file $WebEnv -f docker-compose.yml build frontend backend minio
-docker compose --env-file $WebEnv -f docker-compose.yml up -d --no-build
+$state = [IO.Path]::GetFullPath((Join-Path $PWD '..\luatgt-state'))
+[IO.Directory]::CreateDirectory($state) | Out-Null
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    foreach ($name in 'query','inspect','builder','egress') {
+        $bytes = New-Object byte[] 32
+        $rng.GetBytes($bytes)
+        $token = [Text.Encoding]::ASCII.GetBytes([BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant())
+        $file = [IO.File]::Open((Join-Path $state "$name.token"), [IO.FileMode]::CreateNew)
+        try { $file.Write($token, 0, $token.Length) } finally { $file.Dispose() }
+    }
+} finally { $rng.Dispose() }
 ```
 
-WebApp build cần registry/npm/Maven/GitHub access hoặc cache tương ứng. Backend
-Dockerfile chạy Maven verify; Flyway chạy khi backend startup trên MySQL WebApp.
-KAG API build offline chỉ cần khi chưa có image phù hợp: xem
-[cập nhật API](UPDATE.md#kag-api). Build runtime có hướng dẫn riêng tại
-[runtime](runtime.md).
+Kết quả: `query.token`, `inspect.token`, `builder.token`, `egress.token` trong `../luatgt-state`, ngoài repo. File đã tồn tại sẽ gây lỗi, không bị ghi đè. Nếu đổi `KAG_STATE_DIR`, sửa `$state` cho khớp trước khi chạy.
 
-Deployment mới cần người vận hành đo và pin lại proof sau startup, rồi reload
-API theo [quy trình ràng buộc proof](../docker/README.md#operational-proof-và-rebind).
-Container chạy hoặc healthcheck xanh chưa đủ để chat.
+Trong **Properties → Security**, giới hạn quyền đọc `.env` và state cho người vận hành, giữ quyền Docker Desktop cần để đọc chúng. Chưa cần tạo graph ở bước này.
 
-## 6. Mở UI và kiểm kết nối
+## Bước 5 — Khởi động
 
 ```powershell
-docker compose --env-file $KagEnv -f docker-compose.kag.yml ps
-docker compose --env-file $WebEnv -f docker-compose.yml ps
-curl.exe --fail http://127.0.0.1:8080/actuator/health
-curl.exe --silent --output NUL --write-out '%{http_code}' http://127.0.0.1:38000/v1/health
+docker compose up -d --build
 ```
 
-Mở [LuậtGT](http://127.0.0.1:8081). Backend dùng host port 8080; KAG ingress
-mặc định 38000; MinIO WebApp console 9001. Host ports chỉ bind localhost.
-Nếu đổi `STEP8_API_PORT`, kiểm KAG bằng port đã chọn.
+Lệnh build và chạy **12 services trong project `luatgt`**. Compose chính tự include `docker-compose.kag.yml`; không ghép hai file bằng `-f` hoặc chạy KAG riêng. Đợi tải dependencies và khởi tạo databases; chỉ tiếp tục khi lệnh kết thúc không lỗi.
 
-Backend health công khai là `/actuator/health`. KAG health qua ingress không có
-service token trả 401: lệnh trên chỉ kiểm ingress phản hồi. Không đưa service token
-vào browser. Đăng nhập ADMIN, mở **Hạ tầng** hoặc **Tổng quan** để đọc liveness,
-Query/Retrieval/Vector readiness và graph fingerprint. Release artifact tồn tại
-không thay cho capability readiness.
-
-## 7. Dừng, chạy lại và xử lý lỗi
-
-Giữ cùng env, project và thư mục làm việc:
+## Bước 6 — Mở WebApp
 
 ```powershell
-docker compose --env-file $WebEnv -f docker-compose.yml stop
-docker compose --env-file $KagEnv -f docker-compose.kag.yml stop
-docker compose --env-file $KagEnv -f docker-compose.kag.yml start
-docker compose --env-file $WebEnv -f docker-compose.yml start
-docker compose --env-file $WebEnv -f docker-compose.yml logs --tail 100 frontend backend
-docker compose --env-file $KagEnv -f docker-compose.kag.yml logs --tail 100 kag-ingress kag-api
+docker compose ps -a
 ```
 
-- Thiếu external network: kiểm KAG đã startup và project hai env giống nhau.
-- Thiếu image, token hoặc bind mount: bổ sung đúng bộ artifacts; không tạo file
-  rỗng thay credential/proof.
-- `401/403`: kiểm token và scope. Kiểm readiness/inspection trực tiếp còn cần
-  `X-KAG-Release-ID` khớp release; thiếu/sai header có thể trả `RELEASE_MISMATCH`.
-- `CONCURRENCY_LIMIT`: đợi query hiện tại kết thúc, đọc lại trạng thái/lịch sử
-  trước gửi lại.
-- `NOT_READY/RELEASE_UNAVAILABLE`: người vận hành kiểm release, proofs, graph,
-  provider route và thời hạn publication.
-- `KAG_ABSTAINED` với `native_state=abstained` là thiếu căn cứ đã được xác minh,
-  khác lỗi hạ tầng dù native API dùng HTTP 503.
+Kết quả: 12 services được khởi động; các service có healthcheck chuyển sang `healthy`. Mở [WebApp](http://127.0.0.1:8081), dùng ADMIN ở Bước 3 hoặc chọn **Chưa có tài khoản? Đăng ký** để tạo USER. ADMIN vào tổng quan; USER vào chat. Đổi `.env` không đặt lại mật khẩu tài khoản cũ.
 
-Kiểm và che secrets trước chia sẻ logs. Không bỏ authentication, mở production
-WRITE, xóa volumes hoặc reset ledger để xử lý lỗi.
+ADMIN nhập và duyệt nội dung theo [USER-GUIDE](USER-GUIDE.md). Dữ liệu trong repo không tự nạp vào MySQL/graph. Chatbot cần [cấu hình riêng](../docker/README.md#cấu-hình-chatbot); cài mặc định chưa sẵn sàng để hỏi luật hoặc dựng graph production.
+
+**Chưa xác minh trọn quy trình trên máy sạch.** Các bước trên được đối chiếu source local; khởi động container không xác nhận chất lượng chatbot.
+
+## Lỗi thường gặp
+
+- Không kết nối Docker: mở Docker Desktop, kiểm Linux containers/WSL 2.
+- Thiếu cấu hình/token: kiểm Bước 3–4; có thể chạy `docker compose config -q` mà không khởi động.
+- Cổng bị dùng: đổi biến cổng tương ứng theo [Docker](../docker/README.md#cổng-và-mạng), rồi dùng địa chỉ mới.
+- WebApp lỗi `502`: xem log backend/frontend theo [vận hành Docker](../docker/README.md#vận-hành). Sai email/mật khẩu trả `401`.
+- Build không tải dependencies: kiểm thông báo mạng/registry; không đổi image pin tùy tiện.
+
+Dừng/chạy lại theo [Docker](../docker/README.md#vận-hành). Không dùng `down -v`, xóa volumes hoặc prune để sửa lỗi.

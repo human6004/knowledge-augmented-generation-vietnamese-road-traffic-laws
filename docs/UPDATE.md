@@ -1,168 +1,58 @@
 # Cập nhật LuậtGT, giữ dữ liệu
 
-Cập nhật source và service cần đổi; giữ dữ liệu, volumes và artifacts vận hành.
-Điều kiện cài đặt: [INSTALL](INSTALL.md). Dùng UI: [USER-GUIDE](USER-GUIDE.md).
+Chạy từ root repository, dùng project và `.env` của installation đang phục vụ. Cần thời gian bảo trì. Không tạo lại secrets, chép đè `.env`, dùng `down -v`, prune hoặc reset dữ liệu.
 
-## 1. Kiểm source và phạm vi thay đổi
-
-Chạy từ root repository:
+## Bước 1 — Chuẩn bị và sao lưu
 
 ```powershell
-git branch --show-current
-git rev-parse HEAD
 git status --short
-git submodule status vendor/KAG
-git fetch origin
-git log --oneline 'HEAD..@{upstream}'
-git diff --name-only HEAD '@{upstream}'
+docker compose ps -a
 ```
 
-Bản source chính nằm trên `main`. Nếu branch đang dùng chưa có upstream, đối chiếu
-ref/revision được người quản lý chọn trước khi cập nhật. Tree có thay đổi local:
-dừng pull, lưu patch và bản copy file untracked ở nơi riêng; không ghi đè hoặc tự
-stash/reset.
+Git cho biết thay đổi local cần giữ; Compose cho biết installation hiện tại. Nếu source còn chỉnh sửa riêng, giải quyết chúng trước khi lấy phiên bản mới, không reset hay tự stash.
 
-Đọc diff để chọn mục cập nhật bên dưới. Nếu thay `kag/`, broker có bind source
-chỉ đọc nên đổi source cũng có thể làm proof drift; chọn cửa sổ bảo trì trước
-khi pull. Thay schema, migrations, corpus hoặc networking cần mục 7.
+Thực hiện [sao lưu Docker](../docker/README.md#sao-lưu): dừng ghi/Builder, dừng toàn bộ services, sao lưu `.env`, Compose, state và **mọi volume đang mount**. Ghi lại phiên bản source/image và mapping volume → service/đường mount để có thể phục hồi đúng.
 
-Khi tree sạch và upstream/revision đã được chọn:
+Kết quả: có bản sao ngoài repo và danh sách storage. **Chỉ tiếp tục khi sao lưu hoàn tất.** Installation còn hai projects cũ hoặc mapping khác source cần quy trình chuyển đổi riêng; không khởi động hai databases trên cùng volume.
+
+## Bước 2 — Lấy phiên bản mới
+
+Trên nhánh đang theo phiên bản cần cập nhật:
 
 ```powershell
 git pull --ff-only
 git submodule update --init vendor/KAG
-git rev-parse HEAD
-git -C vendor/KAG rev-parse HEAD
 ```
 
-Không dùng `submodule update --remote`. Pin hiện tại:
-`fdab15b3929d2ee40dfcdd388f90233096a6afc9`. Nếu fast-forward bị từ chối,
-để người quản lý xử lý divergence; không force/reset/rebase để vượt lỗi.
+Lệnh lấy source và KAG được phiên bản đó ghim. Nếu một lệnh lỗi hoặc nhánh phân kỳ, dừng xử lý; không force/reset hoặc dùng `submodule update --remote`.
 
-## 2. Giữ env và artifacts đang dùng
+## Bước 3 — Giữ cấu hình và storage
+
+Mở `.env.example` mới để bổ sung biến cần thiết vào `.env` đang có. Giữ project, `KAG_STATE_DIR`, mọi mật khẩu/token và [biến mapping storage](../docker/README.md#storage-và-secrets). Đổi biến password không tự đổi password database/ADMIN.
+
+Nếu release đổi Compose hoặc database image, đối chiếu tên volume **và đường mount từng service** với Bước 1; đọc hướng dẫn migration của release trước khi chạy. Không thay mapping bằng giá trị mặc định.
 
 ```powershell
-$KagEnv = 'C:/kag-local/secrets/kag.env'
-$WebEnv = '.env'
-pwsh -NoProfile -File docker/check-config.ps1 -Stack WebApp -WebAppEnvFile $WebEnv
-pwsh -NoProfile -File docker/check-config.ps1 -Stack Kag -KagEnvFile $KagEnv
+docker compose config -q
 ```
 
-Thay đường dẫn ví dụ bằng env installation hiện có. Checker KAG cần RTK trong
-PATH và cached API image đúng ID khai báo. Giữ nguyên project, storage revision,
-volume names, token/credentials, ledger/lock và paths ngoài Git. Không chạy
-initializer để tạo lại installation. Không xuất toàn bộ env/Compose config
-ra nơi chia sẻ.
+Kết quả: cấu hình mới hợp lệ, không có lỗi. Lệnh này không chứng minh mapping hay migration tương thích; người vận hành vẫn cần đối chiếu storage. Không chia sẻ output đầy đủ của `compose config` vì có thể chứa secrets.
 
-Trước thay đổi ảnh hưởng dữ liệu, có backup nhất quán và cách phục hồi đã chuẩn bị
-cho databases, object storage, release/catalog/proofs/publication, env và ledger.
-Giữ image cũ cùng commit/image identity để có phương án rollback service.
-
-## 3. Chỉ frontend
-
-Khi chỉ React/styles thay đổi và backend contract tương thích:
+## Bước 4 — Chạy phiên bản mới
 
 ```powershell
-docker compose --env-file $WebEnv -f docker-compose.yml build frontend
-docker compose --env-file $WebEnv -f docker-compose.yml up -d --no-deps --no-build --pull never frontend
-docker compose --env-file $WebEnv -f docker-compose.yml ps frontend
-curl.exe --fail http://127.0.0.1:8081/
+docker compose up -d --build
+docker compose ps -a
 ```
 
-Reload trình duyệt, kiểm đăng nhập, routes và history/citations đã lưu.
-Chỉ gửi câu hỏi mới khi cần kiểm inference và được cấp budget.
+Lệnh build/recreate containers, dùng lại volumes đã giữ nguyên. Kết quả: 12 services khởi động, các healthcheck chuyển sang `healthy`. Nếu `up` lỗi, kiểm log trước khi tiếp tục; không dùng cờ đổi/xóa volume để xử lý.
 
-## 4. Backend
+## Bước 5 — Kiểm dữ liệu cũ
 
-Đọc migrations trước; Flyway tự chạy khi backend startup. Thay schema/database
-cần kế hoạch ở mục 7 trước. Build thành công chưa chứng minh migration thành công.
+Mở WebApp tại cổng đang dùng, đăng nhập bằng tài khoản cũ. Kiểm nội dung đã xuất bản, ảnh/tệp, lịch sử chat/thi; ADMIN xem Hạ tầng, Graph SAMPLE và Builder theo [USER-GUIDE](USER-GUIDE.md#admin--kag-và-hạ-tầng).
 
-```powershell
-docker compose --env-file $WebEnv -f docker-compose.yml build backend
-docker compose --env-file $WebEnv -f docker-compose.yml up -d --no-deps --no-build --pull never backend
-curl.exe --fail http://127.0.0.1:8080/actuator/health
-docker compose --env-file $WebEnv -f docker-compose.yml logs --tail 100 backend
-```
+Nếu chatbot đã chuẩn bị trước cập nhật, kiểm readiness và thử một câu trong phạm vi phục vụ; có thể phát sinh phí provider. Chatbot chưa cấu hình không được coi là sẵn sàng chỉ vì container healthy. Nếu nguồn/identity không khớp, kiểm [cấu hình chatbot](../docker/README.md#cấu-hình-chatbot), không sửa hash để ép READY.
 
-Dockerfile chạy Maven verify. Kiểm login, phân quyền và contract WebApp → KAG.
-Backend vẫn dùng `http://kag-ingress:8080` qua external ingress network.
-Cập nhật frontend cùng lúc khi UI/API contract yêu cầu.
+Kết quả cần là dữ liệu cũ còn đọc được và chức năng đã cấu hình vẫn hoạt động. Giữ backup đến khi kiểm xong. Nếu cần phục hồi, dừng ghi và thử bản sao trên storage riêng; không import đè volume đang phục vụ. Hạ source/image không tự đảo ngược migration.
 
-## KAG API
-
-Cập nhật sau khi đối chiếu tương thích code/schema/source/proof và có kế hoạch
-đo lại authority. `kag-api` đóng gói source; `openspg-server` bind `kag/` chỉ đọc.
-Đổi source có thể ảnh hưởng broker cùng với API.
-
-Build offline cần cached runtime đúng identity, wheels và vendor Git objects
-đúng pin:
-
-```powershell
-docker compose --env-file $KagEnv -f docker-compose.kag.yml build kag-api
-$ApiImage = '<STEP8_API_IMAGE-dang-cau-hinh>'
-docker image inspect --format '{{.Id}}' $ApiImage
-```
-
-Cập nhật `STEP8_API_IMAGE_ID` bằng ID vừa đối chiếu; giữ nguyên những env/
-credentials/paths khác. Không đổi vendor hoặc model để vượt lỗi build.
-
-```powershell
-pwsh -NoProfile -File docker/check-config.ps1 -Stack Kag -KagEnvFile $KagEnv
-docker compose --env-file $KagEnv -f docker-compose.kag.yml up -d --no-deps --no-build --pull never kag-api
-```
-
-Recreate có thể đổi container identity hoặc IP. Đo lại isolation, DNS, code và
-backend identity, rồi pin supplemental SAMPLE/query proofs cho deployment cuối.
-Xem [operational proof và rebind](../docker/README.md#operational-proof-và-rebind).
-Sau ghi pin file, restart cùng API container để reload; tránh recreate thêm
-sau khi đã ràng buộc proof. Liveness có thể lên trong khi query vẫn bị chặn.
-
-Không sửa descriptor, graph hoặc publication để ép READY; Git không cung cấp
-một script tự cấp đầy đủ serving authority cho máy mới.
-
-## 6. Chỉ tài liệu
-
-Nếu diff chỉ có Markdown: cập nhật source an toàn, kiểm links/file paths;
-không cần build hoặc restart services.
-
-## 7. Database/schema/graph hoặc Compose networking
-
-Thay migrations, schema, corpus, storage revision, mounts, project/network hoặc
-graph inputs cần review tương thích, backup phục hồi được và kế hoạch riêng.
-Phạm vi gồm MySQL WebApp, OpenSPG MySQL/Neo4j, MinIO, Redis cùng các artifacts
-release/catalog/proofs/publication và credentials/ledger ngoài Git.
-
-Giữ volume names/project/storage revision để không tạo nhầm database rỗng.
-Backup cần nhất quán với ứng dụng; không tùy ý copy live database files.
-Restore/build graph khác cập nhật frontend hoặc API. Đọc
-[vận hành](runner.md), [backend identity](backend-identity.md),
-[writer scope](production-writer-scope.md) và [Docker](../docker/README.md).
-
-Không xóa volumes, prune, reset graph/database, xoay credentials hoặc reset
-ledger để cập nhật. Production WRITE giữ `BLOCKED`.
-
-## 8. Kiểm sau cập nhật và xử lý lỗi
-
-```powershell
-docker compose --env-file $KagEnv -f docker-compose.kag.yml ps
-docker compose --env-file $WebEnv -f docker-compose.yml ps
-curl.exe --fail http://127.0.0.1:8080/actuator/health
-curl.exe --silent --output NUL --write-out '%{http_code}' http://127.0.0.1:38000/v1/health
-docker compose --env-file $WebEnv -f docker-compose.yml logs --tail 100 frontend backend
-docker compose --env-file $KagEnv -f docker-compose.kag.yml logs --tail 100 kag-ingress kag-api
-```
-
-KAG health qua ingress không token dự kiến trả 401; chỉ chứng minh ingress
-phản hồi. Nếu đổi `STEP8_API_PORT`, dùng port đã cấu hình. Đọc authenticated
-liveness/readiness qua Admin Hạ tầng/Tổng quan; kiểm capabilities và graph
-fingerprint riêng với release artifact. Không đưa service token vào browser.
-
-USER kiểm UI và history đã lưu. `KAG_ABSTAINED` là native thiếu căn cứ được
-backend xác minh; lỗi `NOT_READY/RELEASE_UNAVAILABLE`, runtime/provider hoặc
-response không hợp lệ được xử lý là unavailable. Đọc history trước gửi lại;
-chỉ chạy câu SAMPLE khi publication/readiness, credentials và budget hợp lệ.
-
-Nếu lỗi sau build, giữ logs đã che secrets và đối chiếu commit/image/contract.
-Rollback service bằng image đã xác minh theo kế hoạch người vận hành.
-Rollback database sau migration cần quy trình riêng; không bỏ safety.
-Hướng dẫn này chưa xác minh fresh install, migration hoặc restore trên máy khác.
+Quy trình giữ dữ liệu theo storage của Compose; **chưa xác minh cập nhật và phục hồi thực tế cho source hiện tại**.

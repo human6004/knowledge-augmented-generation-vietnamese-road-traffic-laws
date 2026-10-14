@@ -13,6 +13,8 @@ public class InfrastructureService {
     public InfrastructureService(DataSource database,StringRedisTemplate redis,ObjectStorage storage,KagClient kag) { this.database=database; this.redis=redis; this.storage=storage; this.kag=kag; }
     public Map<String,Object> kagStatus() { return kag.status(); }
     public JsonNode pipelineStatus() { return kag.pipelineStatus(); }
+    public JsonNode builderStatus() { return kag.builderStatus(); }
+    public JsonNode builderAction(String action,String runId) { return kag.builderAction(action,runId); }
     public JsonNode benchmarkDatasets() { return kag.benchmarkDatasets(); }
     public JsonNode sampleInspection() { return kag.sampleInspection(); }
     public JsonNode retrieve(KagRetrieveRequest request) { return kag.retrieve(request.message(),request.top_k(),request.expand()); }

@@ -6,17 +6,18 @@ from pathlib import Path
 import re
 import sqlite3
 import os
+import threading
 import uuid
+from dataclasses import replace
 from collections import Counter, defaultdict
 from urllib.parse import urlsplit
 
 from kag.builder import production_scope as c3
 from kag.builder.codec import canonical_json
-from kag.run_state import ROOT, STAGES, RunBlocked, RunState, GraphLock, atomic_json, validate_run_directory
+from kag.run_state import (ROOT, STAGES, RunBlocked, RunState, GraphLock, atomic_json,
+                           validate_run_directory, _shared_lock_root)
 
 
-COMMON_LOCK_ROOT = Path('/run/kag-locks')
-COMMON_LOCK_SOURCE = '/study/caoDATA-workspace/runs/.graph-locks'
 FIELDS = {'scope', 'runtime_location', 'endpoints', 'database', 'project_id', 'project_name', 'namespace',
     'vector_dimensions', 'confirmation', 'paths', 'input_sha256', 'batch_size', 'heartbeat_seconds',
     'write_mode', 'vector_policy', 'model_identity', 'embedding_model', 'fallback_config', 'credential_env'}
@@ -91,8 +92,14 @@ def _config(value):
         # C4's localhost restriction remains intact, including shared container network namespaces.
         c3._endpoint(config['endpoints']['openspg'], ('http', 'https'),
                      'host' if config['scope'] in ('C4_3A_MANIFEST_SAMPLE','FRESH_SAMPLE') else location)
-        c3._endpoint(config['endpoints']['neo4j_http'], ('http', 'https'), location)
-        c3._endpoint(config['endpoints']['neo4j_uri'], ('bolt', 'neo4j', 'bolt+s', 'neo4j+s'), location)
+        graph_location = location
+        if (config['scope'] == 'FRESH_SAMPLE' and location == 'container'
+                and 'KAG_ISOLATED_BUILDER_PASSWORD' in os.environ):
+            from kag.backend_identity import _isolated_builder_password
+            _isolated_builder_password()
+            graph_location = 'host'
+        c3._endpoint(config['endpoints']['neo4j_http'], ('http', 'https'), graph_location)
+        c3._endpoint(config['endpoints']['neo4j_uri'], ('bolt', 'neo4j', 'bolt+s', 'neo4j+s'), graph_location)
         if set(config['paths']) != PATH_FIELDS or not isinstance(config['input_sha256'], dict):
             raise RunBlocked('CONFIG')
         for name, path in config['paths'].items():
@@ -145,23 +152,6 @@ def load_config(path):
     except (OSError, ValueError, TypeError) as error:
         if isinstance(error, RunBlocked): raise
         raise RunBlocked('CONFIG') from None
-
-
-def _shared_lock_root(path):
-    root = Path(path).resolve()
-    if root != COMMON_LOCK_ROOT or not root.is_dir():
-        raise RunBlocked('LOCK')
-    try:
-        for line in Path('/proc/self/mountinfo').read_text().splitlines():
-            fields = line.split()
-            boundary = fields.index('-')
-            if (fields[4] == str(COMMON_LOCK_ROOT) and fields[3] == COMMON_LOCK_SOURCE
-                    and fields[boundary + 1] == '9p'
-                    and fields[boundary + 2].replace('\\134', '\\').rstrip('\\').upper() == 'D:'):
-                return {'mountpoint': str(root), 'host_path': 'D:/study/caoDATA-workspace/runs/.graph-locks'}
-    except (OSError, ValueError, IndexError):
-        pass
-    raise RunBlocked('LOCK')
 
 
 def _paths(config):
@@ -229,9 +219,12 @@ def preflight(config, *, project_client, reader, backend_transport=None):
         from kag.bootstrap import initialize
         initialize()
         from kag.builder.writer_adapter import discover_manifest_project, discover_production_project, discover_fresh_sample_project
-        from kag.backend_identity import BackendIdentitySession, DockerBackendTransport
+        from kag.backend_identity import BackendIdentitySession, DockerBackendTransport, NativeBackendTransport
+        # Preserve the legacy C4 NO_OP receipt contract; product Builder uses native transport.
+        transport_class = (NativeBackendTransport if config['runtime_location'] == 'container'
+                           and config['scope'] != 'C4_3A_MANIFEST_SAMPLE' else DockerBackendTransport)
         backend_session = BackendIdentitySession(project_client, reader,
-            backend_transport if backend_transport is not None else DockerBackendTransport(config['endpoints']['openspg']),
+            backend_transport if backend_transport is not None else transport_class(config['endpoints']['openspg']),
             project_id=config['project_id'], project_name=config['project_name'], namespace=config['namespace'],
             openspg_endpoint=config['endpoints']['openspg'])
         contract = json.loads((ROOT / 'kag/schema/schema_contract.json').read_bytes())
@@ -390,6 +383,8 @@ def _clients(config, project_client, reader):
     if project_client is None:
         from knext.project.client import ProjectClient
         project_client = ProjectClient(host_addr=config['endpoints']['openspg'])
+        from kag.backend_identity import bound_sdk_requests
+        bound_sdk_requests(project_client)
     if reader is None:
         from kag.verify import Neo4jReadClient
         names = config['credential_env']
@@ -530,7 +525,8 @@ def _confirmed_progress(state, stage):
 
 
 def _stop(stop, stage, ordinal):
-    if stop == (stage, ordinal + 1): raise _Interrupted()
+    if stop == (stage, ordinal + 1) or isinstance(stop, threading.Event) and stop.is_set():
+        raise _Interrupted()
 
 
 def _vectorize(config, state, verified, replay_path, factory, stop):
@@ -541,6 +537,7 @@ def _vectorize(config, state, verified, replay_path, factory, stop):
     engine = None
     try:
         for ordinal, originals in enumerate(iter_source_batches(state.run_dir / 'ledger.sqlite3', 'nodes', config['batch_size'])):
+            _stop(stop, 'vectorize', -1)
             digest = c3._spec_hash(originals)
             prior = state.begin_batch('vectorize', str(ordinal), digest)
             if prior['state'] == 'CONFIRMED':
@@ -594,6 +591,7 @@ def _export(config, state, stop):
     rows = _batch_rows(state, 'vectorize')
     state.update(stage, 'RUNNING', _confirmed_progress(state, stage), len(rows))
     for ordinal, (_, result) in enumerate(rows):
+        _stop(stop, stage, -1)
         prior = state.begin_batch(stage, str(ordinal), c3._spec_hash(result))
         _check_output(state, result['nodes']); _check_output(state, result['jobs'])
         if prior['state'] != 'CONFIRMED':
@@ -627,14 +625,21 @@ def _graph_batches(config, state, verified, reader, writer, kind, output, stop):
     batches = (_node_batches(state, output, config['batch_size']) if kind == 'nodes' else
                iter_source_batches(state.run_dir / 'ledger.sqlite3', kind, config['batch_size']))
     for ordinal, specs in enumerate(batches):
+        _stop(stop, stage, -1)
         key, digest = str(ordinal), c3._spec_hash(specs)
         existed = state.db.execute('SELECT state FROM run_batches WHERE stage=? AND key=?', (stage, key)).fetchone()
         prior = state.begin_batch(stage, key, digest)
-        if prior['state'] == 'CONFIRMED': continue
+        if prior['state'] == 'CONFIRMED':
+            result = verify_batch(reader, specs, kind=kind, contract=verified['contract'])
+            if any(prior['result'].get(k) != v for k, v in result.items()):
+                raise RunBlocked('INTEGRITY')
+            continue
         writes = (prior['result'] or {}).get('graph_writes', 0)
         if config['write_mode'] == 'WRITE' and existed is None:
+            from kag.builder.writer_adapter import _check_graph_lock
             verified['writer_config'].__post_init__()
             for graph in to_subgraphs(specs, config['batch_size'], kind, verified['writer_config']):
+                _check_graph_lock(verified['writer_config'])
                 writes = state.record_attempt(stage, key, 'graph_writes')
                 writer.write_subgraph(graph, kind)
         # Any prior INTENT is uncertain: readback only; never blind resend.
@@ -657,6 +662,7 @@ def _source_batches(config, state, verified, kind, stop):
         state.update(stage, 'RUNNING', confirmed, total)
     done, batches = 0, 0
     for ordinal, specs in enumerate(iter_source_batches(state.run_dir / 'ledger.sqlite3', kind, config['batch_size'])):
+        _stop(stop, stage, -1)
         prior = state.begin_batch(stage, str(ordinal), c3._spec_hash(specs))
         done += len(specs)
         batches += 1
@@ -686,10 +692,12 @@ def _execute_source(config, directory, run_id, resume, stop, verify_only):
             'input_hashes': config['input_sha256'], 'c3': dict(c3.C3_IDENTITY),
             'python': '3.10.16', 'vendor_commit': VENDOR_COMMIT}
         # Source-only takes a per-run local lock, never a graph database lock.
-        lock = GraphLock(Path(config['paths']['run_root']) / '.source-locks', 'source-run:' + str(directory), identity)
+        lock = GraphLock(Path(config['paths']['run_root']) / '.source-locks',
+                         'source-run:' + str(directory), identity, shared=False)
         lock.acquire()
         state = RunState(directory, identity, resume=resume)
         state.start_heartbeat(config['heartbeat_seconds'])
+        _stop(stop, 'preflight', -1)
         contract = json.loads((ROOT / 'kag/schema/schema_contract.json').read_bytes())
         data = c3.validate_c3_manifest(contract, config['paths']['c3_manifest'],
                                       db_path=state._owned_file('source-validation.sqlite3'))
@@ -775,8 +783,11 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
             openspg_endpoint=config['endpoints']['openspg'], neo4j_endpoint=config['endpoints']['neo4j_http']),
             backend_proof=verified['backend_proof'], backend_session=verified['backend_session'])
         lock.acquire()
+        verified['writer_config'] = replace(verified['writer_config'], graph_lock=lock)
         state = RunState(directory, identity, resume=resume)
         state.start_heartbeat(config['heartbeat_seconds'])
+        # A stop before the first batch still needs a verified identity for resume.
+        _stop(stop, 'preflight', -1)
         skipped = state.db.execute("SELECT COUNT(*) FROM run_batches WHERE state='CONFIRMED'").fetchone()[0]
         if not state.completed_stage('preflight'):
             state.update('preflight', 'RUNNING', 0, 1); state.update('preflight', 'RUNNING', 1, 1)
@@ -806,6 +817,7 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
             state._receipt()
             return 0
         writer = None
+        _stop(stop, 'write-nodes', -1)
         if config['write_mode'] == 'WRITE':
             from kag.builder.writer_adapter import NativeIntegerKGWriter
             writer = (writer_factory or NativeIntegerKGWriter)(verified['writer_config'])
@@ -857,17 +869,30 @@ def _execute(config, run_id, resume, project_client, reader, vectorizer_factory,
                 pass
         return 2 if blocked else 1
     finally:
-        if state is not None: state.close()
-        if lock is not None and lock.acquired: lock.release()
-        if verified is not None:
-            verified['backend_session'].close()
-            if verified['source_index'] is not None: verified['source_index'].close()
+        release_lock = True
+        if state is not None:
+            try:
+                # A timeout or failed readback cannot prove the remote writer finished.
+                release_lock = not any(json.loads(row[0] or '{}').get('graph_writes', 0) > 0
+                    for row in state.db.execute("SELECT result FROM run_batches WHERE state='INTENT' "
+                        "AND stage IN ('write-nodes','write-edges')"))
+            except Exception:
+                release_lock = False
+            state.close()
+        try:
+            if lock is not None and lock.acquired and release_lock: lock.release()
+        finally:
+            if verified is not None:
+                verified['backend_session'].close()
+                if verified['source_index'] is not None: verified['source_index'].close()
 
 
 def run(config, *, run_id, resume=False, project_client=None, reader=None, vectorizer_factory=None,
-        writer_factory=None, stop_after_batch=None, backend_transport=None):
+        writer_factory=None, stop_after_batch=None, backend_transport=None, stop_event=None):
+    if stop_event is not None and (not isinstance(stop_event, threading.Event) or stop_after_batch is not None):
+        raise RunBlocked('CONFIG')
     return _execute(config, run_id, resume, project_client, reader, vectorizer_factory, writer_factory,
-                    stop_after_batch, backend_transport=backend_transport)
+                    stop_event if stop_event is not None else stop_after_batch, backend_transport=backend_transport)
 
 
 def verify_run(config, *, run_id, reader=None, project_client=None, backend_transport=None):

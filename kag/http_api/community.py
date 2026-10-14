@@ -40,11 +40,16 @@ def load_proof(release, proof):
     if any((release.root/('expected.sqlite3'+suffix)).exists() for suffix in ('-wal','-shm','-journal')):a._invalid()
     return a._freeze(proof)
 
-def verify_isolation(proof):
-    control=proof['isolation']
-    if socket.gethostbyname('openspg-server')!=control['server_ip']:
-        raise ValueError('broker network binding changed')
-    for host,port in ((control['neo4j_ip'],7474),(control['neo4j_ip'],7687),(control['server_ip'],8887)):
+def verify_isolation(backend_ip):
+    # Historical proof IPs are observations; probe the backend reported by the verified broker.
+    server_ip=socket.gethostbyname('openspg-server')
+    for value in (backend_ip,server_ip):
+        if type(value) is not str:raise ValueError('invalid backend address')
+        ip=ip_address(value)
+        if (ip.version!=4 or not ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_unspecified or ip.is_multicast or ip.is_reserved):
+            raise ValueError('invalid backend address')
+    for host,port in ((backend_ip,7474),(backend_ip,7687),(server_ip,8887)):
         try:
             connection=socket.create_connection((host,port),timeout=.3)
         except OSError:
@@ -75,21 +80,29 @@ class BrokerRetrievalClient(Neo4jRetrievalClient):
             headers={'Authorization':'Bearer '+self._token,'Content-Type':'application/json'})
         self.read_requests+=1
         try:
+            address=ip_address(socket.gethostbyname('openspg-server'))
+            if (address.version!=4 or not address.is_private or address.is_loopback or address.is_link_local
+                    or address.is_unspecified or address.is_multicast or address.is_reserved):
+                raise ValueError('invalid broker address')
             with self._opener.open(request,timeout=self.timeout) as response:
                 result=json.load(response)
             expected={'database':self.database,'database_id':self._descriptor['database_id'],
                 'server_id':self._descriptor['server_id'],'access':'read-only','setting':self.database}
             if (set(result)!={'rows','readonly','broker_code_sha256','backend_ip'} or result['readonly']!=expected
-                    or result['backend_ip']!=self.proof['isolation']['neo4j_ip']
                     or result['broker_code_sha256']!=self.proof['broker_code_sha256'] or type(result['rows']) is not list):
                 raise ValueError('broker authority changed')
+            if type(result['backend_ip']) is not str:raise ValueError('invalid backend address')
+            address=ip_address(result['backend_ip'])
+            if (address.version!=4 or not address.is_private or address.is_loopback or address.is_link_local
+                    or address.is_unspecified or address.is_multicast or address.is_reserved):
+                raise ValueError('invalid backend address')
+            if name=='readonly_state':verify_isolation(result['backend_ip'])
             return result['rows']
         except Exception:
             from .artifacts import ArtifactFailure,VerificationState
             raise ArtifactFailure(VerificationState.UNVERIFIED) from None
 
     def verify_controls(self):
-        verify_isolation(self.proof)
         self._query('readonly_state')
 
 def verify_backend(release,proof,reader):

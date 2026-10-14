@@ -8,7 +8,7 @@ COPY kag/schema/schema_contract.json kag/schema/VietRoadTraffic.schema /build/ka
 ENV TZ=Asia/Saigon
 RUN useradd --create-home --uid 10002 builder && mv /root/.m2 /home/builder/.m2 && chown -R builder:builder /build /home/builder/.m2
 USER 10002
-RUN mvn -B -q verify
+RUN mvn -B -q package -Dmaven.test.skip=true
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

@@ -1,112 +1,50 @@
 # Runtime Python và upstream KAG
 
-Runtime chuẩn: **CPython 3.10.16, Linux amd64**. `.python-version` và bootstrap
-kiểm đủ ba thành phần version. Windows dùng Docker Desktop Linux containers;
-Python khác version trên host không thay thế runtime này.
+Chuẩn: **CPython 3.10.16, Linux amd64**. Bootstrap kiểm đúng version trong [`.python-version`](../.python-version). Windows dùng Linux containers. Cài sản phẩm theo [INSTALL](INSTALL.md), không cần Python host.
 
-Upstream **KAG 0.8.0** lấy từ submodule `vendor/KAG`, commit
-`fdab15b3929d2ee40dfcdd388f90233096a6afc9`. Dependency pin nằm trong
-[requirements.txt](../requirements.txt); không cài thêm wheel KAG cạnh source.
+Upstream **KAG 0.8.0**, submodule `vendor/KAG`, pin `fdab15b3929d2ee40dfcdd388f90233096a6afc9` trong [bootstrap.py](../kag/bootstrap.py). Dependencies: [requirements.txt](../requirements.txt). Không cài thêm wheel KAG cạnh source.
 
-## Setup từ clone mới
+## Runtime dành cho phát triển
+
+**Bước 1 — Build:** từ root checkout có submodule:
 
 ```powershell
-git clone https://github.com/human6004/knowledge-augmented-generation-vietnamese-road-traffic-laws.git
-cd knowledge-augmented-generation-vietnamese-road-traffic-laws
-git submodule update --init vendor/KAG
 docker build --platform linux/amd64 -f docker/kag-runtime/Dockerfile -t vietroadtraffic-kag-runtime:local .
+```
+
+Image pin base OpenSPG, tạo venv riêng và chạy `pip check`; cần mạng khi build.
+
+**Bước 2 — Kiểm version offline:**
+
+```powershell
 docker run --rm --platform linux/amd64 --network none --mount "type=bind,source=$($PWD.Path),target=/workspace,readonly" vietroadtraffic-kag-runtime:local
 ```
 
-Trên Linux, thay `source=$($PWD.Path)` bằng `source=$(pwd)`. Không cần khởi động
-OpenSPG để kiểm tra import. Build cần mạng tải packages; lệnh run trên chạy
-offline, không credential, database volume, embedding hoặc graph write.
+Kết quả: phiên bản Python; không mở graph/provider. Linux thay `source=$($PWD.Path)` bằng `source=$(pwd)`. Source chỉ đọc, giữ `.git` để bootstrap kiểm pin.
 
-[Dockerfile](../docker/kag-runtime/Dockerfile) pin base OpenSPG Server bằng digest,
-tạo venv `/opt/kag-venv` với `system-site-packages=false`, cài requirements và
-chạy `pip check`. SDK có sẵn trong base image không thay dependency của venv.
-Build context chỉ đưa Dockerfile và requirements; không đưa source, dataset
-hoặc `.env.kag` vào image. Source bind mount chỉ đọc, giữ `.git` để bootstrap
-kiểm submodule. CMD mặc định chạy `tests/runtime`.
+Có thể dùng venv ngoài repo nếu host đã có đúng Python/Linux/architecture; cài requirements và `pip check` trước [tests](../tests/README.md). Không dùng Python khác version thay runtime chuẩn.
 
-Nếu có đúng CPython **3.10.16** trên Linux amd64, có thể dùng venv trực tiếp:
+## Bootstrap
 
-```sh
-python3.10 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m pip check
-.venv/bin/python -B -m unittest discover -s tests/runtime -v
-```
-
-Build thành công hoặc import pass chỉ chứng minh môi trường tương ứng; không
-chứng minh graph live, Solver hoặc benchmark pháp lý.
-
-## Một bootstrap cho mọi entry point thật
-
-Entrypoint dùng SDK gọi một hàm trước SDK imports:
+Entrypoint dùng SDK gọi trước SDK imports:
 
 ```python
 from kag.bootstrap import initialize
 initialize()
-
-from kag.builder.writer_adapter import NativeIntegerKGWriter
-from kag.builder.component.vectorizer.batch_vectorizer import BatchVectorizer
-from kag.common.tools.search_api.impl.openspg_search_api import OpenSPGSearchAPI
 ```
 
-`kag.builder` ưu tiên project rồi fallback vendor; các package upstream khác
-ưu tiên vendor. Bootstrap chạy initializer/registry upstream; không chèn
-`sys.path` trong từng script hoặc copy SDK sang thư mục tạm. Core builder
-offline không tự nạp SDK.
+Bootstrap ghép namespace: Builder ưu tiên project rồi vendor; package upstream khác ưu tiên vendor. Initializer/registry upstream vẫn là nguồn chuẩn; gọi lại không đăng ký lại. Core offline không tự nạp SDK.
 
-Bootstrap từ chối Python sai version, submodule thiếu/sai commit, vendor bẩn
-hoặc SDK khác đã nạp trong `knext`, `kag.common`, `kag.interface`. Khi local
-`kag.solver` đã nạp, bootstrap reload initializer upstream sau ghép namespace,
-giữ module object và không reload interfaces/registry/submodules. Gọi lại
-`initialize()` không đăng ký lại.
+Từ chối vendor thiếu/sai pin/bẩn hoặc SDK ngoài pin đã nạp. Kiểm working tree chuẩn hóa CRLF/executable bit cho Windows; vẫn chặn file sửa/untracked. Không tự chèn `sys.path`, copy SDK, xóa package/init hoặc sửa vendor để né kiểm tra. `KAG_DEBUG_DUMP_CONFIG=0` ngăn dump secrets khi import.
 
-Kiểm working tree chuẩn hóa CRLF như Git Windows, bỏ executable bit của NTFS;
-file sửa hoặc untracked vẫn bị từ chối. Không xóa package/init để né bootstrap.
-`KAG_DEBUG_DUMP_CONFIG=0` ngăn upstream dump config chứa secret khi import.
-Nguồn import và namespace: [bản đồ mã nguồn](architecture.md#bản-đồ-mã-nguồn).
+## Inputs và images
 
-## Input và bằng chứng hash
+Ba inputs canonical trong [`artifacts/inputs/xref-a3g2/`](../artifacts/inputs/xref-a3g2/); [`manifest.json`](../artifacts/inputs/xref-a3g2/manifest.json) giữ hashes/provenance, [`inputs.py`](../kag/builder/inputs.py) kiểm byte exact. Không phụ thuộc workspace tác giả, không fallback inputs hoặc sửa golden; `.gitattributes` bảo toàn bytes qua clone.
 
-Ba input chuẩn được version trong `artifacts/inputs/xref-a3g2/`.
-`manifest.json` ghi tên, kích thước, SHA-256 và provenance; máy mới không cần
-workspace nguồn ngoài Git. `.gitattributes` giữ byte qua clone Windows/Linux.
+C3/C4.3a là tên contract/artifact còn được consumers dùng, không phải bước startup. Quyền ghi kiểm riêng tại [runner](runner.md#config) và [backend identity](backend-identity.md#writer-và-lock).
 
-Truyền đúng các file này vào `load_inputs`, không fallback sang file khác.
-`kag.builder.inputs.ARTIFACT_HASHES` và tests runtime kiểm SHA-256 exact:
+Compose/Dockerfiles là nguồn chuẩn image pins; không duy trì danh sách digest thứ hai trong Markdown. KAG API/Builder/OpenSPG dùng cùng image source. Cấu hình runtime/serving: [Docker](../docker/README.md).
 
-```text
-xref_a3g2_final_ledger.jsonl
-1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4
-xref_a3g2_final_audit.json
-2a130da7f4c6ad0bb673366e9bb6e390f3e481cb5381003933f3195eb23e1fb3
-xref_a3g2_downstream_policy.json
-dcd12c131a9033efaf8f93703cf5423d59e3827f242249a5727759cb49d42b0e
-```
+## Kiểm thử
 
-C3/C4.3a trong manifest là tên contract/artifact được consumers dùng. Setup
-không đổi path, tái tạo plan hoặc sửa golden. Scope và quyền ghi kiểm riêng
-tại [writer scope](production-writer-scope.md).
-
-## Images OpenSPG
-
-`docker-compose.kag.yml` pin literal digest cho server/MySQL/Neo4j.
-MinIO phải chọn image tương thích qua `STEP8_MINIO_IMAGE`; API dùng image riêng
-qua `STEP8_API_IMAGE`. Pin runtime không yêu cầu recreate stack hoặc đổi volumes.
-Triển khai và serving proof: [cài đặt](INSTALL.md), [cập nhật](UPDATE.md).
-
-## Kiểm tra offline
-
-Chạy mỗi suite trong process riêng để tránh tên fixture/registry trùng; source
-chỉ đọc, network denied, output/fixtures ngoài repo. Lệnh và common lock mount
-cho runner tests nằm tại [hướng dẫn tests](../tests/README.md). Host checks,
-source-only validation và live graph proof có phạm vi kiểm chứng khác nhau.
-
-CLI builder/verify: `python -B -m kag`, xem [runner](runner.md).
-CLI dataset: `python -B -m kag.evaluation`, xem
-[Evaluation Framework](architecture.md#evaluation-framework). Kiểm setup không
-cần provider, graph live hoặc full benchmark.
+[Tests](../tests/README.md) hướng dẫn suite riêng, source read-only, network denied, output ngoài repo và shared lock mount. Offline/import checks không xác nhận graph live hoặc benchmark pháp lý.

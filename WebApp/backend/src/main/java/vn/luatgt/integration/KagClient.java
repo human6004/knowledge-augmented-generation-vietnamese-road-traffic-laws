@@ -28,6 +28,8 @@ public class KagClient {
     private final KagSchema schema;
     private final String tokenFile,inspectTokenFile,release,snapshot;
     private final Clock clock;
+    private RestClient builderClient;
+    @Value("${app.kag-builder-token-file:}") private String builderTokenFile="";
     private static final ZoneId LEGAL_ZONE=ZoneId.of("Asia/Saigon");
     private static final Set<String> REQUEST_FIELDS=Set.of("user_id","message","context_id","schema_contract");
     private static final Set<String> CITATION_FIELDS=Set.of("doc_id","unit_id","sign_id","evidence_id","field","start","end","quote");
@@ -57,6 +59,63 @@ public class KagClient {
     public void inspectionTimeout(int seconds) {
         if(seconds<2||seconds>25) throw new IllegalArgumentException("Bounded KAG inspection timeout required");
         inspectionFactory.setReadTimeout(Duration.ofSeconds(seconds));
+    }
+    @Value("${app.kag-builder-url:}")
+    public void builderEndpoint(String url) {
+        if(url.isBlank()) {builderClient=null;return;}
+        var uri=java.net.URI.create(url);
+        if(!Set.of("http","https").contains(uri.getScheme())||uri.getHost()==null||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null||!Set.of("","/").contains(uri.getPath()))
+            throw new IllegalArgumentException("Private Builder endpoint required");
+        var factory=new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
+        factory.setReadTimeout(Duration.ofSeconds(3));
+        builderClient=RestClient.builder().baseUrl(url).requestFactory(factory).build();
+    }
+    public JsonNode builderStatus() {return builderRequest(null,null);}
+    public JsonNode builderAction(String action,String runId) {
+        if(!Set.of("build","stop","resume").contains(action)||runId==null||!runId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Thao tác Builder không hợp lệ");
+        return builderRequest(action,runId);
+    }
+    private JsonNode builderRequest(String action,String runId) {
+        try {
+            if(builderClient==null||builderTokenFile.isBlank()||!Path.of(builderTokenFile).isAbsolute())throw new IOException();
+            String token=readToken(builderTokenFile);
+            for(String file:List.of(tokenFile,inspectTokenFile)) {
+                String other=null;try{other=readToken(file);}catch(IOException ignored){}
+                if(token.equals(other))throw new IOException();
+            }
+            RestClient.RequestHeadersSpec<?> request=action==null?builderClient.get().uri("/v1/builder/status"):
+                builderClient.post().uri("/v1/builder/"+action).contentType(MediaType.APPLICATION_JSON).body(Map.of("run_id",runId));
+            return request.header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                int code=res.getStatusCode().value();
+                if(code==409)throw new ResponseStatusException(HttpStatus.CONFLICT,"Builder đang bận hoặc thao tác chưa an toàn; hãy tải lại trạng thái");
+                if(code==422)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Yêu cầu Builder không hợp lệ");
+                if(code!=(action==null?200:202))throw new IOException();
+                var body=inspectionBody(res,token);validateBuilder(body);
+                if(action!=null&&!body.path("run_id").asText().equals(runId))throw new IOException();
+                return body;
+            });
+        } catch(ResponseStatusException e) {throw e;}
+        catch(Exception e) {throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Builder chưa khả dụng; kiểm tra cấu hình Worker và quyền điều khiển");}
+    }
+    private void validateBuilder(JsonNode body) throws IOException {
+        String state=body.path("state").asText();var actions=body.path("actions");
+        if(!fields(body).equals(Set.of("contract_version","state","run_id","target","progress","error_code","actions","delete_reason","production_write"))||
+            !body.path("contract_version").asText().equals("builder-control-v1")||!Set.of("IDLE","RUNNING","STOPPING","STOPPED","COMPLETE","BLOCKED").contains(state)||
+            !fields(actions).equals(Set.of("build","stop","resume","delete"))||!body.path("delete_reason").asText().equals("DELETE_NOT_AUTHORIZED")||!body.path("production_write").asText().equals("BLOCKED"))throw new IOException();
+        for(String name:List.of("build","stop","resume","delete")) {
+            boolean allowed=switch(name){case "build"->Set.of("IDLE","COMPLETE").contains(state);case "stop"->state.equals("RUNNING");case "resume"->state.equals("STOPPED");default->false;};
+            if(!actions.path(name).isBoolean()||actions.path(name).asBoolean()!=allowed)throw new IOException();
+        }
+        var runId=body.path("run_id");
+        if(runId.isNull()? !Set.of("IDLE","BLOCKED").contains(state): !runId.isTextual()||!runId.asText().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))throw new IOException();
+        var target=body.path("target");
+        if(target.isNull()? !state.equals("BLOCKED"): !fields(target).equals(Set.of("project_id","database","namespace"))||!bounded(target.path("project_id"),1,Integer.MAX_VALUE)||
+            !target.path("database").asText().matches("(?:vietroadtraffic|freshsample[a-z0-9]{8,40})")||!target.path("namespace").asText().equals("VietRoadTraffic"))throw new IOException();
+        var progress=body.path("progress");
+        if(!progress.isNull()&&(!fields(progress).equals(Set.of("stage","done","total"))||!Set.of("preflight","plan","vectorize","export-artifact","write-nodes","verify-nodes","write-edges","verify","release").contains(progress.path("stage").asText())||
+            !bounded(progress.path("total"),0,Integer.MAX_VALUE)||!bounded(progress.path("done"),0,progress.path("total").asInt())))throw new IOException();
+        var error=body.path("error_code");if(!error.isNull()&&(!error.isTextual()||!error.asText().matches("[A-Z_]{1,32}")))throw new IOException();
     }
     public Map<String,Object> status() {
         return Map.of("liveness",probe("/v1/health","either"),

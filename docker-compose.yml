@@ -1,4 +1,7 @@
-name: webapp
+name: ${COMPOSE_PROJECT_NAME:-luatgt}
+
+# One product project; the included file is a service fragment, not another stack.
+include: [docker-compose.kag.yml]
 
 services:
   mysql:
@@ -6,11 +9,11 @@ services:
     environment:
       MYSQL_DATABASE: luatgt
       MYSQL_USER: luatgt
-      MYSQL_PASSWORD: ${DB_PASSWORD:?Run docker/init-env.ps1 first}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run docker/init-env.ps1 -Update first}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set credentials in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set credentials in .env}
       TZ: UTC
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_bin", "--default-time-zone=+00:00"]
-    ports: ["127.0.0.1:3306:3306"]
+    ports: ["127.0.0.1:${MYSQL_PORT:-3306}:3306"]
     volumes: ["kag-data:/var/lib/mysql"]
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u luatgt luatgt -e 'SELECT 1'"]
@@ -20,10 +23,10 @@ services:
       start_period: 60s
   redis:
     image: redis:7.4-bookworm
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Run docker/init-env.ps1 first}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set credentials in .env}"]
     environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD:?Run docker/init-env.ps1 first}
-    ports: ["127.0.0.1:6379:6379"]
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set credentials in .env}
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
     volumes: ["redis-data:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -35,56 +38,62 @@ services:
       context: ./docker/minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_USER:?Run docker/init-env.ps1 first}
-      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?Run docker/init-env.ps1 first}
-    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+      MINIO_ROOT_USER: ${MINIO_USER:-luatgt-local}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?Set credentials in .env}
+    ports: ["127.0.0.1:${MINIO_PORT:-9000}:9000", "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"]
     volumes: ["minio-data:/data"]
   backend:
     build:
       context: .
       dockerfile: docker/backend/Dockerfile
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:${BACKEND_PORT:-8080}:8080"]
     environment:
       DB_URL: jdbc:mysql://mysql:3306/luatgt?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
       DB_USER: luatgt
-      DB_PASSWORD: ${DB_PASSWORD:?Run docker/init-env.ps1 first}
-      REDIS_URL: redis://:${REDIS_PASSWORD:?Run docker/init-env.ps1 first}@redis:6379
-      JWT_SECRET: ${JWT_SECRET:?Run docker/init-env.ps1 first}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?Run docker/init-env.ps1 first}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run docker/init-env.ps1 first}
+      DB_PASSWORD: ${DB_PASSWORD:?Set credentials in .env}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set credentials in .env}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Set credentials in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@luatgt.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set credentials in .env}
       MINIO_URL: http://minio:9000
-      MINIO_USER: ${MINIO_USER:?Run docker/init-env.ps1 first}
-      MINIO_PASSWORD: ${MINIO_PASSWORD:?Run docker/init-env.ps1 first}
-      KAG_BASE_URL: ${KAG_BASE_URL:-http://kag-ingress:8080}
+      MINIO_USER: ${MINIO_USER:-luatgt-local}
+      MINIO_PASSWORD: ${MINIO_PASSWORD:?Set credentials in .env}
+      KAG_BASE_URL: http://kag-api:8000
       KAG_TOKEN_FILE: /run/secrets/kag_query_token
       KAG_INSPECT_TOKEN_FILE: /run/secrets/kag_inspect_token
+      KAG_BUILDER_URL: http://openspg-server:8010
+      KAG_BUILDER_TOKEN_FILE: /run/secrets/builder_token
       KAG_RELEASE_ID: ${KAG_RELEASE_ID:-}
       KAG_WEBAPP_SNAPSHOT_ID: ${KAG_WEBAPP_SNAPSHOT_ID:-}
       KAG_QUERY_TIMEOUT_SECONDS: ${KAG_QUERY_TIMEOUT_SECONDS:-30}
       KAG_INSPECTION_TIMEOUT_SECONDS: ${KAG_INSPECTION_TIMEOUT_SECONDS:-2}
       TZ: Asia/Ho_Chi_Minh
-    secrets: [kag_query_token, kag_inspect_token]
-    networks: [default, kag-ingress]
+    secrets: [kag_query_token, kag_inspect_token, builder_token]
+    networks: [default, readbus]
     depends_on:
       mysql: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_started}
+      kag-api: {condition: service_healthy}
+      kag-builder: {condition: service_healthy}
   frontend:
     build:
       context: ./WebApp/frontend
       dockerfile: ../../docker/frontend/Dockerfile
-    ports: ["127.0.0.1:8081:80"]
+    ports: ["127.0.0.1:${WEBAPP_PORT:-8081}:80"]
     depends_on: [backend]
-networks:
-  kag-ingress:
-    name: ${STEP8_KAG_PROJECT:?Set the same project as the KAG env file}_ingress
-    external: true
 volumes:
   kag-data:
+    name: ${WEBAPP_STORAGE_PROJECT:-${COMPOSE_PROJECT_NAME:-luatgt}}_kag-data
+    external: ${WEBAPP_STORAGE_EXTERNAL:-false}
   redis-data:
+    name: ${WEBAPP_STORAGE_PROJECT:-${COMPOSE_PROJECT_NAME:-luatgt}}_redis-data
+    external: ${WEBAPP_STORAGE_EXTERNAL:-false}
   minio-data:
+    name: ${WEBAPP_STORAGE_PROJECT:-${COMPOSE_PROJECT_NAME:-luatgt}}_minio-data
+    external: ${WEBAPP_STORAGE_EXTERNAL:-false}
 secrets:
   kag_query_token:
-    file: ${KAG_TOKEN_FILE:?Provide an external backend-only KAG query token file}
+    file: ${KAG_STATE_DIR:-../luatgt-state}/query.token
   kag_inspect_token:
-    file: ${KAG_INSPECT_TOKEN_FILE:?Provide a distinct external backend-only KAG inspect token file}
+    file: ${KAG_STATE_DIR:-../luatgt-state}/inspect.token

@@ -35,3 +35,6 @@
 !vendor/KAG/tests/unit/executor/kag_config.yaml
 !vendor/KAG/tests/unit/kag_config.yaml
 !vendor/KAG/tests/unit/test_planner/kag_config.yaml
+
+!docker/
+!docker/openspg-server.sh

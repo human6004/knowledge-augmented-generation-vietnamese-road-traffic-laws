@@ -34,7 +34,8 @@ class CommunityTests(unittest.TestCase):
         with self.assertRaises(artifacts.ArtifactFailure):self.load()
     def test_binding_and_missing_control_denied(self):
         for field,value in [('namespace','Other'),('database_id','other'),('graph_fingerprint','0'*64),
-                ('release_descriptor_sha256','0'*64),('source_snapshot_id','wrong')]:
+                ('release_descriptor_sha256','0'*64),('source_snapshot_id','wrong'),
+                ('broker_url','http://other-server:8899')]:
             with self.subTest(field=field):
                 saved=copy.deepcopy(self.proof);self.proof[field]=value;self.seal()
                 with self.assertRaises(artifacts.ArtifactFailure):self.load()
@@ -51,26 +52,43 @@ class CommunityTests(unittest.TestCase):
         with self.assertRaises(artifacts.ArtifactFailure):self.load()
     def test_isolation_tcp_accessible_denied(self):
         with patch.object(community.socket,'gethostbyname',return_value='172.20.0.3'), patch.object(community.socket,'create_connection',return_value=object()):
-            with self.assertRaises(ValueError):community.verify_isolation(self.proof)
+            with self.assertRaises(ValueError):community.verify_isolation('172.20.0.2')
     def test_isolation_tcp_denied_accepted(self):
         with patch.object(community.socket,'gethostbyname',return_value='172.20.0.3'), patch.object(community.socket,'create_connection',side_effect=OSError('denied')) as conn:
-            community.verify_isolation(self.proof);self.assertEqual(conn.call_count,3)
-    def test_stale_broker_ip_denied(self):
-        with patch.object(community.socket,'gethostbyname',return_value='172.20.0.9'):
-            with self.assertRaises(ValueError):community.verify_isolation(self.proof)
-    def test_broker_response_identity_hash_readonly_and_ip_drift_denied(self):
+            community.verify_isolation('172.20.0.2');self.assertEqual(conn.call_count,3)
+    def test_isolation_probes_current_addresses_after_ip_change(self):
+        def blocked(address,*,timeout):
+            self.assertIn(address,(('172.20.0.8',7474),('172.20.0.8',7687),('172.20.0.9',8887)))
+            raise OSError('denied')
+        with patch.object(community.socket,'gethostbyname',return_value='172.20.0.9'), \
+                patch.object(community.socket,'create_connection',side_effect=blocked) as conn:
+            community.verify_isolation('172.20.0.8');self.assertEqual(conn.call_count,3)
+    def test_isolation_nonprivate_or_malformed_addresses_denied(self):
+        for address in ('8.8.8.8','127.0.0.1','0.0.0.0','169.254.1.1','224.0.0.1','::1','bad',None,123):
+            with self.subTest(address=address), patch.object(community.socket,'gethostbyname',return_value='172.20.0.3'):
+                with self.assertRaises(ValueError):community.verify_isolation(address)
+            with self.subTest(server=address), patch.object(community.socket,'gethostbyname',return_value=address):
+                with self.assertRaises(ValueError):community.verify_isolation('172.20.0.2')
+    def test_broker_response_identity_hash_readonly_denied_ip_change_accepted(self):
         client=community.BrokerRetrievalClient(self.fx.release,self.load(),'t'*43,timeout=1)
         readonly={'database':client.database,'database_id':self.fx.release.descriptor['database_id'],
             'server_id':self.fx.release.descriptor['server_id'],'access':'read-only','setting':client.database}
         response={'rows':[],'readonly':readonly,'broker_code_sha256':'b'*64,'backend_ip':'172.20.0.2'}
         def read(value):
             client._opener=SimpleNamespace(open=lambda *a,**kw:io.BytesIO(raw_json(value)))
-            return client._query('indexes')
+            with patch.object(community.socket,'gethostbyname',return_value='172.20.0.9'):
+                return client._query('indexes')
         self.assertEqual(read(response),[])
-        mutations=[('backend_ip','172.20.0.9'),('broker_code_sha256','0'*64),('readonly',dict(readonly,access='read-write'))]
+        self.assertEqual(read(dict(response,backend_ip='172.20.0.8')),[])
+        mutations=[('backend_ip','8.8.8.8'),('backend_ip',123),('broker_code_sha256','0'*64)]
+        mutations += [('readonly',dict(readonly,**{key:value})) for key,value in
+            (('database','wrong'),('database_id','other'),('server_id','other'),('access','read-write'),('setting','wrong'))]
         for key,value in mutations:
             with self.subTest(key=key):
                 with self.assertRaises(artifacts.ArtifactFailure):read(dict(response,**{key:value}))
+        client._opener=SimpleNamespace(open=lambda *a,**kw:self.fail('credential sent outside private broker'))
+        with patch.object(community.socket,'gethostbyname',return_value='8.8.8.8'):
+            with self.assertRaises(artifacts.ArtifactFailure):client._query('indexes')
 
     def test_api_vector_uses_real_community_broker_full_graph_and_denies_readonly_drift(self):
         import asyncio
@@ -138,12 +156,15 @@ class CommunityTests(unittest.TestCase):
                     raise HTTPError(request.full_url,error.status,'DENIED',None,
                                     io.BytesIO(b'{"error":"DENIED"}')) from None
                 return io.BytesIO(raw_json(result))
+        addresses={'openspg-server':'172.20.0.3','openspg-neo4j':'172.20.0.2'}
+        direct_access=[False]
         def resolve(host):
-            if host=='openspg-server': return '172.20.0.3'
-            if host=='openspg-neo4j': return '172.20.0.2'
+            if host in addresses:return addresses[host]
             raise AssertionError('unexpected DNS target')
         def blocked(address,*,timeout):
-            self.assertIn(address,(('172.20.0.2',7474),('172.20.0.2',7687),('172.20.0.3',8887)))
+            self.assertIn(address,((addresses['openspg-neo4j'],7474),(addresses['openspg-neo4j'],7687),
+                                   (addresses['openspg-server'],8887)))
+            if direct_access[0]:return object()
             raise ConnectionRefusedError('offline isolation fixture')
 
         app=create_app(ApiSettings(SECRETS),enable_sample_routes=True)
@@ -166,6 +187,28 @@ class CommunityTests(unittest.TestCase):
                 self.assertTrue({'nodes','edges','batch_nodes','batch_edges','retrieval_expand',
                                  'retrieval_vector'}<=set(backend.operations))
                 self.assertFalse({'reader_identity','reader_privileges'}&set(backend.operations))
+                retained_proof=(fx.root/'sample-serving.json').read_bytes()
+                addresses.update({'openspg-server':'172.20.0.9','openspg-neo4j':'172.20.0.8'})
+                ready=await client.get('/v1/health?mode=ready&capability=retrieve-vector',headers=headers)
+                self.assertEqual(ready.status_code,200,ready.text)
+                result=await client.post('/v1/retrieve/vector',headers=headers,json=body)
+                self.assertEqual(result.status_code,200,result.text)
+                self.assertEqual(result.json()['items'][0]['entity_id'],'unit-1')
+                self.assertEqual((fx.root/'sample-serving.json').read_bytes(),retained_proof)
+                self.assertEqual(app.state.runtime_settings.sample_proof_sha256,self.pin)
+                direct_access[0]=True
+                denied=await client.post('/v1/retrieve/vector',headers=headers,json=body)
+                self.assertEqual(denied.status_code,503,denied.text)
+                direct_access[0]=False
+                policy._token=b'wrong-token'
+                denied=await client.post('/v1/retrieve/vector',headers=headers,json=body)
+                self.assertEqual(denied.status_code,503,denied.text)
+                policy._token=('t'*43).encode()
+                for field in ('databaseID','serverID'):
+                    original=fx.metadata[field];fx.metadata[field]='wrong'
+                    denied=await client.post('/v1/retrieve/vector',headers=headers,json=body)
+                    self.assertEqual(denied.status_code,503,denied.text)
+                    fx.metadata[field]=original
                 backend.drift=True
                 denied=await client.post('/v1/retrieve/vector',headers=headers,json=body)
                 self.assertEqual(denied.status_code,503,denied.text)

@@ -15,6 +15,13 @@ public class KagController {
         return infrastructure.sampleInspection();
     }
     @GetMapping("/admin/kag/pipeline") JsonNode pipeline() { return infrastructure.pipelineStatus(); }
+    @GetMapping("/admin/kag/builder/status") JsonNode builderStatus() { return infrastructure.builderStatus(); }
+    @PostMapping("/admin/kag/builder/build") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
+    JsonNode build(@Valid @RequestBody BuilderRunRequest request) { return infrastructure.builderAction("build",request.runId()); }
+    @PostMapping("/admin/kag/builder/stop") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
+    JsonNode stop(@Valid @RequestBody BuilderRunRequest request) { return infrastructure.builderAction("stop",request.runId()); }
+    @PostMapping("/admin/kag/builder/resume") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
+    JsonNode resume(@Valid @RequestBody BuilderRunRequest request) { return infrastructure.builderAction("resume",request.runId()); }
     @GetMapping("/admin/kag/benchmark/datasets") JsonNode datasets() { return infrastructure.benchmarkDatasets(); }
     @PostMapping("/admin/kag/retrieve") JsonNode retrieve(@Valid @RequestBody KagRetrieveRequest request) { return infrastructure.retrieve(request); }
     @GetMapping("/admin/kag/schema") Map<String,Object> schema() { return Map.of("identity",schema.identity(),"contract",schema.contract()); }
