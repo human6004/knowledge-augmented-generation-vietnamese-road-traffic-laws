@@ -6,7 +6,6 @@ venv/
 .env
 .env.*
 !/.env.example
-!/.env.kag.example
 
 /kag/kag_config.yaml
 
