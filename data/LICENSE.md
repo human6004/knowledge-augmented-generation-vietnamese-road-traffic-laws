@@ -32,8 +32,8 @@ Phần này do bạn (chủ repo) sở hữu và tự quyết định giấy ph�
 
 **Bộ dữ liệu này không thay thế văn bản pháp luật chính thức và không phải tư vấn pháp lý.**
 
-- Text được **trích tự động từ PDF**. Dù đã qua kiểm tra (`audit_corpus.py`, 0/82 văn bản
-  bị gắn cờ), vẫn có thể sai sót ở bảng biểu, phụ lục kỹ thuật, và ký tự đặc biệt.
+- Text được **trích tự động từ PDF**, vẫn có thể sai sót ở bảng biểu, phụ lục kỹ thuật
+  và ký tự đặc biệt. Kết quả kiểm tra cấu trúc không thay thế đối chiếu nội dung nguồn.
 - Bảng mức phạt trong `penalties.jsonl` do **regex ghép lại** từ ba chỗ rời trong nghị định.
   Đã đối chiếu thủ công một số trường hợp, **chưa kiểm 100%**.
 - Trường ngày hiệu lực suy ra từ câu chữ trong văn bản và từ quan hệ thay thế; văn bản có

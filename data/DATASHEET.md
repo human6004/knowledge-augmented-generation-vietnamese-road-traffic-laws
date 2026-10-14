@@ -1,74 +1,30 @@
-# Dataset Overview
+# Thông tin dataset
 
-Tên dataset:
-Vietnamese Road Traffic Legal Dataset
+**Tên:** Vietnamese Road Traffic Legal Dataset. **Ngôn ngữ:** tiếng Việt. **Mục đích:** chuẩn hóa pháp luật giao thông đường bộ cho truy xuất, graph và đánh giá.
 
-Mục đích:
-Tập hợp và chuẩn hóa các văn bản pháp luật liên quan đến giao thông đường bộ Việt Nam.
+## Nguồn và cấu trúc
 
-Ngôn ngữ:
-Tiếng Việt.
+Văn bản pháp luật lấy từ Công báo Chính phủ và CDN đi kèm. `raw/` giữ PDF/HTML/DOC nguồn; `processed/` giữ Markdown, units, quan hệ, tham chiếu, mức phạt và biển báo. URL từng văn bản ở [sources.csv](metadata/sources.csv), danh mục/phạm vi ở [document_inventory.csv](metadata/document_inventory.csv).
 
-## Data Sources
+[README dữ liệu](README.md) mô tả từng thư mục, ID và cách dùng xrefs.
 
-Nguồn chính là các văn bản pháp luật và Công báo được lưu trong raw/.
+## Snapshot corpus
 
-Đường dẫn nguồn của từng văn bản nằm trong metadata/sources.csv. Danh mục văn bản nằm trong metadata/document_inventory.csv.
+[corpus.json](metadata/corpus.json) ghi `dataset_date=2026-10-02`; [checksums.json](metadata/checksums.json) giữ SHA-256.
 
-## Dataset Structure
+- 92 văn bản metadata; 91 văn bản production Markdown.
+- 55.597 units; 821 relations; 17.512 xrefs.
+- 1.966 penalties; 887 signs.
 
-raw/
-Nguồn gốc, gồm các tệp PDF, HTML và DOC.
+`22_VBHN_BXD` được lưu trong `processed/out_of_scope/`, không thuộc corpus chính. `processed/eval/` giữ 71 câu đánh giá nguồn, không thuộc nguồn truy xuất và chưa là benchmark chính thức.
 
-processed/
-Dữ liệu đã chuẩn hóa.
+Snapshot mô tả dữ liệu đã lưu; không xác nhận mọi văn bản đang có hiệu lực hoặc corpus bao phủ mọi thay đổi pháp luật.
 
-metadata/
-Thông tin mô tả dataset và nguồn.
+## Giới hạn và điều kiện sử dụng
 
-## Processed Data
+- Text trích tự động có thể sai ở OCR, ký tự, bảng biểu và phụ lục; bản Công báo cũng có thể có lỗi nguồn.
+- Mức phạt được ghép tự động, chưa kiểm duyệt toàn bộ; ngày hiệu lực có thể áp dụng theo từng phần.
+- Dẫn chiếu có thể ngoài corpus, thiếu endpoint hoặc chưa rõ ngữ nghĩa; chỉ dùng policy `SAFE_EDGE` đã kiểm.
+- Dữ liệu cấu trúc và câu hỏi đánh giá là phần pipeline tạo ra, cần phân biệt với luật gốc.
 
-documents/
-Văn bản Markdown.
-
-meta/
-Metadata văn bản, quan hệ giữa văn bản và tham chiếu.
-
-units/
-Cấu trúc pháp lý: Điều, Khoản và Điểm.
-
-penalties/
-Thông tin xử phạt.
-
-signs/
-Thông tin biển báo.
-
-eval/
-Dữ liệu đánh giá.
-
-out_of_scope/
-Văn bản được lưu để tham khảo nhưng không thuộc corpus chính.
-
-## Current Dataset
-
-Đếm từ production JSONL ngày 02/10/2026. `metadata/corpus.json`, `metadata/sources.csv` và `metadata/checksums.json` mô tả cùng tập dữ liệu production.
-
-- 92 văn bản metadata
-- 91 văn bản production Markdown
-- 55,597 production units
-- 821 relations
-- 17,512 xrefs
-- 1,966 penalties
-- 887 signs
-
-Một văn bản khác được lưu trong processed/out_of_scope/ và không thuộc corpus chính.
-
-## Known Limitations
-
-- Một số ký tự trong văn bản nguồn bị lỗi ngay từ bản Công báo.
-- Một số tham chiếu dẫn tới văn bản ngoài corpus.
-- Một số trang scan cũ có giới hạn chất lượng OCR.
-
-## License
-
-Xem LICENSE.md.
+Đối chiếu văn bản gốc tại `source_url` trước khi trích dẫn. Dataset không thay thế văn bản pháp luật chính thức hoặc tư vấn pháp lý. Điều kiện sử dụng và căn cứ nguồn: [LICENSE.md](LICENSE.md).
