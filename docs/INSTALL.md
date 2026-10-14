@@ -87,13 +87,36 @@ Nếu `.env` hoặc token đã tồn tại, đoạn lệnh ở Bước 3 sẽ t�
 
 Trong **Properties → Security**, giới hạn quyền đọc `.env` và state cho người vận hành, giữ quyền Docker Desktop cần để đọc chúng. Chưa cần tạo graph ở bước này.
 
+
 ## Bước 5 — Khởi động
+
+Sau khi hoàn tất tạo `.env` và 4 token, chạy tại thư mục gốc `luatgt-kag`:
 
 ```powershell
 docker compose up -d --build
 ```
 
-Lệnh build và chạy **12 services trong project `luatgt`**. Compose chính tự include `docker-compose.kag.yml`; không ghép hai file bằng `-f` hoặc chạy KAG riêng. Đợi tải dependencies và khởi tạo databases; chỉ tiếp tục khi lệnh kết thúc không lỗi.
+Docker Compose sẽ tự build các image cần thiết và khởi động 12 services trong project `luatgt`.
+
+Image `luatgt-kag:local` được build từ source code trong repository, không cần tải từ Docker Hub hoặc đăng nhập Docker Hub.
+
+Compose chính tự include `docker-compose.kag.yml`. Không cần chạy KAG riêng hoặc ghép hai file bằng `-f`.
+
+Lần cài đầu có thể mất nhiều thời gian vì Docker cần tải images và dependencies. Hãy đợi lệnh chạy xong.
+
+Sau đó kiểm tra:
+
+```powershell
+Write-Host "Exit code: $LASTEXITCODE"
+docker compose ps -a
+```
+
+Nếu exit code là `0`, lệnh Compose đã hoàn thành thành công. Tiếp tục kiểm tra trạng thái các services.
+
+Nếu exit code khác `0`, hoặc có service `Exited` hoặc `Unhealthy`, kiểm tra log của service đó trước khi tiếp tục.
+
+Không xóa Docker volumes, không tạo lại `.env` hoặc token để xử lý lỗi khởi động.
+
 
 ## Bước 6 — Mở WebApp
 
