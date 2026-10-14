@@ -5,6 +5,7 @@
 **/target
 **/dist
 **/.env
+**/.secrets
 **/.env.*
 **/*.log
 tests/

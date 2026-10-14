@@ -30,29 +30,31 @@ Kết quả: có source và `vendor/KAG` đúng phiên bản. **Các lệnh còn
 
 ## Bước 3 — Tự động tạo mật khẩu và token
 
-**Chỉ chạy một lần khi cài mới**, trong thư mục gốc `luatgt-kag`. Sao chép và chạy nguyên khối PowerShell dưới đây. Lệnh sẽ tự tạo `.env` với **9 mật khẩu/khóa độc lập**, mỗi giá trị là 64 ký tự hexadecimal ngẫu nhiên, đồng thời tạo **4 file token**. Không cần tự nhập từng mật khẩu hoặc chạy thêm lệnh tạo token.
+Chạy trong thư mục gốc `luatgt-kag`. Đoạn PowerShell dưới đây tạo `.env` nếu chưa có, với **9 mật khẩu/khóa độc lập**, mỗi giá trị là 64 ký tự hexadecimal ngẫu nhiên, và tạo các token còn thiếu. Nếu đã được cấp `.env` để cài mới trên máy riêng, giữ file đó và chạy cùng đoạn lệnh để tự tạo 4 token. `.env` và token đã tồn tại không bị ghi đè. Máy có database cũ phải giữ bộ secrets tương ứng, dùng [UPDATE](UPDATE.md).
 
 ```powershell
-if (Test-Path -LiteralPath .env) { throw 'Đã có .env; dùng UPDATE, không tạo lại secrets.' }
-if (-not (Test-Path -LiteralPath .env.example -PathType Leaf)) { throw 'Thiếu .env.example' }
-
-$state = [IO.Path]::GetFullPath((Join-Path $PWD.Path '..\luatgt-state'))
+$ErrorActionPreference = 'Stop'
+$createEnv = -not (Test-Path -LiteralPath .env)
+$envSource = if ($createEnv) { '.env.example' } else { '.env' }
+$content = [IO.File]::ReadAllText((Join-Path $PWD.Path $envSource))
+$stateSetting = [regex]::Match($content, '(?m)^KAG_STATE_DIR=([^\r\n]+)')
+if (-not $stateSetting.Success) { throw 'Cần đặt KAG_STATE_DIR trong .env hoặc .env.example.' }
+$statePath = $stateSetting.Groups[1].Value.Trim().Trim([char]34, [char]39)
+if ([string]::IsNullOrWhiteSpace($statePath)) { throw 'KAG_STATE_DIR không được để trống.' }
+$state = [IO.Path]::GetFullPath((Join-Path $PWD.Path $statePath))
 $tokenNames = @('query', 'inspect', 'builder', 'egress')
-foreach ($name in $tokenNames) {
-    if (Test-Path -LiteralPath (Join-Path $state "$name.token")) { throw "Token $name đã tồn tại; không ghi đè." }
-}
 
 $keys = @('ADMIN_PASSWORD', 'DB_PASSWORD', 'MYSQL_ROOT_PASSWORD', 'REDIS_PASSWORD',
           'JWT_SECRET', 'MINIO_PASSWORD', 'KAG_MYSQL_PASSWORD',
           'KAG_NEO4J_PASSWORD', 'KAG_MINIO_PASSWORD')
-$content = [IO.File]::ReadAllText((Join-Path $PWD.Path '.env.example'))
 foreach ($key in $keys) {
-    if ($content -notmatch "(?m)^$key=(?=\r?$)") { throw "Thiếu ô trống $key trong .env.example" }
+    if ($createEnv -and $content -notmatch "(?m)^$key=(?=\r?$)") { throw "Thiếu ô trống $key trong .env.example" }
+    if (-not $createEnv -and $content -notmatch "(?m)^$key=\S+(?=\r?$)") { throw "Thiếu giá trị $key trong .env" }
 }
 
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
 try {
-    foreach ($key in $keys) {
+    foreach ($key in $(if ($createEnv) { $keys })) {
         $bytes = New-Object byte[] 32
         $rng.GetBytes($bytes)
         $secret = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
@@ -60,30 +62,33 @@ try {
     }
     [IO.Directory]::CreateDirectory($state) | Out-Null
     foreach ($name in $tokenNames) {
+        if (Test-Path -LiteralPath (Join-Path $state "$name.token")) { continue }
         $bytes = New-Object byte[] 32
         $rng.GetBytes($bytes)
         $secret = [Text.Encoding]::ASCII.GetBytes([BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant())
         $file = [IO.File]::Open((Join-Path $state "$name.token"), [IO.FileMode]::CreateNew)
         try { $file.Write($secret, 0, $secret.Length) } finally { $file.Dispose() }
     }
-    $bytes = [Text.Encoding]::UTF8.GetBytes($content)
-    $file = [IO.File]::Open((Join-Path $PWD.Path '.env'), [IO.FileMode]::CreateNew)
-    try { $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }
+    if ($createEnv) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($content)
+        $file = [IO.File]::Open((Join-Path $PWD.Path '.env'), [IO.FileMode]::CreateNew)
+        try { $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }
+    }
 } finally { $rng.Dispose() }
-Write-Host 'Đã tạo .env và 4 file token. Xem ADMIN_EMAIL / ADMIN_PASSWORD trong .env để đăng nhập.'
+Write-Host 'Đã chuẩn bị .env và token; giữ nguyên các file đã có. Xem ADMIN_EMAIL / ADMIN_PASSWORD trong .env để đăng nhập.'
 ```
 
-Sau khi chạy, mở `notepad .env` để xem và **lưu lại** `ADMIN_EMAIL` cùng `ADMIN_PASSWORD` (đã được tạo ngẫu nhiên). Có thể đổi email Admin trước khi chạy Docker. Giữ `COMPOSE_PROJECT_NAME=luatgt` và `KAG_STATE_DIR=../luatgt-state` cho lần cài thông thường. Không chia sẻ hoặc commit `.env` và các token.
+Sau khi chạy, mở `notepad .env` để xem và **lưu lại** `ADMIN_EMAIL` cùng `ADMIN_PASSWORD`. Có thể đổi email Admin trước khi chạy Docker. Cài mới dùng `COMPOSE_PROJECT_NAME=luatgt` và `KAG_STATE_DIR=./.secrets`. Thư mục `.secrets/` nằm trong repo local nhưng không được đưa lên GitHub hoặc vào Docker build context. Không commit `.env` và token; mỗi máy nên tạo bộ secrets riêng.
 
 ## Bước 4 — Kiểm tra token đã tạo
 
-Bốn file `query.token`, `inspect.token`, `builder.token`, `egress.token` đã được tạo tự động trong `../luatgt-state` (ngoài repo). **Không cần chạy lại bước tạo token.** Có thể kiểm tra tên file bằng:
+Bốn file `query.token`, `inspect.token`, `builder.token`, `egress.token` nằm trong thư mục được chỉ định bởi `KAG_STATE_DIR`. Với cài mới mặc định, kiểm tra:
 
 ```powershell
-Get-ChildItem ..\luatgt-state -Filter *.token -Name
+Get-ChildItem .\.secrets -Filter *.token -Name
 ```
 
-Nếu `.env` hoặc token đã tồn tại, đoạn lệnh ở Bước 3 sẽ từ chối ghi đè; **không xóa hay tạo lại secrets của lần cài trước**. Với đường state khác mặc định, cần điều chỉnh đường dẫn `$state` cho khớp `KAG_STATE_DIR` trước khi chạy.
+Đoạn lệnh ở Bước 3 đọc đường dẫn từ `.env` nếu file đã tồn tại. Cài đặt cũ dùng `../luatgt-state` vẫn giữ nguyên đường dẫn đó. **Không xóa hay tạo lại secrets của lần cài trước.** Khi dùng đường state khác, thay đường dẫn trong lệnh kiểm tra cho khớp.
 
 Trong **Properties → Security**, giới hạn quyền đọc `.env` và state cho người vận hành, giữ quyền Docker Desktop cần để đọc chúng. Chưa cần tạo graph ở bước này.
 

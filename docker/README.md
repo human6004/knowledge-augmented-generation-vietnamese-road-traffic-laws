@@ -58,7 +58,7 @@ Giữ các biến mapping khi cập nhật:
 - `KAG_NEO4J_STORAGE_REVISION`: hậu tố volume Neo4j data.
 - `KAG_GRAPH_LOCK_VOLUME`: volume khóa chung cho mọi writer cùng physical database, không đổi để né khóa.
 
-`KAG_STATE_DIR` mặc định `../luatgt-state`, ngoài repo. Giữ bốn token và các thư mục `release`, `api-credentials`, `broker-credentials`, `builder-input`. Runs/locks/provider counters nằm trong named volumes. Windows dùng dấu `/` trong đường dẫn `.env`.
+`.env.example` đặt `KAG_STATE_DIR=./.secrets`: state nằm trong repo local, được loại khỏi Git và Docker build context. Giữ bốn token và các thư mục `release`, `api-credentials`, `broker-credentials`, `builder-input`. Cài đặt cũ vẫn dùng đường dẫn trong `.env`; khi không đặt biến này, Compose dùng `../luatgt-state` để giữ tương thích. Runs/locks/provider counters nằm trong named volumes. Windows dùng dấu `/` trong đường dẫn `.env`.
 
 Biến shell có thể ghi đè `.env`; `.env` không tự truyền tất cả biến vào containers. Bảo vệ quyền đọc secrets/config/backup. Linux cần file cho UID 10001 đọc; Compose `uid/gid/mode` không thay quyền file nguồn bind mount.
 
