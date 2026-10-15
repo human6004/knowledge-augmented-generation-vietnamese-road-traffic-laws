@@ -11,6 +11,7 @@ const items = [
   ["/admin/graph", "Đồ thị tri thức"],
   ["/admin/pipeline", "Pipeline & tác vụ"],
   ["/admin/benchmark", "Benchmark"],
+  ["/admin/infrastructure", "Hạ tầng & Retrieval"],
   ["/admin/questions", "Ngân hàng câu hỏi"],
   ["/admin/signs", "Biển báo"],
   ["/admin/imports", "Nhập dữ liệu hàng loạt"],

@@ -24,6 +24,42 @@ function validateBuilder(value: BuilderStatus): BuilderStatus {
 export async function loadBuilderStatus(signal?: AbortSignal): Promise<BuilderStatus> {
   return validateBuilder(await api<BuilderStatus>('/admin/kag/builder/status', { signal }))
 }
+export const builderInputLabels = {
+  c3_manifest: 'Manifest nguồn graph',
+  sample_manifest: 'Manifest SAMPLE',
+  vector_artifact: 'Vector có sẵn',
+  provenance: 'Nguồn gốc vector',
+  chunk_manifest: 'Manifest phân đoạn',
+  source_checkpoint: 'Checkpoint nguồn',
+}
+export type BuilderInputs = {
+  contract_version: 'builder-inputs-v1'
+  configuration: 'NOT_CONFIGURED' | 'INVALID' | 'CONFIGURED'
+  error_code: 'CONFIG' | null
+  scope: 'FRESH_SAMPLE' | null
+  target: BuilderStatus['target']
+  inputs: { name: keyof typeof builderInputLabels; sha256: string; state: 'MATCHED' | 'MISSING' | 'INVALID' | 'UNAVAILABLE' }[]
+  preflight: 'NOT_RUN'
+}
+export async function loadBuilderInputs(signal?: AbortSignal): Promise<BuilderInputs> {
+  const value = await api<BuilderInputs>('/admin/kag/builder/inputs', { signal })
+  const invalid = () => { throw new ApiError('Thông tin đầu vào Builder không hợp lệ', 502) }
+  if (!shape(value, ['contract_version', 'configuration', 'error_code', 'scope', 'target', 'inputs', 'preflight']) || value.contract_version !== 'builder-inputs-v1' ||
+    !['NOT_CONFIGURED', 'INVALID', 'CONFIGURED'].includes(value.configuration) || value.preflight !== 'NOT_RUN' ||
+    (value.configuration === 'INVALID' ? value.error_code !== 'CONFIG' : value.error_code !== null)) invalid()
+  const configured = value.configuration === 'CONFIGURED', target = value.target
+  if (configured ? !shape(target, ['project_id', 'database', 'namespace']) || !Number.isInteger(target!.project_id) || target!.project_id < 1 ||
+    !/^(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})$/.test(target!.database) || target!.namespace !== 'VietRoadTraffic' || value.scope !== 'FRESH_SAMPLE'
+    : target !== null || value.scope !== null) invalid()
+  if (!Array.isArray(value.inputs) || value.inputs.length !== (configured ? Object.keys(builderInputLabels).length : 0)) invalid()
+  const names = new Set<string>()
+  for (const input of value.inputs) {
+    if (!shape(input, ['name', 'sha256', 'state']) || !Object.prototype.hasOwnProperty.call(builderInputLabels, input.name) || names.has(input.name) ||
+      !hash(input.sha256) || !['MATCHED', 'MISSING', 'INVALID', 'UNAVAILABLE'].includes(input.state)) invalid()
+    names.add(input.name)
+  }
+  return value
+}
 export async function runBuilderAction(action: 'build' | 'stop' | 'resume', run_id: string): Promise<BuilderStatus> {
   if (!['build', 'stop', 'resume'].includes(action) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(run_id)) throw new ApiError('Yêu cầu Builder không hợp lệ', 422)
   const result = validateBuilder(await api<BuilderStatus>(`/admin/kag/builder/${action}`, send('POST', { run_id })))

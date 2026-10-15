@@ -14,6 +14,7 @@ public class InfrastructureService {
     public Map<String,Object> kagStatus() { return kag.status(); }
     public JsonNode pipelineStatus() { return kag.pipelineStatus(); }
     public JsonNode builderStatus() { return kag.builderStatus(); }
+    public JsonNode builderInputs() { return kag.builderInputs(); }
     public JsonNode builderAction(String action,String runId) { return kag.builderAction(action,runId); }
     public JsonNode benchmarkDatasets() { return kag.benchmarkDatasets(); }
     public JsonNode sampleInspection() { return kag.sampleInspection(); }

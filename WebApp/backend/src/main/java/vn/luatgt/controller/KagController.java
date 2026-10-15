@@ -16,6 +16,10 @@ public class KagController {
     }
     @GetMapping("/admin/kag/pipeline") JsonNode pipeline() { return infrastructure.pipelineStatus(); }
     @GetMapping("/admin/kag/builder/status") JsonNode builderStatus() { return infrastructure.builderStatus(); }
+    @GetMapping("/admin/kag/builder/inputs") JsonNode builderInputs(@RequestParam Map<String,String> parameters) {
+        if(!parameters.isEmpty())throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Đầu vào Builder không nhận đường dẫn hoặc tham số tùy ý");
+        return infrastructure.builderInputs();
+    }
     @PostMapping("/admin/kag/builder/build") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
     JsonNode build(@Valid @RequestBody BuilderRunRequest request) { return infrastructure.builderAction("build",request.runId()); }
     @PostMapping("/admin/kag/builder/stop") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)

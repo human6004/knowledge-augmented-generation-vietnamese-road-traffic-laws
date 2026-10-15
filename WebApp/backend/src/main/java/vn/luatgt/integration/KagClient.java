@@ -71,6 +71,7 @@ public class KagClient {
         builderClient=RestClient.builder().baseUrl(url).requestFactory(factory).build();
     }
     public JsonNode builderStatus() {return builderRequest(null,null);}
+    public JsonNode builderInputs() {return builderRequest("inputs",null);}
     public JsonNode builderAction(String action,String runId) {
         if(!Set.of("build","stop","resume").contains(action)||runId==null||!runId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Thao tác Builder không hợp lệ");
@@ -84,19 +85,43 @@ public class KagClient {
                 String other=null;try{other=readToken(file);}catch(IOException ignored){}
                 if(token.equals(other))throw new IOException();
             }
-            RestClient.RequestHeadersSpec<?> request=action==null?builderClient.get().uri("/v1/builder/status"):
+            boolean read=action==null||action.equals("inputs");
+            RestClient.RequestHeadersSpec<?> request=read?builderClient.get().uri("/v1/builder/"+(action==null?"status":"inputs")):
                 builderClient.post().uri("/v1/builder/"+action).contentType(MediaType.APPLICATION_JSON).body(Map.of("run_id",runId));
             return request.header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
                 int code=res.getStatusCode().value();
                 if(code==409)throw new ResponseStatusException(HttpStatus.CONFLICT,"Builder đang bận hoặc thao tác chưa an toàn; hãy tải lại trạng thái");
                 if(code==422)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Yêu cầu Builder không hợp lệ");
-                if(code!=(action==null?200:202))throw new IOException();
-                var body=inspectionBody(res,token);validateBuilder(body);
-                if(action!=null&&!body.path("run_id").asText().equals(runId))throw new IOException();
+                if(code!=(read?200:202))throw new IOException();
+                var body=inspectionBody(res,token);
+                if("inputs".equals(action))validateBuilderInputs(body);else validateBuilder(body);
+                if(!read&&!body.path("run_id").asText().equals(runId))throw new IOException();
                 return body;
             });
         } catch(ResponseStatusException e) {throw e;}
         catch(Exception e) {throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Builder chưa khả dụng; kiểm tra cấu hình Worker và quyền điều khiển");}
+    }
+    private void validateBuilderInputs(JsonNode body) throws IOException {
+        String configuration=body.path("configuration").asText();
+        if(!fields(body).equals(Set.of("contract_version","configuration","error_code","scope","target","inputs","preflight"))||
+            !body.path("contract_version").asText().equals("builder-inputs-v1")||!Set.of("NOT_CONFIGURED","INVALID","CONFIGURED").contains(configuration)||
+            !body.path("preflight").asText().equals("NOT_RUN"))throw new IOException();
+        boolean configured=configuration.equals("CONFIGURED");
+        if(configuration.equals("INVALID")?!body.path("error_code").asText().equals("CONFIG"):!body.path("error_code").isNull())throw new IOException();
+        var target=body.path("target");
+        if(configured) {
+            if(!body.path("scope").asText().equals("FRESH_SAMPLE")||!fields(target).equals(Set.of("project_id","database","namespace"))||
+                !bounded(target.path("project_id"),1,Integer.MAX_VALUE)||!target.path("database").asText().matches("(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})")||
+                !target.path("namespace").asText().equals("VietRoadTraffic"))throw new IOException();
+        } else if(!target.isNull()||!body.path("scope").isNull())throw new IOException();
+        var inputs=body.path("inputs");var names=new HashSet<String>();
+        var expected=Set.of("c3_manifest","sample_manifest","vector_artifact","provenance","chunk_manifest","source_checkpoint");
+        if(!inputs.isArray()||inputs.size()!=(configured?expected.size():0))throw new IOException();
+        for(var input:inputs) {
+            String name=input.path("name").asText();
+            if(!fields(input).equals(Set.of("name","sha256","state"))||!expected.contains(name)||!names.add(name)||
+                !input.path("sha256").asText().matches("[0-9a-f]{64}")||!Set.of("MATCHED","MISSING","INVALID","UNAVAILABLE").contains(input.path("state").asText()))throw new IOException();
+        }
     }
     private void validateBuilder(JsonNode body) throws IOException {
         String state=body.path("state").asText();var actions=body.path("actions");

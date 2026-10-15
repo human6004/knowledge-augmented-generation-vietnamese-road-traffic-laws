@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { Page, Button, Card, Progress, Terminal } from "../../admin/ui"
+import { Page, Button, Card, Progress } from "../../admin/ui"
 import { Notice, inputClass } from "./shared"
 import {
   loadKagStatus,
@@ -424,8 +424,8 @@ export function BuilderControls() {
     }
   }
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px] mb-5" aria-label="Điều khiển Builder"><Card title="Dựng đồ thị & vector · Builder thật"><div className="px-5 pb-5 text-sm space-y-3">
-      <p className="text-xs text-muted">API thật · thao tác theo quyền Worker, không chạy pipeline mô phỏng.</p>
+    <Card title="Trạng thái Builder">
+      <div className="px-5 pb-5 text-sm space-y-3" aria-label="Điều khiển Builder">
       {error && <p role="alert">{error}</p>}
       <p aria-live="polite">
         Trạng thái:{" "}
@@ -433,13 +433,18 @@ export function BuilderControls() {
           ? builderStateLabel(status.state)
           : "Chưa đọc được trạng thái Worker"}
       </p>
+      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="space-y-2 min-w-0">
       {status?.target && (
         <p className="break-words">
           Cấu hình đích: project {status.target.project_id} · database{" "}
           {status.target.database} · {status.target.namespace}
         </p>
       )}
-      {status?.run_id && <p className="break-words">Run: {status.run_id}</p>}
+      <h3 className="font-semibold pt-2">Phiên chạy hiện tại / gần nhất</h3>
+      <p className="break-words">Run ID: {status?.run_id ?? "Chưa có dữ liệu phiên chạy"}</p>
+      </div>
+      <div className="space-y-2 min-w-0">
       {status?.progress && (
         <p>
           Tiến độ bước {status.progress.stage}: {status.progress.done}/
@@ -454,16 +459,23 @@ export function BuilderControls() {
           )}
         />
       )}
+      {!status?.progress && <p>Chưa có dữ liệu tiến độ từ Worker.</p>}
+      <p className="text-xs text-muted">Tiến độ chỉ thuộc bước hiện tại, không phải toàn pipeline.</p>
+      </div>
+      </div>
       {status?.error_code && (
-        <p>
+        <details>
+          <summary className="cursor-pointer underline">Mã lỗi: {status.error_code}</summary>
+          <p className="mt-2">
           {status.error_code === "LOCK_MOUNT"
             ? "Chưa xác minh được volume khóa dùng chung hoặc thiếu Docker inspection. Build bị chặn."
             : status.error_code === "INTERRUPTED" && status.state === "STOPPED"
               ? "Runner đã dừng tại checkpoint; chỉ Resume khi backend cho phép."
               : `Builder bị chặn: ${status.error_code}. Cần kiểm tra cấu hình, identity hoặc checkpoint.`}
-        </p>
+          </p>
+        </details>
       )}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-3 pt-2">
         <Button
           disabled={busy || !status?.actions.build}
           onClick={() => act("build")}
@@ -482,9 +494,6 @@ export function BuilderControls() {
         >
           Resume
         </Button>
-        <Button disabled aria-describedby="builder-delete-reason">
-          Delete
-        </Button>
         <Button
           disabled={busy}
           onClick={() => setVersion((value) => value + 1)}
@@ -492,11 +501,9 @@ export function BuilderControls() {
           Tải lại trạng thái
         </Button>
       </div>
-      <p id="builder-delete-reason">
-        Delete chưa có quyền xóa graph an toàn nên bị vô hiệu hóa. Production
-        WRITE vẫn bị chặn.
-      </p>
-    </div></Card><Card title="Log tác vụ · Worker thật"><div className="px-5 pb-5"><Terminal lines={status ? [`Trạng thái: ${builderStateLabel(status.state)}`, `Run: ${status.run_id ?? "Chưa có"}`, ...(status.progress ? [`${status.progress.stage}: ${status.progress.done}/${status.progress.total}`] : ["Worker chưa cung cấp batch progress"]), ...(status.error_code ? [status.error_code] : []), "API hiện cung cấp status; chưa có stream log hoặc lịch sử job."] : [error || "Đang tải trạng thái Worker…"]} className="h-72" /></div></Card></div>
+      <p className="text-xs text-muted">Thao tác theo quyền Worker. Production WRITE vẫn bị chặn.</p>
+      </div>
+    </Card>
   )
 }
 

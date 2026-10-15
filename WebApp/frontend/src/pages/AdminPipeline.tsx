@@ -1,11 +1,10 @@
+import { Link } from 'react-router-dom'
 import { BuilderControls, useInspection } from './server/KagManagement'
+import { builderInputLabels, loadBuilderInputs, loadKagStatus, loadSampleInspection, loadBenchmarkDatasets } from './server/kag-inspection'
 import { Notice } from './server/shared'
-import { loadPipelineStatus, loadSampleInspection } from './server/kag-inspection'
-import { useState } from 'react'
-import { tasks, useAdmin, type JobStatus } from '../admin/store'
-import { Badge, Button, Card, Page, Progress, Terminal, inputCls, type Tone } from '../admin/ui'
+import type { JobStatus } from '../admin/store'
+import { Button, Card, Page, type Tone } from '../admin/ui'
 
-const groups = ['Hạ tầng', 'Dự án', 'Nạp dữ liệu', 'Đánh giá', 'Kiểm tra'] as const
 export const jobTone: Record<JobStatus, [Tone, string]> = {
   queued: ['gray', 'Chờ'],
   running: ['gold', 'Đang chạy'],
@@ -15,117 +14,100 @@ export const jobTone: Record<JobStatus, [Tone, string]> = {
 }
 
 export default function AdminPipeline() {
-  const runtime=useInspection(loadPipelineStatus), sample=useInspection(loadSampleInspection)
-  const { jobs, runTask, cancelJob, config, notify } = useAdmin()
-  const [selected, setSelected] = useState<string | null>(jobs[0]?.id ?? null)
-  const [indexDir, setIndexDir] = useState('../data/processed')
-  const job = jobs.find((j) => j.id === selected)
-  const runningIds = new Set(jobs.filter((j) => j.status === 'running').map((j) => j.taskId))
-
-  function run(taskId: string) {
-    const label = taskId === 'index' ? indexDir : taskId === 'eval' ? `--thread_num ${config.evalThreads} --upper_limit ${config.evalUpperLimit}` : undefined
-    const id = runTask(taskId, { label, onDone: () => notify('Tác vụ đã hoàn tất') })
-    setSelected(id)
-  }
-
-  function runAll() {
-    const order = ['metadata', 'inject', 'index', 'eval']
-    let k = 0
-    const next = () => {
-      const t = order[k++]
-      if (!t) return notify('Đã chạy xong toàn bộ pipeline nạp dữ liệu')
-      setSelected(runTask(t, { label: t === 'index' ? indexDir : undefined, onDone: next }))
-    }
-    next()
-  }
-
+  const data = useInspection(loadBuilderInputs), inputs = data.value
+  const connection = useInspection(loadKagStatus)
+  const graph = useInspection(loadSampleInspection), sample = graph.value
+  const evaluation = useInspection(loadBenchmarkDatasets)
+  const inputStates = { MATCHED: 'Khớp checksum cấu hình', MISSING: 'Thiếu file', INVALID: 'Sai checksum', UNAVAILABLE: 'Không đọc được' }
+  const configuration = inputs ? inputs.configuration === 'NOT_CONFIGURED' ? 'Chưa cấu hình' : inputs.configuration === 'INVALID' ? 'Cấu hình không hợp lệ' : 'Đã đọc cấu hình SAMPLE' : data.loading ? 'Đang kiểm tra' : 'Chưa đọc được'
+  const checks = { liveness: 'Kết nối API', queryReadiness: 'Truy vấn', retrievalReadiness: 'Retrieval', vectorRetrievalReadiness: 'Vector retrieval', release: 'Release' } as const
   return (
     <Page
       title="Pipeline & tác vụ"
-      subtitle="Builder dùng API thật; các tác vụ CLI chưa có API giữ tương tác Demo."
-      actions={<Button variant="dark" onClick={runAll}>▶ Mô phỏng toàn bộ pipeline nạp · Demo</Button>}
+      subtitle="Chuẩn bị nguồn, theo dõi Builder và kiểm chứng kết quả KAG."
     >
-      <BuilderControls/><Notice {...runtime} retry={runtime.reload}/><Notice {...sample} retry={sample.reload}/>{runtime.value&&<p className="mb-5 text-sm">Runtime truy vấn: {runtime.value.phase} · request {runtime.value.active_requests??"Chưa đo"} · draining {String(runtime.value.draining??"Chưa xác minh")}</p>}{sample.value&&<details className="mb-5 text-xs break-words"><summary>Receipt graph SAMPLE · API thật</summary><p>{sample.value.sample_receipt.stage} · {sample.value.sample_receipt.sealed_at}</p><p>Receipt SHA-256: {sample.value.sample_receipt.receipt_sha256}</p><p>Run ID/batch progress không được chứng minh bởi receipt này.</p></details>}
-      <p className="mb-4 text-sm text-muted">Tác vụ bên dưới: Demo, chỉ mô phỏng log và lịch sử trong trình duyệt. Không chạy CLI, không ghi graph.</p>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="space-y-5">
-          {groups.map((g) => (
-            <div key={g}>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">{g}</p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {tasks.filter((t) => t.group === g).map((t) => {
-                  const running = runningIds.has(t.id)
-                  const last = jobs.find((j) => j.taskId === t.id)
-                  return (
-                    <Card key={t.id} className="p-4 flex flex-col">
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-[14px] font-semibold text-navy">{t.title}</h3>
-                        {last && <Badge tone={jobTone[last.status][0]}>{jobTone[last.status][1]}</Badge>}
-                      </div>
-                      <p className="mt-1 text-[12.5px] text-muted">{t.desc}</p>
-                      <code className="mt-3 block truncate rounded-lg bg-sidebar border border-line px-2.5 py-1.5 font-mono text-[11px] text-text-secondary" title={t.command}>
-                        $ {t.command}
-                      </code>
-                      {t.id === 'index' && (
-                        <select value={indexDir} onChange={(e) => setIndexDir(e.target.value)} className={`${inputCls} mt-2 py-1.5 text-xs`} aria-label="Thư mục lập chỉ mục">
-                          <option value="../data/processed">Toàn bộ corpus (data/processed)</option>
-                          <option value="../data/trial">Tập thử (data/trial)</option>
-                          <option value="../data/new">Văn bản mới (data/new)</option>
-                        </select>
-                      )}
-                      <div className="mt-3 flex items-center gap-2 pt-1 mt-auto">
-                        <Button size="sm" variant={running ? 'outline' : 'primary'} disabled={running} onClick={() => run(t.id)}>
-                          {running ? 'Đang mô phỏng…' : '▶ Chạy · Demo'}
-                        </Button>
-                        {last && (
-                          <button onClick={() => setSelected(last.id)} className="text-xs text-muted hover:text-navy">Xem log</button>
-                        )}
-                      </div>
-                    </Card>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+      <section aria-label="Tổng quan" className="mb-5 border-b border-line pb-4 text-sm">
+        <h2 className="font-semibold mb-2">Tổng quan</h2>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          <p>Đầu vào: {configuration}</p>
+          <p>KAG API: {connection.value?.liveness.state ?? (connection.loading ? 'Đang kiểm tra' : 'Chưa đọc được')}</p>
+          <p>Graph SAMPLE: {sample ? 'Có dữ liệu xác minh' : graph.loading ? 'Đang kiểm tra' : 'Chưa xác minh'}</p>
         </div>
-
-        <div className="space-y-5 xl:sticky xl:top-6 self-start">
-          <Card title="Log tác vụ · Demo" right={job?.status === 'running' && <Button size="sm" variant="danger" onClick={() => cancelJob(job.id)}>Huỷ</Button>}>
-            <div className="px-5 pb-5">
-              {job ? (
-                <>
-                  <div className="flex items-center justify-between mb-2 text-[13px]">
-                    <span className="font-medium text-navy">{job.title}</span>
-                    <span className="text-muted">{job.progress}%</span>
-                  </div>
-                  <Progress value={job.progress} tone={job.status === 'success' ? 'green' : job.status === 'cancelled' ? 'red' : 'accent'} />
-                  <Terminal lines={job.logs} className="mt-3 h-72" />
-                </>
-              ) : (
-                <p className="text-sm text-muted">Chọn một tác vụ để xem log.</p>
-              )}
-            </div>
-          </Card>
-
-          <Card title="Lịch sử chạy · Demo">
-            <ul className="px-2 pb-3 max-h-80 overflow-y-auto">
-              {jobs.map((j) => (
-                <li key={j.id}>
-                  <button
-                    onClick={() => setSelected(j.id)}
-                    className={`w-full flex items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors ${j.id === selected ? 'bg-selected' : 'hover:bg-selected/60'}`}
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-[13px] font-medium text-navy">{j.title}</span>
-                      <span className="block text-[11.5px] text-muted">{j.startedAt}{j.duration ? ` · ${j.duration}s` : ''}</span>
-                    </span>
-                    <Badge tone={jobTone[j.status][0]}>{jobTone[j.status][1]}</Badge>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </Card>
+        <p className="mt-2 text-muted">Production WRITE bị chặn. Trạng thái Builder và quyền thao tác hiển thị riêng bên dưới.</p>
+      </section>
+      <div className="grid gap-5 lg:grid-cols-2 items-start">
+      <Card title="Nguồn & chuẩn bị dữ liệu">
+        <div className="px-5 pb-5 text-sm space-y-3">
+          <p>Nhập danh mục, bổ sung metadata và tệp nguồn; kiểm duyệt trước khi xuất bản trên WebApp.</p>
+          <nav aria-label="Quản lý nguồn" className="flex flex-wrap gap-3">
+            <Link className="underline" to="/admin/imports?type=documents">Nhập danh mục</Link>
+            <Link className="underline" to="/admin/knowledge">Quản lý nguồn & kiểm duyệt</Link>
+          </nav>
+          <p className="text-muted">Dữ liệu WebApp chưa tự động chuyển thành đầu vào KAG Builder.</p>
         </div>
+      </Card>
+      <Card title="Đầu vào & điều kiện Build">
+        <div className="px-5 pb-5 text-sm space-y-3 min-w-0">
+          <Notice {...data} />
+          {inputs && <>
+            <p>Cấu hình: {configuration}</p>
+            {inputs.error_code && <p>Mã lỗi cấu hình: {inputs.error_code}</p>}
+            {inputs.target ? <p className="break-words">Đích cấu hình: project {inputs.target.project_id} · database {inputs.target.database} · {inputs.target.namespace} · {inputs.scope}</p> : <p>Đích Build: Chưa cấu hình</p>}
+            {!inputs.inputs.length && <p>Nguồn / manifest SAMPLE: Chưa cấu hình</p>}
+            {!!inputs.inputs.length && <>
+              <dl className="grid grid-cols-2 gap-3">
+                {Object.entries(inputStates).map(([state, label]) => <div key={state}><dt className="text-muted">{label}</dt><dd className="font-semibold">{inputs.inputs.filter(input => input.state === state).length}{state === 'MATCHED' ? ` / ${inputs.inputs.length} file` : ' file'}</dd></div>)}
+              </dl>
+              {inputs.inputs.some(input => input.state !== 'MATCHED') && <p>Cần xử lý file thiếu, sai checksum hoặc không đọc được.</p>}
+              <details><summary className="cursor-pointer underline">Chi tiết đầu vào</summary>
+            {inputs.inputs.map(input => <div key={input.name} className="border-b border-line py-2">
+              <p>{builderInputLabels[input.name]}: {inputStates[input.state]}</p>
+              <details className="mt-1"><summary className="cursor-pointer underline">SHA-256 theo cấu hình</summary><p className="break-all mt-1">{input.sha256}</p></details>
+            </div>)}
+              </details>
+            </>}
+          </>}
+          <p>Kiểm tra file không xác nhận đủ điều kiện Build. Preflight đầy đủ chưa chạy trong bước này.</p>
+          <details className="text-muted"><summary className="cursor-pointer underline">Phạm vi kiểm tra</summary><p className="mt-2">Chỉ đối chiếu checksum; chưa kiểm tra số lượng hoặc nội dung nguồn. Nội dung, vector, identity đích và GraphLock do preflight của Runner kiểm tra khi Build. Worker cho phép thao tác không chứng minh preflight đã đạt.</p></details>
+          <Button disabled={data.loading} onClick={data.reload}>Kiểm tra lại đầu vào</Button>
+        </div>
+      </Card>
+      <div className="lg:col-span-2 min-w-0"><BuilderControls /></div>
+      <Card title="Kiểm chứng graph">
+        <div className="px-5 pb-5 text-sm space-y-3">
+          <Notice {...graph} />
+          {sample && <>
+            <p>{sample.counts.nodes} node · {sample.counts.edges} cạnh · {sample.counts.vectors} vector</p>
+            <p className="break-all">Release: {sample.release_id}</p>
+            <p>Xác minh lúc: {sample.verified_at}</p>
+            <details><summary className="cursor-pointer underline">Đích graph & receipt</summary><div className="mt-2 space-y-2 break-all"><p>{sample.backend.database} · {sample.backend.namespace}</p><p>Fingerprint: {sample.graph_fingerprint}</p><p>{sample.sample_receipt.stage} · {sample.sample_receipt.sealed_at}</p></div></details>
+          </>}
+          <p className="text-muted">Kết quả kiểm tra graph SAMPLE độc lập với phiên Builder hiện tại.</p>
+          <div className="flex flex-wrap items-center gap-3"><Button disabled={graph.loading} onClick={graph.reload}>Kiểm tra graph</Button><Link className="underline" to="/admin/graph">Mở Graph</Link></div>
+        </div>
+      </Card>
+      <Card title="Kết nối & Retrieval">
+        <div className="px-5 pb-5 text-sm space-y-3">
+          <Notice {...connection} />
+          {connection.value && <dl className="space-y-2">{Object.entries(checks).map(([key, label]) => {
+            const check = connection.value![key as keyof typeof checks]
+            return <div key={key} className="flex flex-wrap justify-between gap-2"><dt>{label}</dt><dd className="break-all">{check.state}{check.code ? ` · ${check.code}` : ''}</dd></div>
+          })}</dl>}
+          <p className="text-muted">Kết nối API không chứng minh truy xuất sẵn sàng. Chỉ gọi embedding khi bạn chạy thử Retrieval tại Hạ tầng.</p>
+          <div className="flex flex-wrap items-center gap-3"><Button disabled={connection.loading} onClick={connection.reload}>Kiểm tra kết nối</Button><Link className="underline" to="/admin/infrastructure">Mở Hạ tầng & Retrieval</Link></div>
+        </div>
+      </Card>
+      <Card title="Đánh giá" className="lg:col-span-2">
+        <div className="px-5 pb-5 text-sm space-y-3">
+          <Notice {...evaluation} />
+          {evaluation.value && <>
+            <p>Catalog: {evaluation.value.state} · {evaluation.value.datasets.length} bộ dữ liệu</p>
+            {!!evaluation.value.datasets.length && <details><summary className="cursor-pointer underline">Chi tiết bộ dữ liệu</summary><ul className="mt-2 space-y-2">{evaluation.value.datasets.map(row => <li key={row.id} className="break-words">{row.id} · {row.record_count ?? 'Chưa đo'} bản ghi · {row.dataset_status ?? 'Chưa xác minh'} · {row.dataset_eligibility}{row.reason ? ` · ${row.reason}` : ''}</li>)}</ul></details>}
+          </>}
+          <p className="text-muted">Chưa hỗ trợ chạy benchmark tại đây. Xem artifact KAG thực đo tại Benchmark; catalog không chứng minh chất lượng trả lời.</p>
+          <div className="flex flex-wrap items-center gap-3"><Button disabled={evaluation.loading} onClick={evaluation.reload}>Kiểm tra dataset</Button><Link className="underline" to="/admin/benchmark">Xem Benchmark</Link></div>
+        </div>
+      </Card>
       </div>
     </Page>
   )

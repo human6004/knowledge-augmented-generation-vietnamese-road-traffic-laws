@@ -18,7 +18,37 @@ from kag.builder.production_scope import _spec_hash
 from kag.http_api.contract import ApiFailure
 from kag.http_api.security import ServiceSecrets, authenticate, bounded_body
 from kag.run_state import MESSAGES, RunBlocked, _shared_lock_root, validate_run_directory
-from kag.runner import _config, run
+from kag.runner import _config, _files, run
+
+
+def inspect_inputs(value):
+    """Read configured inputs only; full Runner preflight remains authoritative."""
+    result = dict(contract_version='builder-inputs-v1', configuration='NOT_CONFIGURED',
+                  error_code=None, scope=None, target=None, inputs=[], preflight='NOT_RUN')
+    if value is None:
+        return result
+    try:
+        config = _config(value)
+        if config['scope'] != 'FRESH_SAMPLE':
+            raise RunBlocked('SCOPE')
+    except (ValueError, KeyError, TypeError):
+        result.update(configuration='INVALID', error_code='CONFIG')
+        return result
+    result.update(configuration='CONFIGURED', scope=config['scope'],
+                  target={key: config[key] for key in ('project_id', 'database', 'namespace')})
+    for name, digest in config['input_sha256'].items():
+        try:
+            if not Path(config['paths'][name]).is_file():
+                state = 'MISSING'
+            else:
+                _files(dict(config, input_sha256={name: digest}))
+                state = 'MATCHED'
+        except RunBlocked:
+            state = 'INVALID'
+        except (OSError, ValueError):
+            state = 'UNAVAILABLE'
+        result['inputs'].append(dict(name=name, sha256=digest, state=state))
+    return result
 
 
 class BuilderControl:
@@ -169,11 +199,19 @@ def create_app(*, control=None, token=None):
     # Reuse bearer validation; this app knows only its independent control secret.
     secrets = ServiceSecrets(inspect_tokens=(token,))
     failure = None
+    configuration = control.config if control is not None else None
     if control is None:
         try:
-            control = BuilderControl(json.loads(Path(os.environ['KAG_BUILDER_CONFIG']).read_bytes()))
-        except (OSError, KeyError, ValueError):
+            configuration = json.loads(Path(os.environ['KAG_BUILDER_CONFIG']).read_bytes())
+        except (FileNotFoundError, KeyError):
             failure = 'CONFIG'
+        except (OSError, ValueError):
+            configuration, failure = {}, 'CONFIG'
+        else:
+            try:
+                control = BuilderControl(configuration)
+            except (OSError, KeyError, ValueError):
+                failure = 'CONFIG'
 
     @asynccontextmanager
     async def lifespan(app):
@@ -194,6 +232,11 @@ def create_app(*, control=None, token=None):
         authenticate(headers[0] if headers else None, secrets)
         if request.query_params:
             raise ApiFailure('INVALID_REQUEST')
+
+    @app.get('/v1/builder/inputs')
+    async def inputs(request: Request):
+        authenticate_request(request)
+        return await asyncio.to_thread(inspect_inputs, configuration)
 
     @app.get('/v1/builder/status')
     async def status(request: Request):
