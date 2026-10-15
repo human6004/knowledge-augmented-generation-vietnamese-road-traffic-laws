@@ -24,7 +24,7 @@ class ServicePrincipal:
 
     def __post_init__(self):
         if (type(self.service_id) is not str or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', self.service_id)
-                or type(self.scopes) is not frozenset or not self.scopes <= {'query', 'inspect'}
+                or type(self.scopes) is not frozenset or not self.scopes <= {'query', 'inspect', 'credentials-write', 'provider-test', 'config-apply'}
                 or type(self.can_delegate_user) is not bool):
             raise ApiFailure('NOT_READY')
 
@@ -33,10 +33,14 @@ class ServicePrincipal:
 class ServiceSecrets:
     query_tokens: tuple[str, ...] = field(default=(), repr=False)
     inspect_tokens: tuple[str, ...] = field(default=(), repr=False)
+    credentials_write_tokens: tuple[str, ...] = field(default=(), repr=False)
+    provider_test_tokens: tuple[str, ...] = field(default=(), repr=False)
+    config_apply_tokens: tuple[str, ...] = field(default=(), repr=False)
 
     def __post_init__(self):
         seen = set()
-        for tokens in (self.query_tokens, self.inspect_tokens):
+        for tokens in (self.query_tokens, self.inspect_tokens, self.credentials_write_tokens,
+                       self.provider_test_tokens, self.config_apply_tokens):
             if type(tokens) is not tuple or len(tokens) > 2:
                 raise ApiFailure('NOT_READY')
             for token in tokens:
@@ -60,6 +64,9 @@ def authenticate(header: str | None, secrets: ServiceSecrets) -> ServicePrincipa
     for tokens, identity in (
         (secrets.query_tokens, ServicePrincipal('webapp-query', frozenset({'query'}), True)),
         (secrets.inspect_tokens, ServicePrincipal('inspect', frozenset({'inspect'}), False)),
+        (secrets.credentials_write_tokens, ServicePrincipal('credentials-writer', frozenset({'credentials-write'}), False)),
+        (secrets.provider_test_tokens, ServicePrincipal('provider-tester', frozenset({'provider-test'}), False)),
+        (secrets.config_apply_tokens, ServicePrincipal('config-applier', frozenset({'config-apply'}), False)),
     ):
         for token in tokens:
             if hmac.compare_digest(candidate, token.encode('ascii')):

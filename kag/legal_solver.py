@@ -559,13 +559,13 @@ class _ThreadedPlannerClient(LLMClient):
         return await asyncio.to_thread(self.invoke, variables, prompt_op, **kwargs)
 
 
-def build_pipeline(retriever: Retriever, llm: LLMClient) -> KAGIterativePipeline:
+def build_pipeline(retriever: Retriever, llm: LLMClient, *, retrieval=None) -> KAGIterativePipeline:
     if not isinstance(retriever, Retriever) or not isinstance(llm, LLMClient):
         raise ValueError('existing E Retriever and upstream LLMClient required')
     planner = KAGIterativePlanner(_ThreadedPlannerClient(llm), PromptABC.from_config({'type': 'viet_legal_planning', 'language': 'vi'}))
     deduce = LegalDeduceExecutor(llm, PromptABC.from_config({'type': 'viet_legal_deduce', 'language': 'vi'}))
     # Fresh list: upstream appends its own Finish; upstream default is five.
-    return KAGIterativePipeline(planner, [LegalRetrieverExecutor(retriever), deduce], SafeLegalGenerator())
+    return KAGIterativePipeline(planner, [LegalRetrieverExecutor(retriever, **(retrieval or {})), deduce], SafeLegalGenerator())
 
 
 def _request_date(as_of):

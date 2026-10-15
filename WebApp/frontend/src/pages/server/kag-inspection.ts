@@ -4,6 +4,138 @@ export type KagCheck = { state: 'ALIVE' | 'READY' | 'NOT_READY' | 'UNAVAILABLE' 
 export type KagStatus = Record<'liveness' | 'queryReadiness' | 'retrievalReadiness' | 'vectorRetrievalReadiness' | 'release', KagCheck>
 export type Retrieval = { contract_version: string; request_id: string; release_id: string; source_snapshot_id: string; schema_contract: Record<string, string>; items: { entity_type: string; entity_id: string; doc_id: string | null; unit_id: string | null; sign_id: string | null; source_texts: Record<string, string | null>; score: number | null; vector_sources: unknown[]; graph_context: unknown[] }[] }
 export type PipelineStatus = { contract_version: string; phase: 'idle' | 'running' | 'draining' | 'closed' | 'unavailable'; active_requests: number | null; draining: boolean | null; closed: boolean | null; progress: null; execution_allowed: false; operational_proof: 'DENY'; production_write: 'BLOCKED'; provider_egress: 'DENY' }
+export type KagConfiguration = {
+  contract_version: 'kag-config-v1'
+  project: { source: 'startup_environment'; release_id: string | null; release_state: 'NOT_CONFIGURED' | 'LOADED' | 'UNAVAILABLE' }
+  models: { source: 'startup_environment'; identity_verified: false; chat: ModelConfiguration; embedding: ModelConfiguration }
+  solver: null | { source: 'source_defaults'; pipeline: 'KAGIterativePipeline'; planner: 'KAGIterativePlanner'; top_k: number; expand: boolean; max_evidence_chars: number; max_iteration: number; search_k: number; expansion_limit: number; required_vector_dimensions: number }
+}
+type ModelConfiguration = { state: 'CONFIGURED' | 'NOT_CONFIGURED' | 'INCOMPLETE' | 'INVALID'; model: string | null; endpoint: string | null }
+export type LLMInput = { provider: 'openai-compatible'; base_url: string; model: string; api_key?: string }
+type LLMMetadata = Omit<LLMInput, 'api_key'> & { key_configured: true }
+export type LLMCredentials = {
+  contract_version: 'llm-credentials-v3'; revision: number; saved: boolean
+  chat: LLMMetadata | null; embedding: LLMMetadata | null
+  applied: boolean; connection_tested: boolean; save_allowed: boolean
+  error_code: 'CONFIG_INVALID' | 'CONFIG_STORAGE_UNAVAILABLE' | null
+  roles: Record<'chat' | 'embedding', {
+    saved_revision: number | null; active_revision: number | null; active: LLMMetadata | null
+    test: null | { revision: number; status: 'PASS' | 'FAIL' | 'BLOCKED'; code: string | null; dimension: number | null; observed_model: string | null; client_attempts: number; output_chars: number; tested_at: string }
+    status: 'NOT_CONFIGURED' | 'SAVED' | 'PENDING_APPLY' | 'APPLIED' | 'BLOCKED'; blocker: string | null
+    actions: { test: boolean; apply: boolean }
+  }>
+  build_config: { state: 'NOT_SUPPORTED'; reason: 'BUILDER_REPLAY_ONLY' }
+}
+function llmInput(value: LLMInput) {
+  if (!value || value.provider !== 'openai-compatible' || typeof value.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(value.model) ||
+    typeof value.base_url !== 'string' || value.base_url.length > 2048 || /[\s\x00-\x1f\x7f]/.test(value.base_url)) return false
+  try {
+    const url = new URL(value.base_url)
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash || url.port === '0') return false
+  } catch { return false }
+  return value.api_key === undefined || typeof value.api_key === 'string' && /^[!-~]{1,4096}$/.test(value.api_key)
+}
+function validateLLMCredentials(value: LLMCredentials) {
+  const invalid = () => { throw new ApiError('Metadata cấu hình model không hợp lệ', 502) }
+  if (!shape(value, ['contract_version', 'revision', 'saved', 'chat', 'embedding', 'applied', 'connection_tested', 'save_allowed', 'error_code', 'roles', 'build_config']) ||
+    value.contract_version !== 'llm-credentials-v3' || !count(value.revision, 2147483647) || typeof value.saved !== 'boolean' ||
+    typeof value.save_allowed !== 'boolean' || typeof value.applied !== 'boolean' || typeof value.connection_tested !== 'boolean' ||
+    !shape(value.roles, ['chat', 'embedding']) || !shape(value.build_config, ['state', 'reason']) ||
+    value.build_config.state !== 'NOT_SUPPORTED' || value.build_config.reason !== 'BUILDER_REPLAY_ONLY' ||
+    value.error_code !== null && !['CONFIG_INVALID', 'CONFIG_STORAGE_UNAVAILABLE'].includes(value.error_code)) invalid()
+  for (const role of ['chat', 'embedding'] as const) {
+    const model = value[role]
+    if (model !== null && (!shape(model, ['provider', 'base_url', 'model', 'key_configured']) || !llmInput(model) || model.key_configured !== true)) invalid()
+    const row = value.roles[role], test = row?.test
+    if (!shape(row, ['saved_revision', 'test', 'active_revision', 'active', 'status', 'blocker', 'actions']) ||
+      (row.saved_revision === null) !== (model === null) || row.saved_revision !== null && (!count(row.saved_revision, value.revision) || row.saved_revision < 1) ||
+      row.active_revision !== null && (!count(row.active_revision, value.revision) || row.active_revision < 1) ||
+      row.active !== null && (!shape(row.active, ['provider', 'base_url', 'model', 'key_configured']) || !llmInput(row.active) || row.active.key_configured !== true) ||
+      !['NOT_CONFIGURED', 'SAVED', 'PENDING_APPLY', 'APPLIED', 'BLOCKED'].includes(row.status) ||
+      row.blocker !== null && !modelErrorCodes.includes(row.blocker) || !shape(row.actions, ['test', 'apply']) ||
+      typeof row.actions.test !== 'boolean' || typeof row.actions.apply !== 'boolean') invalid()
+    if (test !== null && (!shape(test, ['revision', 'status', 'code', 'dimension', 'observed_model', 'client_attempts', 'output_chars', 'tested_at']) ||
+      test.revision !== row.saved_revision || !['PASS', 'FAIL', 'BLOCKED'].includes(test.status) ||
+      test.code !== null && !modelErrorCodes.includes(test.code) || (test.status === 'PASS') !== (test.code === null) ||
+      !count(test.client_attempts, 1) || !count(test.output_chars, 262144) || test.dimension !== null && !count(test.dimension, 262144) ||
+      test.observed_model !== null && test.observed_model !== model?.model || typeof test.tested_at !== 'string' ||
+      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/.test(test.tested_at) ||
+      test.status === 'PASS' && (test.client_attempts !== 1 || (role === 'embedding' ? test.dimension !== 3072 : test.output_chars < 1)))) invalid()
+    if (row.status === 'APPLIED' && (row.active_revision !== row.saved_revision || JSON.stringify(row.active) !== JSON.stringify(model))) invalid()
+  }
+  if (value.saved ? value.revision < 1 || value.chat === null && value.embedding === null : value.revision !== 0 || value.chat !== null || value.embedding !== null) invalid()
+  if ((value.error_code !== null || value.revision === 2147483647) && value.save_allowed) invalid()
+  if (value.applied !== Object.values(value.roles).some(row => row.status === 'APPLIED') ||
+    value.connection_tested !== Object.values(value.roles).some(row => row.test?.status === 'PASS')) invalid()
+  return value
+}
+const modelErrorCodes = ['TEST_REQUIRED', 'TEST_IN_PROGRESS', 'RELEASE_UNAVAILABLE', 'RELEASE_MISMATCH', 'VECTOR_IDENTITY_MISMATCH',
+  'ACTIVE_CONFIG_INVALID', 'PROXY_POLICY_UNVERIFIED', 'BLOCKED', 'AUTH_FAILED', 'MODEL_NOT_FOUND', 'RATE_LIMITED', 'PROVIDER_ERROR',
+  'MODEL_MISMATCH', 'DIMENSION_MISMATCH', 'INVALID_RESPONSE', 'TIMEOUT', 'NETWORK_ERROR']
+export async function loadLLMCredentials(signal?: AbortSignal): Promise<LLMCredentials> {
+  return validateLLMCredentials(await api<LLMCredentials>('/admin/kag/config/models', { signal, cache: 'no-store' }))
+}
+export async function saveLLMCredentials(revision: number, role: 'chat' | 'embedding', input: LLMInput): Promise<LLMCredentials> {
+  if (!count(revision, 2147483646) || !['chat', 'embedding'].includes(role) || !llmInput(input)) throw new ApiError('Provider, model, Base URL hoặc API key không hợp lệ', 400)
+  return validateLLMCredentials(await api<LLMCredentials>('/admin/kag/config/models', send('POST', { revision, [role]: input })))
+}
+export async function changeLLMModel(role: 'chat' | 'embedding', action: 'test' | 'apply', revision: number): Promise<LLMCredentials> {
+  if (!count(revision, 2147483646) || !['chat', 'embedding'].includes(role) || !['test', 'apply'].includes(action)) throw new ApiError('Thao tác model không hợp lệ', 400)
+  return validateLLMCredentials(await api<LLMCredentials>(`/admin/kag/config/models/${role}/${action}`, send('POST', { revision })))
+}
+export type ChatRetrievalValues = { top_k: number; expand: boolean }
+export type ChatRetrievalConfiguration = {
+  contract_version: 'chat-retrieval-v1'; revision: number
+  saved: ChatRetrievalValues | null; active: ChatRetrievalValues | null; previous: ChatRetrievalValues | null
+  persisted: boolean; pending: boolean; runtime_idle: boolean
+  actions: { save: boolean; apply: boolean; restore: boolean }
+  error_code: 'CONFIG_INVALID' | 'CONFIG_STORAGE_UNAVAILABLE' | null
+}
+function retrievalValues(value: unknown): value is ChatRetrievalValues {
+  const v = value as ChatRetrievalValues
+  return shape(v, ['top_k', 'expand']) && Number.isInteger(v.top_k) && v.top_k >= 1 && v.top_k <= 10 && typeof v.expand === 'boolean'
+}
+function validateChatRetrieval(value: ChatRetrievalConfiguration) {
+  const invalid = () => { throw new ApiError('Cấu hình Retrieval cho Chat không hợp lệ', 502) }
+  if (!shape(value, ['contract_version', 'revision', 'saved', 'active', 'previous', 'persisted', 'pending', 'runtime_idle', 'actions', 'error_code']) ||
+    value.contract_version !== 'chat-retrieval-v1' || !count(value.revision, 2147483647) || !shape(value.actions, ['save', 'apply', 'restore']) ||
+    typeof value.persisted !== 'boolean' || typeof value.pending !== 'boolean' || typeof value.runtime_idle !== 'boolean' ||
+    value.error_code !== null && !['CONFIG_INVALID', 'CONFIG_STORAGE_UNAVAILABLE'].includes(value.error_code) ||
+    (value.active === null ? value.saved !== null || value.previous !== null || value.error_code === null : !retrievalValues(value.active) || !retrievalValues(value.saved) || value.previous !== null && !retrievalValues(value.previous)) ||
+    value.pending !== (value.active?.top_k !== value.saved?.top_k || value.active?.expand !== value.saved?.expand)) invalid()
+  const available = value.active !== null && value.error_code === null && value.revision < 2147483647
+  if (value.actions.save !== available || value.actions.apply !== (available && value.runtime_idle && value.pending) || value.actions.restore !== (available && value.runtime_idle && value.previous !== null)) invalid()
+  return value
+}
+export async function loadChatRetrieval(signal?: AbortSignal): Promise<ChatRetrievalConfiguration> {
+  return validateChatRetrieval(await api<ChatRetrievalConfiguration>('/admin/kag/config/retrieval', { signal, cache: 'no-store' }))
+}
+export async function changeChatRetrieval(action: 'save' | 'apply' | 'restore', revision: number, values?: ChatRetrievalValues): Promise<ChatRetrievalConfiguration> {
+  if (!['save', 'apply', 'restore'].includes(action) || !count(revision, 2147483646) || (action === 'save' ? !retrievalValues(values) : values !== undefined)) throw new ApiError('Giá trị Retrieval không hợp lệ', 400)
+  return validateChatRetrieval(await api<ChatRetrievalConfiguration>(`/admin/kag/config/retrieval/${action}`, send('POST', { revision, ...(values ? { values } : {}) })))
+}
+export async function loadKagConfiguration(signal?: AbortSignal): Promise<KagConfiguration> {
+  const value = await api<KagConfiguration>('/admin/kag/config', { signal, cache: 'no-store' })
+  const invalid = () => { throw new ApiError('Thông tin cấu hình KAG không hợp lệ', 502) }
+  const optionalText = (v: unknown, pattern: RegExp) => v === null || typeof v === 'string' && pattern.test(v)
+  if (!shape(value, ['contract_version', 'project', 'models', 'solver']) || value.contract_version !== 'kag-config-v1' ||
+    !shape(value.project, ['source', 'release_id', 'release_state']) || value.project.source !== 'startup_environment' ||
+    !['NOT_CONFIGURED', 'LOADED', 'UNAVAILABLE'].includes(value.project.release_state) ||
+    !optionalText(value.project.release_id, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/) || value.project.release_state === 'LOADED' && value.project.release_id === null ||
+    !shape(value.models, ['source', 'identity_verified', 'chat', 'embedding']) || value.models.source !== 'startup_environment' || value.models.identity_verified !== false) invalid()
+  for (const role of ['chat', 'embedding'] as const) {
+    const model = value.models[role]
+    if (!shape(model, ['state', 'model', 'endpoint']) || !['CONFIGURED', 'NOT_CONFIGURED', 'INCOMPLETE', 'INVALID'].includes(model.state) ||
+      !optionalText(model.model, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/) || !optionalText(model.endpoint, /^https?:\/\/[A-Za-z0-9.\[\]:-]{1,260}$/) ||
+      model.state === 'CONFIGURED' && (model.model === null || model.endpoint === null) ||
+      model.state === 'NOT_CONFIGURED' && (model.model !== null || model.endpoint !== null)) invalid()
+  }
+  const solver = value.solver
+  if (solver !== null && (!shape(solver, ['source', 'pipeline', 'planner', 'top_k', 'expand', 'max_evidence_chars', 'max_iteration', 'search_k', 'expansion_limit', 'required_vector_dimensions']) ||
+    solver.source !== 'source_defaults' || solver.pipeline !== 'KAGIterativePipeline' || solver.planner !== 'KAGIterativePlanner' || typeof solver.expand !== 'boolean' ||
+    [solver.top_k, solver.max_evidence_chars, solver.max_iteration, solver.search_k, solver.expansion_limit, solver.required_vector_dimensions].some(n => !count(n) || n < 1) || solver.top_k > solver.search_k)) invalid()
+  return value
+}
 export type BuilderState = 'IDLE' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'COMPLETE' | 'BLOCKED'
 export type BuilderStatus = { contract_version: 'builder-control-v1'; state: BuilderState; run_id: string | null; target: { project_id: number; database: string; namespace: 'VietRoadTraffic' } | null; progress: { stage: string; done: number; total: number } | null; error_code: string | null; actions: { build: boolean; stop: boolean; resume: boolean; delete: false }; delete_reason: 'DELETE_NOT_AUTHORIZED'; production_write: 'BLOCKED' }
 export function builderStateLabel(state: BuilderState) {

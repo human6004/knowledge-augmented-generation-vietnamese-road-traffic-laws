@@ -38,7 +38,7 @@ export function useInspection<T>(load: (signal?: AbortSignal) => Promise<T>) {
       })
     return () => controller.abort()
   }, [load, version])
-  return { value, error, loading, reload: () => setVersion((v) => v + 1) }
+  return { value, setValue, error, loading, reload: () => setVersion((v) => v + 1) }
 }
 
 async function loadOverview(signal?: AbortSignal) {

@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 from .contract import ApiFailure
 from . import artifacts, contract
-from .security import ServiceSecrets, admit_request, authorize, request_principal
+from .security import ServiceSecrets, admit_request, authorize, request_principal, authenticate, bounded_body
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,9 @@ class ApiSettings:
                 except (OSError, UnicodeError, ValueError):
                     raise ApiFailure('NOT_READY') from None
             return tuple(result)
-        return cls(ServiceSecrets(tokens('KAG_HTTP_QUERY_'), tokens('KAG_HTTP_INSPECT_')))
+        return cls(ServiceSecrets(tokens('KAG_HTTP_QUERY_'), tokens('KAG_HTTP_INSPECT_'),
+                                  tokens('KAG_HTTP_CREDENTIALS_WRITE_'), tokens('KAG_HTTP_PROVIDER_TEST_'),
+                                  tokens('KAG_HTTP_CONFIG_APPLY_')))
 
 
 def _failure(request: Request, code: str, *, status=None, extra=None):
@@ -243,10 +245,23 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
     async def lifespan(application):
         from .runtime import RuntimeSupervisor, initialize_runtime
         application.state.runtime_supervisor = RuntimeSupervisor()
+        application.state.runtime_supervisor.load_llm_config(settings.secrets)
         try:
             initialize_runtime()
         except Exception:
             application.state.runtime_supervisor.closed = True
+        try:
+            from .inspection import solver_defaults
+            application.state.solver_defaults = solver_defaults()
+        except Exception:
+            application.state.solver_defaults = None
+        if application.state.solver_defaults is not None:
+            defaults = application.state.solver_defaults
+            application.state.runtime_supervisor.load_chat_config({key: defaults[key] for key in ('top_k', 'expand')})
+        else:
+            application.state.runtime_supervisor._chat_error = 'CONFIG_INVALID'
+        application.state.runtime_settings = application.state.runtime_supervisor.restore_llm_runtime(
+            application.state.runtime_settings, application.state.serving_release, application.state.provider_test_policy)
         try:
             yield
         finally:
@@ -258,6 +273,10 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
     app.state.serving_release = None
     app.state.runtime_settings = None
     app.state.evaluation_root = None
+    app.state.provider_test_policy = None
+    from .inspection import configuration_view
+    app.state.config_snapshot = configuration_view({}, {})
+    app.state.solver_defaults = None
     app.add_middleware(_SafeHTTP)
 
     def sample_guard(request, release, runtime_settings):
@@ -335,6 +354,83 @@ def create_app(settings: ApiSettings | None = None, runtime_factory=None, *, ena
 
     if not (settings.secrets.query_tokens or settings.secrets.inspect_tokens):
         return app
+
+    @app.get('/v1/config')
+    async def configuration(request: Request):
+        authorize(request_principal(request), 'inspect', None)
+        if request.query_params or request.headers.get('transfer-encoding') or request.headers.get('content-length', '0') != '0':
+            raise ApiFailure('INVALID_REQUEST')
+        from .inspection import validate_config
+        snapshot = app.state.config_snapshot
+        project = dict(snapshot['project'])
+        if type(app.state.serving_release) is artifacts.ServingRelease:
+            project['release_state'] = 'LOADED'
+        return validate_config(dict(snapshot, project=project, solver=app.state.solver_defaults))
+
+    @app.get('/v1/config/retrieval')
+    async def chat_retrieval_configuration(request: Request):
+        authorize(request_principal(request), 'inspect', None)
+        if request.query_params or request.headers.get('transfer-encoding') or request.headers.get('content-length', '0') != '0':
+            raise ApiFailure('INVALID_REQUEST')
+        supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if supervisor is None:
+            raise ApiFailure('NOT_READY')
+        return supervisor.chat_config_view()
+
+    @app.get('/v1/config/models')
+    async def llm_configuration(request: Request):
+        authorize(request_principal(request), 'inspect', None)
+        if request.query_params or request.headers.get('transfer-encoding') or request.headers.get('content-length', '0') != '0':
+            raise ApiFailure('INVALID_REQUEST')
+        supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if supervisor is None:
+            raise ApiFailure('NOT_READY')
+        return supervisor.llm_config_view()
+
+    @app.post('/v1/config/models')
+    async def save_llm_configuration(request: Request):
+        authorize(request_principal(request), 'credentials-write', None)
+        if request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        change = contract.LLMCredentialsChange.from_json(await bounded_body(request))
+        supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if supervisor is None:
+            raise ApiFailure('NOT_READY')
+        return supervisor.save_llm_config(change)
+
+    @app.post('/v1/config/models/{role}/{action}')
+    async def model_action(request: Request, role: str, action: str):
+        if role not in ('chat', 'embedding') or action not in ('test', 'apply') or request.query_params:
+            raise ApiFailure('INVALID_REQUEST')
+        principal = request_principal(request)
+        authorize(principal, 'provider-test' if action == 'test' else 'config-apply', None)
+        change = contract.ChatConfigChange.from_json(await bounded_body(request))
+        if change.values is not None:
+            raise ApiFailure('INVALID_REQUEST')
+        supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if supervisor is None:
+            raise ApiFailure('NOT_READY')
+        if action == 'test':
+            return await supervisor.test_llm_config(role, change.revision, app.state.provider_test_policy)
+        app.state.runtime_settings = supervisor.apply_llm_config(role, change.revision,
+            app.state.runtime_settings, app.state.serving_release, app.state.provider_test_policy)
+        return supervisor.llm_config_view()
+
+    @app.post('/v1/config/retrieval/{action}')
+    async def change_chat_retrieval(request: Request, action: str):
+        authorize(request_principal(request), 'inspect', None)
+        # A read-only inspection credential alone cannot change runtime defaults.
+        tokens = request.headers.getlist('x-kag-config-query-authorization')
+        if len(tokens) > 1:
+            raise ApiFailure('AUTH_INVALID')
+        authorize(authenticate(tokens[0] if tokens else None, settings.secrets), 'query', None)
+        if request.query_params or action not in ('save', 'apply', 'restore'):
+            raise ApiFailure('INVALID_REQUEST')
+        change = contract.ChatConfigChange.from_json(await bounded_body(request))
+        supervisor = getattr(app.state, 'runtime_supervisor', None)
+        if supervisor is None:
+            raise ApiFailure('NOT_READY')
+        return supervisor.change_chat_config(action, change)
 
     @app.get('/v1/pipeline/status')
     async def pipeline_status(request: Request):

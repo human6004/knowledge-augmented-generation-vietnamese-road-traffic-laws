@@ -140,6 +140,14 @@ services:
       KAG_HTTP_WORKERS: "1"
       KAG_HTTP_QUERY_SECRET_FILE: /run/secrets/query_token
       KAG_HTTP_INSPECT_SECRET_FILE: /run/secrets/inspect_token
+      KAG_HTTP_CREDENTIALS_WRITE_SECRET_FILE: /run/secrets/credentials_write_token
+      KAG_HTTP_PROVIDER_TEST_SECRET_FILE: /run/secrets/provider_test_token
+      KAG_HTTP_CONFIG_APPLY_SECRET_FILE: /run/secrets/config_apply_token
+      KAG_HTTP_PROVIDER_TEST_ENABLED: ${KAG_PROVIDER_ENABLED:-0}
+      KAG_HTTP_PROVIDER_TEST_GATEWAY_TOKEN_FILE: ${KAG_PROVIDER_ENABLED:+/run/secrets/egress_token}
+      # Enable only for a proxy route with retries, credential rotation and model fallback disabled.
+      KAG_HTTP_CHAT_PROXY_TEST_SAFE: ${KAG_CHAT_PROXY_TEST_SAFE:-0}
+      KAG_HTTP_CHAT_PROXY_PORT: ${KAG_CHAT_PROXY_PORT:-8317}
       KAG_HTTP_RELEASE_ROOT: ${KAG_RELEASE_ID:+/release}
       KAG_HTTP_RELEASE_ID: ${KAG_RELEASE_ID:-}
       KAG_HTTP_SAMPLE_PROOF_SHA256: ${KAG_SAMPLE_PROOF_SHA256:-}
@@ -164,7 +172,7 @@ services:
       KAG_PRODUCTION_WRITE: BLOCKED
       KAG_PROVIDER_EGRESS: DENY
       KAG_DEBUG_DUMP_CONFIG: "0"
-    secrets: [query_token, inspect_token, egress_token]
+    secrets: [query_token, inspect_token, egress_token, credentials_write_token, provider_test_token, config_apply_token]
     volumes:
       - type: bind
         source: ${KAG_STATE_DIR:-../luatgt-state}/release
@@ -302,6 +310,9 @@ volumes:
     name: ${KAG_STORAGE_PROJECT:-${COMPOSE_PROJECT_NAME:-luatgt}}_openspg-minio-data
     external: ${KAG_STORAGE_EXTERNAL:-false}
 secrets:
+  provider_test_token: {file: "${KAG_PROVIDER_TEST_SECRET_FILE:-../luatgt-state/provider-test.token}"}
+  config_apply_token: {file: "${KAG_CONFIG_APPLY_SECRET_FILE:-../luatgt-state/config-apply.token}"}
+  credentials_write_token: {file: "${KAG_CREDENTIALS_WRITE_SECRET_FILE:-../luatgt-state/credentials-write.token}"}
   builder_token: {file: "${KAG_STATE_DIR:-../luatgt-state}/builder.token"}
   query_token: {file: "${KAG_STATE_DIR:-../luatgt-state}/query.token"}
   inspect_token: {file: "${KAG_STATE_DIR:-../luatgt-state}/inspect.token"}

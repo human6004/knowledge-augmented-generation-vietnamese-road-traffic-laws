@@ -30,7 +30,7 @@ Kết quả: có source và `vendor/KAG` đúng phiên bản. **Các lệnh còn
 
 ## Bước 3 — Tự động tạo mật khẩu và token
 
-Chạy trong thư mục gốc `luatgt-kag`. Đoạn PowerShell dưới đây tạo `.env` nếu chưa có, với **9 mật khẩu/khóa độc lập**, mỗi giá trị là 64 ký tự hexadecimal ngẫu nhiên, và tạo các token còn thiếu. Nếu đã được cấp `.env` để cài mới trên máy riêng, giữ file đó và chạy cùng đoạn lệnh để tự tạo 4 token. `.env` và token đã tồn tại không bị ghi đè. Máy có database cũ phải giữ bộ secrets tương ứng, dùng [UPDATE](UPDATE.md).
+Chạy trong thư mục gốc `luatgt-kag`. Đoạn PowerShell dưới đây tạo `.env` nếu chưa có, với **9 mật khẩu/khóa độc lập**, mỗi giá trị là 64 ký tự hexadecimal ngẫu nhiên, và tạo các token còn thiếu. Nếu đã được cấp `.env` để cài mới trên máy riêng, giữ file đó và chạy cùng đoạn lệnh để tự tạo 7 token. `.env` và token đã tồn tại không bị ghi đè. Máy có database cũ phải giữ bộ secrets tương ứng, dùng [UPDATE](UPDATE.md).
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -43,6 +43,13 @@ $statePath = $stateSetting.Groups[1].Value.Trim().Trim([char]34, [char]39)
 if ([string]::IsNullOrWhiteSpace($statePath)) { throw 'KAG_STATE_DIR không được để trống.' }
 $state = [IO.Path]::GetFullPath((Join-Path $PWD.Path $statePath))
 $tokenNames = @('query', 'inspect', 'builder', 'egress')
+$tokenFiles = @($tokenNames | ForEach-Object { Join-Path $state "$_.token" })
+foreach ($entry in @(@('KAG_CREDENTIALS_WRITE_SECRET_FILE', 'credentials-write'),
+                     @('KAG_PROVIDER_TEST_SECRET_FILE', 'provider-test'), @('KAG_CONFIG_APPLY_SECRET_FILE', 'config-apply'))) {
+    $setting = [regex]::Match($content, "(?m)^$($entry[0])=([^\r\n]+)")
+    $path = if ($setting.Success) { $setting.Groups[1].Value.Trim().Trim([char]34, [char]39) } else { "../luatgt-state/$($entry[1]).token" }
+    $tokenFiles += [IO.Path]::GetFullPath((Join-Path $PWD.Path $path))
+}
 
 $keys = @('ADMIN_PASSWORD', 'DB_PASSWORD', 'MYSQL_ROOT_PASSWORD', 'REDIS_PASSWORD',
           'JWT_SECRET', 'MINIO_PASSWORD', 'KAG_MYSQL_PASSWORD',
@@ -61,12 +68,13 @@ try {
         $content = [regex]::Replace($content, "(?m)^$key=(?=\r?$)", "$key=$secret")
     }
     [IO.Directory]::CreateDirectory($state) | Out-Null
-    foreach ($name in $tokenNames) {
-        if (Test-Path -LiteralPath (Join-Path $state "$name.token")) { continue }
+    foreach ($tokenPath in $tokenFiles) {
+        if (Test-Path -LiteralPath $tokenPath) { continue }
+        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($tokenPath)) | Out-Null
         $bytes = New-Object byte[] 32
         $rng.GetBytes($bytes)
         $secret = [Text.Encoding]::ASCII.GetBytes([BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant())
-        $file = [IO.File]::Open((Join-Path $state "$name.token"), [IO.FileMode]::CreateNew)
+        $file = [IO.File]::Open($tokenPath, [IO.FileMode]::CreateNew)
         try { $file.Write($secret, 0, $secret.Length) } finally { $file.Dispose() }
     }
     if ($createEnv) {
@@ -88,6 +96,14 @@ Bốn file `query.token`, `inspect.token`, `builder.token`, `egress.token` nằm
 Get-ChildItem .\.secrets -Filter *.token -Name
 ```
 
+Ba token riêng `credentials-write.token`, `provider-test.token`, `config-apply.token` dùng cho Save, Test và Apply model; mặc định ở `../luatgt-state/` ngoài repository. Đường dẫn tương ứng: `KAG_CREDENTIALS_WRITE_SECRET_FILE`, `KAG_PROVIDER_TEST_SECRET_FILE`, `KAG_CONFIG_APPLY_SECRET_FILE`. Không dùng lại query/inspect token. Compose mount read-only vào backend và KAG API. Khi cập nhật cài đặt cũ, chạy lại Bước 3 để tạo token còn thiếu trước khi recreate hai service.
+
+Save model lưu key trong file riêng quyền `0600` trên volume provider-state, không thay cấu hình Retrieval hoặc runtime. API chỉ trả metadata và trạng thái key. Đây không phải mã hóa; bảo vệ quyền đọc và mọi bản sao volume. Save không cấp quyền Test/Apply hoặc mở provider egress.
+
+Trong Admin → Cấu hình, lưu từng nhóm rồi chọn Kiểm tra và xác nhận chi phí. Test gửi tối đa một request từ KAG, không tự retry. Gateway hiện đăng ký Chat `http://127.0.0.1:8317/v1` (được chuyển tới host Docker) và Embedding `https://api.vilao.ai/v1`; endpoint khác vẫn lưu được nhưng Test bị chặn. `KAG_PROVIDER_ENABLED=1` cho phép gateway; không mở outbound trực tiếp từ KAG API. Chat Test chỉ được bật bằng `KAG_CHAT_PROXY_TEST_SAFE=1` sau khi người vận hành xác minh route proxy không retry, xoay credential hoặc fallback model. Không bật cờ này cho proxy dùng chung còn các cơ chế đó.
+
+Test PASS gắn với revision của từng nhóm. Apply chỉ chạy khi runtime rảnh và model/embedding khớp serving release đã kiểm chứng; thiếu release thì báo BLOCKED. Restart khôi phục bản active, không tự áp dụng bản mới lưu. Builder hiện replay vector; cấu hình provider/OpenIE cho build chưa được hỗ trợ.
+
 Đoạn lệnh ở Bước 3 đọc đường dẫn từ `.env` nếu file đã tồn tại. Cài đặt cũ dùng `../luatgt-state` vẫn giữ nguyên đường dẫn đó. **Không xóa hay tạo lại secrets của lần cài trước.** Khi dùng đường state khác, thay đường dẫn trong lệnh kiểm tra cho khớp.
 
 Trong **Properties → Security**, giới hạn quyền đọc `.env` và state cho người vận hành, giữ quyền Docker Desktop cần để đọc chúng. Chưa cần tạo graph ở bước này.
@@ -95,7 +111,7 @@ Trong **Properties → Security**, giới hạn quyền đọc `.env` và state 
 
 ## Bước 5 — Khởi động
 
-Sau khi hoàn tất tạo `.env` và 4 token, chạy tại thư mục gốc `luatgt-kag`:
+Sau khi hoàn tất tạo `.env` và 7 token, chạy tại thư mục gốc `luatgt-kag`:
 
 ```powershell
 docker compose up -d --build

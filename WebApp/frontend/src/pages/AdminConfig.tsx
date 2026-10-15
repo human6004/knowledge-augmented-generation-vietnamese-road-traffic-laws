@@ -1,164 +1,311 @@
-import { Notice,useData } from './server/shared'
-import { type SchemaResponse } from './server/KagSchemaPage'
-import { useMemo, useState } from 'react'
-import { defaultConfig, useAdmin, type KagConfig } from '../admin/store'
-import { Button, Card, Field, Page, Terminal, inputCls } from '../admin/ui'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { Button, Card, Field, Modal, Page, inputCls } from '../admin/ui'
+import { ApiError } from '../api'
+import { Notice, useData } from './server/shared'
+import type { SchemaResponse } from './server/KagSchemaPage'
+import { useInspection } from './server/KagManagement'
+import { changeLLMModel, changeChatRetrieval, loadChatRetrieval, loadBuilderInputs, loadKagConfiguration, loadLLMCredentials, saveLLMCredentials, type ChatRetrievalValues } from './server/kag-inspection'
 
-function toYaml(c: KagConfig) {
-  return [
-    'project:',
-    `  biz_scene: ${c.bizScene}`,
-    `  language: ${c.language}`,
-    `  host_addr: ${c.hostAddr}`,
-    '',
-    ...(['openie_llm', 'chat_llm'] as const).map((k) => `${k}:\n  type: openai\n  base_url: ${c.baseUrl}\n  api_key: ${c.apiKey ? '********' : '<chưa đặt>'}\n  model: ${k === 'openie_llm' ? c.openieModel : c.chatModel}\n`),
-    'vectorize_model:',
-    '  type: openai',
-    `  base_url: ${c.baseUrl}`,
-    `  model: ${c.vectorModel}`,
-    '',
-    'kag_builder_pipeline:',
-    `  num_chains: ${c.chainNum}`,
-    `  num_threads_per_chain: ${c.threadNum}`,
-    '  splitter:',
-    `    split_length: ${c.splitLength}`,
-    `    window_length: ${c.splitOverlap}`,
-    ...(c.similarityThreshold != null ? [`  similarity_threshold: ${c.similarityThreshold}`] : ['  # similarity_threshold: (tắt fuzzy linking)']),
-    '',
-    'kag_solver_pipeline:',
-    `  pipeline: ${c.solverVariant === 'baseline' ? 'kag_static_pipeline' : 'evidence_aware_iterative_pipeline'}`,
-    '  planner: lf_kag_static_planner',
-    '  executors: [hybrid-retrieval, py-math, deduce, output]',
-    '  retrievers:',
-    `    kg_cs: { threshold: ${c.kgCsThreshold} }`,
-    `    kg_fr: { top_k: ${c.kgFrTopK}, threshold: ${c.kgFrThreshold} }`,
-    `    rc:    { top_k: ${c.rcTopK}, score_threshold: ${c.rcScoreThreshold} }`,
-    '  generator: llm_index_generator',
-    `  enable_ref: ${c.enableRef}`,
-    'eval:',
-    `  thread_num: ${c.evalThreads}`,
-    `  upper_limit: ${c.evalUpperLimit}`,
-  ].join('\n')
+const modelErrors: Record<string, string> = {
+  TEST_REQUIRED: 'Cần kiểm thử thành công bản đã lưu trước khi áp dụng.', TEST_IN_PROGRESS: 'Kiểm thử chưa hoàn tất. Tải lại trước khi thử tiếp.',
+  RELEASE_UNAVAILABLE: 'Chưa có serving release hợp lệ. Cần cấu hình release đã kiểm chứng.',
+  RELEASE_MISMATCH: 'Model/endpoint không khớp policy hoặc proof của serving release.', VECTOR_IDENTITY_MISMATCH: 'Embedding không khớp identity, index hoặc provenance của release.',
+  ACTIVE_CONFIG_INVALID: 'Bản active không còn hợp lệ. Serving tạm unavailable; cần kiểm tra release/policy.',
+  PROXY_POLICY_UNVERIFIED: 'Proxy chưa có route kiểm thử tắt retry, xoay credential và fallback. Cần cấu hình route riêng được phép.',
+  BLOCKED: 'Endpoint chưa được deployment cho phép qua gateway. Cần đăng ký đích hợp lệ.',
+  AUTH_FAILED: 'Provider từ chối API key hoặc quyền truy cập.', MODEL_NOT_FOUND: 'Provider không tìm thấy model.',
+  RATE_LIMITED: 'Provider giới hạn lượt gọi. Chờ trước khi kiểm thử lại.', PROVIDER_ERROR: 'Provider trả lỗi dịch vụ.',
+  MODEL_MISMATCH: 'Model trong response không khớp model đã lưu.', DIMENSION_MISMATCH: 'Vector đo được không đủ 3072 chiều.',
+  INVALID_RESPONSE: 'Provider trả dữ liệu không hợp lệ.', TIMEOUT: 'Request hết thời gian; không tự thử lại.', NETWORK_ERROR: 'Không kết nối được provider qua gateway.',
 }
 
 export default function AdminConfig() {
-  const schema=useData<SchemaResponse>('/admin/kag/schema')
-  const { config, setConfig, notify, runTask } = useAdmin()
-  const [draft, setDraft] = useState(config)
-  const [showKey, setShowKey] = useState(false)
-  const [testing, setTesting] = useState<null | 'ok' | 'run'>(null)
-  const dirty = JSON.stringify(draft) !== JSON.stringify(config)
-  const yaml = useMemo(() => toYaml(draft), [draft])
-  const set = <K extends keyof KagConfig>(k: K, v: KagConfig[K]) => setDraft((d) => ({ ...d, [k]: v }))
-  const num = (k: keyof KagConfig) => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value) as never)
+  const config = useInspection(loadKagConfiguration)
+  const schema = useData<SchemaResponse>('/admin/kag/schema')
+  const builder = useInspection(loadBuilderInputs)
+  const retrieval = useInspection(loadChatRetrieval)
+  const models = useInspection(loadLLMCredentials)
+  const [modelsDirty, setModelsDirty] = useState({ chat: false, embedding: false })
+  const [modelsSaving, setModelsSaving] = useState(false)
+  const [modelsMessage, setModelsMessage] = useState('')
+  const [modelsError, setModelsError] = useState('')
+  const [modelAction, setModelAction] = useState<{ role: 'chat' | 'embedding'; action: 'test' | 'apply'; revision: number } | null>(null)
+  const [modelRunning, setModelRunning] = useState(false)
+  const [draft, setDraft] = useState<ChatRetrievalValues>()
+  const [changing, setChanging] = useState(false)
+  const [changeError, setChangeError] = useState('')
+  const [changeMessage, setChangeMessage] = useState('')
+  const [confirmation, setConfirmation] = useState<{ action: 'apply' | 'restore'; revision: number; values: ChatRetrievalValues } | null>(null)
+  useEffect(() => { if (retrieval.value?.saved) setDraft({ ...retrieval.value.saved }) }, [retrieval.value])
+  const retrievalState = retrieval.value
+  const dirty = !!draft && !!retrievalState?.saved && (draft.top_k !== retrievalState.saved.top_k || draft.expand !== retrievalState.saved.expand)
+  const valid = !!draft && Number.isInteger(draft.top_k) && draft.top_k >= 1 && draft.top_k <= 10
+  const [copying, setCopying] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState('')
+  const value = config.value, solver = value?.solver
+  const snapshot = value ? JSON.stringify({ ...value, schema_contract: schema.value ? {
+    namespace: schema.value.identity.namespace, schema_sha256: schema.value.identity.schema_sha256,
+    contract_sha256: schema.value.identity.contract_sha256,
+  } : null, builder_target: builder.value?.target ?? null, chat_retrieval: retrievalState ?? null, saved_models: models.value ?? null }, null, 2) : ''
+  const modelState = { CONFIGURED: 'Đã cấu hình', NOT_CONFIGURED: 'Chưa cấu hình', INCOMPLETE: 'Cấu hình chưa đầy đủ', INVALID: 'Cấu hình không hợp lệ' }
+  const releaseState = { NOT_CONFIGURED: 'Chưa cấu hình', LOADED: 'Đã nạp artifact', UNAVAILABLE: 'Chưa nạp được artifact' }
+
+  function reload() {
+    setCopied(false)
+    setCopyError('')
+    setChangeError('')
+    setChangeMessage('')
+    setConfirmation(null)
+    setModelsDirty({ chat: false, embedding: false })
+    setModelsMessage('')
+    setModelsError('')
+    config.reload()
+    schema.reload()
+    builder.reload()
+    retrieval.reload()
+    models.reload()
+  }
+  async function saveModels(event: FormEvent<HTMLFormElement>, role: 'chat' | 'embedding') {
+    event.preventDefault()
+    if (!models.value?.save_allowed) return
+    const form = event.currentTarget, fields = new FormData(form)
+    const key = String(fields.get(`${role}_api_key`) ?? '')
+    const input = { provider: 'openai-compatible' as const, base_url: String(fields.get(`${role}_base_url`) ?? ''), model: String(fields.get(`${role}_model`) ?? ''), ...(key ? { api_key: key } : {}) }
+    // Keys stay in the password input and submit scope, never in React state or snapshots.
+    setModelsSaving(true)
+    setModelsError('')
+    setModelsMessage('')
+    setCopied(false)
+    try {
+      const saved = await saveLLMCredentials(models.value.revision, role, input)
+      models.setValue(saved)
+      form.querySelectorAll<HTMLInputElement>('input[type=password]').forEach(field => { field.value = '' })
+      setModelsMessage(`${key ? 'API key đã lưu thành công' : 'Đã lưu cấu hình'} (${role === 'chat' ? 'Chat' : 'Embedding'}, revision ${saved.revision}). Chưa Test, chưa Apply.`)
+      setModelsDirty(current => ({ ...current, [role]: false }))
+    } catch (error) {
+      setModelsError(error instanceof ApiError ? error.message : 'Không lưu được cấu hình model. Hãy tải lại trước khi thử lại.')
+    } finally { setModelsSaving(false) }
+  }
+  async function change(action: 'save' | 'apply' | 'restore', revision: number, values?: ChatRetrievalValues) {
+    setChanging(true)
+    setChangeError('')
+    setChangeMessage('')
+    setConfirmation(null)
+    setCopied(false)
+    try {
+      await changeChatRetrieval(action, revision, values)
+      setChangeMessage(action === 'save' ? 'Đã lưu bền vững; chưa tự áp dụng.' : action === 'apply' ? 'Đã áp dụng vào cấu hình runtime.' : 'Đã khôi phục bản trước vào cấu hình đã lưu và runtime.')
+      retrieval.reload()
+    } catch (error) {
+      setChangeError(error instanceof ApiError ? error.message : 'Không cập nhật được cấu hình. Hãy tải lại trạng thái trước khi thử lại.')
+    } finally {
+      setChanging(false)
+    }
+  }
+  async function runModelAction() {
+    if (!modelAction) return
+    const { role, action, revision } = modelAction
+    setModelAction(null)
+    setModelRunning(true)
+    setModelsError('')
+    setModelsMessage('')
+    try {
+      const result = await changeLLMModel(role, action, revision)
+      models.setValue(result)
+      const row = result.roles[role]
+      setModelsMessage(action === 'test' ? `${role === 'chat' ? 'Chat' : 'Embedding'}: ${row.test?.status ?? 'BLOCKED'}, revision ${row.saved_revision}.` : `${role === 'chat' ? 'Chat' : 'Embedding'}: ${row.status}.`)
+    } catch (error) {
+      setModelsError(error instanceof ApiError ? error.message : 'Không thực hiện được thao tác. Tải lại trạng thái trước khi thử tiếp.')
+    } finally { setModelRunning(false) }
+  }
+  async function copy() {
+    setCopying(true)
+    setCopied(false)
+    setCopyError('')
+    try {
+      if (!snapshot || !navigator.clipboard?.writeText) throw new Error()
+      await navigator.clipboard.writeText(snapshot)
+      setCopied(true)
+    } catch {
+      setCopyError('Không sao chép được. Hãy cấp quyền clipboard rồi thử lại.')
+    } finally {
+      setCopying(false)
+    }
+  }
 
   return (
-    <Page
-      title="Cấu hình"
-      subtitle="Form cấu hình và kiểm tra mô hình: Demo, không sửa runtime. Schema/contract hiện tại đọc từ API thật."
-      actions={
-        <>
-          <Button variant="ghost" onClick={() => setDraft(defaultConfig)}>Khôi phục mặc định</Button>
-          <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(config)}>Huỷ thay đổi</Button>
-          <Button variant="primary" disabled={!dirty} onClick={() => { setConfig(draft); notify('Demo: đã lưu cấu hình trong phiên trình duyệt; không ghi kag_config.yaml') }}>Lưu cấu hình · Demo</Button>
-        </>
-      }
-    >
-      <Notice {...schema} retry={schema.reload}/><Card title="Schema & contract · API thật" className="mb-5"><div className="px-5 pb-5 text-xs">{schema.value?<><p className="break-all">Namespace: {schema.value.identity.namespace} · SHA-256: {schema.value.identity.schema_sha256}</p><details className="mt-3"><summary>Node, quan hệ và runtime contract chỉ đọc</summary><pre className="whitespace-pre-wrap break-all mt-3">{JSON.stringify(schema.value.contract,null,2)}</pre></details><a className="underline inline-block mt-3" href="/admin/schema">Xem bảng schema và tải contract</a></>:<p>Chưa đọc được schema</p>}</div></Card><p className="mb-4 text-xs text-muted">Các form và YAML bên dưới dùng dữ liệu Demo. Không phải cấu hình live, không thay đổi secrets hoặc runtime.</p>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="space-y-5">
-          <Card title="Dự án">
-            <div className="grid gap-4 px-5 pb-5 sm:grid-cols-3">
-              <Field label="biz_scene" hint={draft.bizScene === 'default' ? '⚠ "default" sẽ chuyển prompt sang tiếng Anh' : 'Dùng prompt tiếng Việt legal_ner / legal_triple'}>
-                <select className={inputCls} value={draft.bizScene} onChange={(e) => set('bizScene', e.target.value as KagConfig['bizScene'])}>
-                  <option value="legal">legal</option>
-                  <option value="default">default</option>
-                </select>
-              </Field>
-              <Field label="Ngôn ngữ">
-                <select className={inputCls} value={draft.language} onChange={(e) => set('language', e.target.value as KagConfig['language'])}>
-                  <option value="vi">Tiếng Việt</option>
-                  <option value="en">English</option>
-                </select>
-              </Field>
-              <Field label="OpenSPG host"><input className={inputCls} value={draft.hostAddr} onChange={(e) => set('hostAddr', e.target.value)} /></Field>
-            </div>
-          </Card>
+    <Page title="Cấu hình" subtitle="Cấu hình đã nạp và giới hạn của phiên bản KAG đang triển khai."
+      actions={<Button disabled={config.loading || schema.loading || builder.loading || retrieval.loading || models.loading || modelsSaving || modelRunning || copying || changing} onClick={reload}>Tải lại</Button>}>
+      <div className="grid gap-5 lg:grid-cols-2 items-start">
+        <Card title="Dự án & Schema">
+          <div className="px-5 pb-5 text-sm space-y-3">
+            <Notice {...schema} />
+            {schema.value && <>
+              <p>Namespace: <span className="font-semibold break-all">{schema.value.identity.namespace}</span></p>
+              <p className="text-muted">Schema/contract đóng gói trong backend; không xác nhận schema trên graph đang chạy.</p>
+              <details><summary className="cursor-pointer underline">Danh tính schema & contract</summary>
+                <dl className="mt-3 space-y-2 break-all">
+                  <div><dt className="text-muted">SHA-256 schema</dt><dd>{schema.value.identity.schema_sha256}</dd></div>
+                  <div><dt className="text-muted">SHA-256 contract</dt><dd>{schema.value.identity.contract_sha256}</dd></div>
+                </dl>
+              </details>
+            </>}
+            {value && <div className="break-all"><p>Release: {value.project.release_id ?? 'Chưa cấu hình'}</p><p>Artifact: {releaseState[value.project.release_state]}</p></div>}
+            <details><summary className="cursor-pointer underline">Đích cấu hình Builder</summary>
+              <Notice {...builder} />
+              {builder.value && <div className="mt-3 space-y-2 break-words">
+                <p>{builder.value.configuration === 'CONFIGURED' ? 'Đã đọc cấu hình SAMPLE' : builder.value.configuration === 'INVALID' ? 'Cấu hình không hợp lệ' : 'Chưa cấu hình'}</p>
+                {builder.value.target && <p>Project {builder.value.target.project_id}, database {builder.value.target.database}, namespace {builder.value.target.namespace}</p>}
+                <p className="text-muted">Đích Builder độc lập với release phục vụ truy vấn. Xem điều kiện Build tại Pipeline.</p>
+              </div>}
+            </details>
+            <Link className="underline inline-block" to="/admin/schema">Xem schema & tải contract</Link>
+          </div>
+        </Card>
 
-          <Card
-            title="Mô hình (OpenAI-compatible)"
-            right={
-              <Button size="sm" onClick={() => { setTesting('run'); window.setTimeout(() => { setTesting('ok'); notify('Demo: mô phỏng kết nối thành công; không gọi provider') }, 1100) }}>
-                {testing === 'run' ? 'Đang kiểm tra…' : testing === 'ok' ? '✓ Demo kết nối OK' : 'Kiểm tra kết nối · Demo'}
-              </Button>
-            }
-          >
-            <div className="grid gap-4 px-5 pb-5 sm:grid-cols-2">
-              <Field label="Base URL" hint="Phải kết thúc bằng /v1">
-                <input className={inputCls} value={draft.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} />
-              </Field>
-              <Field label="API key" hint="Demo trong phiên trình duyệt; không lưu secrets server">
-                <div className="flex gap-2">
-                  <input type={showKey ? 'text' : 'password'} className={inputCls} value={draft.apiKey} onChange={(e) => set('apiKey', e.target.value)} placeholder="sk-…" />
-                  <Button size="sm" variant="ghost" onClick={() => setShowKey((v) => !v)}>{showKey ? 'Ẩn' : 'Hiện'}</Button>
-                </div>
-              </Field>
-              <Field label="openie_llm"><input className={inputCls} value={draft.openieModel} onChange={(e) => set('openieModel', e.target.value)} /></Field>
-              <Field label="chat_llm"><input className={inputCls} value={draft.chatModel} onChange={(e) => set('chatModel', e.target.value)} /></Field>
-              <Field label="vectorize_model"><input className={inputCls} value={draft.vectorModel} onChange={(e) => set('vectorModel', e.target.value)} /></Field>
-            </div>
-          </Card>
-
-          <Card title="Builder & solver">
-            <div className="grid gap-4 px-5 pb-5 sm:grid-cols-3">
-              <Field label="Số chain"><input type="number" min={1} max={16} className={inputCls} value={draft.chainNum} onChange={num('chainNum')} /></Field>
-              <Field label="Thread / chain"><input type="number" min={1} max={16} className={inputCls} value={draft.threadNum} onChange={num('threadNum')} /></Field>
-              <Field label="top_k truy xuất"><input type="number" min={1} max={100} className={inputCls} value={draft.topK} onChange={num('topK')} /></Field>
-              <Field label="split_length"><input type="number" className={inputCls} value={draft.splitLength} onChange={num('splitLength')} /></Field>
-              <Field label="window_length"><input type="number" className={inputCls} value={draft.splitOverlap} onChange={num('splitOverlap')} /></Field>
-              <Field label="similarity_threshold" hint="Để trống = tắt fuzzy linking">
-                <input type="number" step="0.05" min={0} max={1} className={inputCls} value={draft.similarityThreshold ?? ''} onChange={(e) => set('similarityThreshold', e.target.value === '' ? null : Number(e.target.value))} />
-              </Field>
-              <Field label="eval thread_num"><input type="number" min={1} className={inputCls} value={draft.evalThreads} onChange={num('evalThreads')} /></Field>
-              <Field label="eval upper_limit"><input type="number" min={1} className={inputCls} value={draft.evalUpperLimit} onChange={num('evalUpperLimit')} /></Field>
-            </div>
-          </Card>
-          <Card title="Solver & retriever" right={<span className="text-[11.5px] text-muted">kag_static_pipeline</span>}>
-            <div className="grid gap-4 px-5 pb-5 sm:grid-cols-3">
-              <Field label="Biến thể solver" hint={draft.solverVariant === 'evidence_aware' ? 'solver_improvement: verifier + updater lặp theo bằng chứng' : 'kag/solver baseline'}>
-                <select className={inputCls} value={draft.solverVariant} onChange={(e) => set('solverVariant', e.target.value as KagConfig['solverVariant'])}>
-                  <option value="baseline">baseline</option>
-                  <option value="evidence_aware">evidence-aware iterative</option>
-                </select>
-              </Field>
-              <Field label="kg_cs threshold"><input type="number" step="0.05" min={0} max={1} className={inputCls} value={draft.kgCsThreshold} onChange={num('kgCsThreshold')} /></Field>
-              <Field label="enable_ref">
-                <select className={inputCls} value={String(draft.enableRef)} onChange={(e) => set('enableRef', e.target.value === 'true')}>
-                  <option value="true">true — kèm trích dẫn</option>
-                  <option value="false">false</option>
-                </select>
-              </Field>
-              <Field label="kg_fr top_k"><input type="number" min={1} className={inputCls} value={draft.kgFrTopK} onChange={num('kgFrTopK')} /></Field>
-              <Field label="kg_fr threshold"><input type="number" step="0.05" min={0} max={1} className={inputCls} value={draft.kgFrThreshold} onChange={num('kgFrThreshold')} /></Field>
-              <div />
-              <Field label="rc top_k" hint="Tăng nếu Điều đúng không lọt top-k (lỗi C4)"><input type="number" min={1} className={inputCls} value={draft.rcTopK} onChange={num('rcTopK')} /></Field>
-              <Field label="rc score_threshold" hint="Hạ để nới recall chunk"><input type="number" step="0.05" min={0} max={1} className={inputCls} value={draft.rcScoreThreshold} onChange={num('rcScoreThreshold')} /></Field>
-            </div>
-          </Card>
-        </div>
-
-        <div className="space-y-4 xl:sticky xl:top-6 self-start">
-          <Card title="Xem trước kag_config.yaml" right={dirty && <span className="text-[11.5px] font-medium text-accent-strong">Chưa lưu</span>}>
-            <div className="px-5 pb-5">
-              <Terminal lines={yaml.split('\n')} className="max-h-[520px]" />
-              <div className="mt-3 flex gap-2">
-                <Button size="sm" onClick={() => { navigator.clipboard?.writeText(yaml); notify('Đã sao chép YAML') }}>Sao chép</Button>
-                <Button size="sm" onClick={() => runTask('schema-commit')}>Áp dụng & commit schema</Button>
+        <Card title="Models & Providers">
+          <div className="px-5 pb-5 text-sm space-y-4">
+            <Notice {...config} />
+            <Notice {...models} />
+            {models.value && <>
+              {models.value.error_code && <p role="alert" className="text-red-700">Không đọc hoặc ghi được credentials đã lưu. Cần kiểm tra file và quyền phía triển khai.</p>}
+              <p className="text-muted">Chat và Embedding lưu độc lập. Provider/proxy do Base URL quyết định; EvelProxy không bắt buộc.</p>
+              {!models.value.save_allowed && !models.value.error_code && <p>Lưu bị chặn: chưa có quyền credentials-write hoặc revision đã hết giới hạn.</p>}
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                {(['chat', 'embedding'] as const).map(role => <form key={`${role}-${models.value?.roles[role].saved_revision}`} onSubmit={event => void saveModels(event, role)} onChange={() => { setModelsDirty(current => ({ ...current, [role]: true })); setModelsMessage('') }} autoComplete="off" className="min-w-0 space-y-3">
+                  <fieldset disabled={modelsSaving || modelRunning || models.loading || !models.value?.save_allowed} className="min-w-0 space-y-3">
+                    <legend className="font-semibold mb-2">{role === 'chat' ? 'Chat model' : 'Embedding model'}</legend>
+                    <p>{modelsDirty[role] ? 'Chưa lưu thay đổi' : `${models.value?.roles[role].status} — bản lưu ${models.value?.roles[role].saved_revision ?? 'chưa có'}`}</p>
+                    <Field label="Provider / API type" hint="Hiện hỗ trợ giao thức OpenAI-compatible."><select name={`${role}_provider`} className={inputCls} defaultValue="openai-compatible"><option value="openai-compatible">OpenAI-compatible</option></select></Field>
+                    <Field label="Base URL"><input name={`${role}_base_url`} type="url" required maxLength={2048} className={inputCls} defaultValue={models.value?.[role]?.base_url ?? ''} /></Field>
+                    <Field label="Tên model"><input name={`${role}_model`} required maxLength={200} className={inputCls} defaultValue={models.value?.[role]?.model ?? ''} /></Field>
+                    <Field label="API key" hint={models.value?.[role]?.key_configured ? 'Đã lưu key; giá trị được ẩn. Để trống để giữ key, nhập key mới rồi Lưu để thay thế.' : 'Chưa thiết lập. Lần lưu đầu cần nhập key.'}>
+                      <input name={`${role}_api_key`} type="password" autoComplete="new-password" maxLength={4096} required={!models.value?.[role]?.key_configured} className={inputCls} />
+                    </Field>
+                    <Button type="submit" disabled={!modelsDirty[role] || modelsSaving || models.loading || !models.value?.save_allowed}>Lưu {role === 'chat' ? 'Chat' : 'Embedding'}</Button>
+                  </fieldset>
+                  {modelsDirty[role] && <p className="text-muted">Thay đổi chưa lưu. Cần lưu trước khi kiểm thử.</p>}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" disabled={modelsDirty[role] || modelsSaving || modelRunning || !models.value?.roles[role].actions.test} onClick={() => { if (models.value) setModelAction({ role, action: 'test', revision: models.value.revision }) }}>Kiểm tra {role === 'chat' ? 'Chat' : 'Embedding'}</Button>
+                    <Button type="button" disabled={modelsDirty[role] || modelsSaving || modelRunning || !models.value?.roles[role].actions.apply} onClick={() => { if (models.value) setModelAction({ role, action: 'apply', revision: models.value.revision }) }}>Áp dụng {role === 'chat' ? 'Chat' : 'Embedding'}</Button>
+                  </div>
+                  {models.value?.roles[role].test && <p>Test: {models.value.roles[role].test?.status === 'PASS' ? 'TESTED' : models.value.roles[role].test?.status}, revision {models.value.roles[role].test?.revision}; {models.value.roles[role].test?.client_attempts} request từ KAG, không tự retry.</p>}
+                  {models.value?.roles[role].test?.code && models.value.roles[role].test?.code !== models.value.roles[role].blocker && <p className="break-words">Test {models.value.roles[role].test?.code}: {modelErrors[models.value.roles[role].test!.code!]}</p>}
+                  {role === 'embedding' && <p>Dimensions thực đo: {models.value?.roles[role].test?.dimension ?? 'chưa đo'}. Yêu cầu 3072; cùng số chiều chưa đủ để Apply.</p>}
+                  {models.value?.roles[role].blocker && <p role="status" className="break-words">{models.value.roles[role].blocker}: {modelErrors[models.value.roles[role].blocker!]}</p>}
+                  <p>Active serving: revision {models.value?.roles[role].active_revision ?? 'chưa áp dụng'}.</p>
+                  {models.value?.roles[role].active && <p className="break-all">{models.value.roles[role].active?.model} · {models.value.roles[role].active?.base_url}</p>}
+                </form>)}
               </div>
-            </div>
-          </Card>
-        </div>
+              <p className="text-muted">Test có thể phát sinh phí, chỉ chạy sau xác nhận; không đổi active. Apply chỉ đổi consumer khi runtime rảnh và release tương thích.</p>
+              <p>Build config / OpenIE: NOT_SUPPORTED — Builder hiện chỉ replay vector đã có, chưa dùng provider hoặc OpenIE từ Admin.</p>
+            </>}
+            {modelsMessage && <p role="status">{modelsMessage}</p>}
+            {modelsError && <p role="alert" className="text-red-700">{modelsError}</p>}
+            {modelRunning && <p role="status">Đang thực hiện Test/Apply…</p>}
+            {value && <>
+              <p className="font-semibold">Cấu hình runtime lúc khởi động (chỉ đọc)</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {(['chat', 'embedding'] as const).map(role => <section key={role} className="min-w-0 space-y-2" aria-label={role === 'chat' ? 'Chat model' : 'Embedding model'}>
+                  <h3 className="font-semibold">{role === 'chat' ? 'Chat' : 'Embedding'}</h3>
+                  <p>{modelState[value.models[role].state]}</p>
+                  <dl className="space-y-2 break-words">
+                    <div><dt className="text-muted">Model cấu hình</dt><dd className="break-all">{value.models[role].model ?? 'Chưa có giá trị hợp lệ'}</dd></div>
+                    <div><dt className="text-muted">Endpoint (host)</dt><dd className="break-all">{value.models[role].endpoint ?? 'Chưa có giá trị hợp lệ'}</dd></div>
+                  </dl>
+                </section>)}
+              </div>
+              {solver && <p>Vector: runtime yêu cầu {solver.required_vector_dimensions} chiều; chưa đo provider.</p>}
+              <p className="text-muted">Nguồn: cấu hình lúc khởi động KAG API. Endpoint chỉ hiển thị host. Danh tính provider chưa xác minh; đã cấu hình không có nghĩa kết nối thành công.</p>
+            </>}
+          </div>
+        </Card>
+
+        <Card title="Solver & Retrieval">
+          <div className="px-5 pb-5 text-sm space-y-3">
+            {!value ? <p className="text-muted">{config.loading ? 'Đang tải cấu hình…' : 'Chưa đọc được cấu hình KAG.'}</p> : solver ? <>
+              <dl className="space-y-2">
+                <div><dt className="text-muted">Pipeline</dt><dd className="break-all">{solver.pipeline}</dd></div>
+                <div><dt className="text-muted">Top-k mặc định trong source</dt><dd>{solver.top_k}</dd></div>
+              </dl>
+              <p>Evidence và trích dẫn bắt buộc. Thiếu căn cứ thì abstain.</p>
+              <details><summary className="cursor-pointer underline">Giới hạn nâng cao</summary>
+                <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {[
+                    ['Planner', solver.planner], ['Số vòng lặp tối đa', solver.max_iteration],
+                    ['Evidence tối đa (ký tự)', solver.max_evidence_chars], ['Search-k mỗi chỉ mục', solver.search_k],
+                    ['Mở rộng graph mặc định', solver.expand ? 'Bật' : 'Tắt'], ['Giới hạn cạnh mở rộng', solver.expansion_limit],
+                  ].map(([label, text]) => <div key={label}><dt className="text-muted">{label}</dt><dd className="break-all">{text}</dd></div>)}
+                </dl>
+              </details>
+              <p className="text-muted">Nguồn: mặc định constructor trong source đang triển khai. Không xác nhận pipeline đang trả lời được.</p>
+            </> : <p>Chưa đọc được mặc định solver từ runtime. Không dùng giá trị thay thế.</p>}
+          </div>
+        </Card>
+
+        <Card title="Mặc định Retrieval cho Chat">
+          <div className="px-5 pb-5 text-sm space-y-3">
+            <Notice {...retrieval} />
+            {retrievalState && <>
+              {retrievalState.error_code && <p role="alert" className="text-red-700">{retrievalState.error_code === 'CONFIG_INVALID' ? 'Cấu hình đã lưu không hợp lệ. Cần kiểm tra phía triển khai.' : 'Không đọc hoặc ghi được cấu hình đã lưu. Cần kiểm tra quyền truy cập.'}</p>}
+              {retrievalState.active && <p>Đang áp dụng: top_k {retrievalState.active.top_k}, expand {retrievalState.active.expand ? 'bật' : 'tắt'}.</p>}
+              {!retrievalState.error_code && <p>{retrievalState.pending ? 'Đã lưu; chờ áp dụng.' : retrievalState.persisted ? 'Cấu hình đã lưu khớp cấu hình runtime.' : 'Đang dùng mặc định source; chưa lưu tùy chỉnh.'}</p>}
+              {!retrievalState.runtime_idle && <p>Runtime đang bận hoặc chưa an toàn. Áp dụng và khôi phục tạm bị chặn.</p>}
+              {draft && retrievalState.saved && <>
+                <div className="grid gap-4 sm:grid-cols-2 items-end">
+                  <Field label="top_k (1–10)"><input type="number" min={1} max={10} step={1} className={inputCls} value={draft.top_k} disabled={changing || !retrievalState.actions.save} onChange={event => setDraft({ ...draft, top_k: Number(event.target.value) })} /></Field>
+                  <label className="flex items-center gap-2 min-h-10"><input type="checkbox" checked={draft.expand} disabled={changing || !retrievalState.actions.save} onChange={event => setDraft({ ...draft, expand: event.target.checked })} /> Mở rộng graph context (expand)</label>
+                </div>
+                {!valid && <p role="alert" className="text-red-700">top_k phải là số nguyên từ 1 đến 10.</p>}
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={changing || retrieval.loading || !retrievalState.actions.save || !dirty || !valid} onClick={() => void change('save', retrievalState.revision, draft)}>Lưu</Button>
+                  <Button disabled={changing || retrieval.loading || dirty || !retrievalState.actions.apply} onClick={() => setConfirmation({ action: 'apply', revision: retrievalState.revision, values: retrievalState.saved! })}>Áp dụng</Button>
+                  <Button disabled={changing || retrieval.loading || dirty || !retrievalState.actions.restore} onClick={() => setConfirmation({ action: 'restore', revision: retrievalState.revision, values: retrievalState.previous! })}>Khôi phục</Button>
+                </div>
+                {dirty && <p className="text-muted">Thay đổi trên form chưa lưu. Lưu trước khi áp dụng hoặc khôi phục.</p>}
+              </>}
+              <details><summary className="cursor-pointer underline">Cấu hình đã lưu & bản trước</summary><div className="mt-2 space-y-2">
+                <p>Đã lưu: {retrievalState.saved ? `top_k ${retrievalState.saved.top_k}, expand ${retrievalState.saved.expand ? 'bật' : 'tắt'}` : 'Chưa đọc được'}</p>
+                <p>Bản trước: {retrievalState.previous ? `top_k ${retrievalState.previous.top_k}, expand ${retrievalState.previous.expand ? 'bật' : 'tắt'}` : 'Chưa có'}</p>
+              </div></details>
+            </>}
+            {changing && <p role="status">Đang cập nhật cấu hình…</p>}
+            {changeMessage && <p role="status">{changeMessage}</p>}
+            {changeError && <p role="alert" className="text-red-700">{changeError}</p>}
+            <p className="text-muted">Chỉ dùng cho Retrieval trong Chat. Tham số từng request tại Hạ tầng không thay đổi. Sau restart, dùng lại bản đang áp dụng; bản chỉ Lưu vẫn chờ.</p>
+            <p>{value?.project.release_state !== 'LOADED' ? 'Chưa thể kiểm chứng truy vấn thực tế vì thiếu graph/release.' : 'Áp dụng cấu hình không xác nhận truy vấn graph hoặc chất lượng trả lời.'}</p>
+          </div>
+        </Card>
+
+        <Card title="Thông tin cấu hình & thao tác liên quan">
+          <div className="px-5 pb-5 text-sm space-y-3">
+            <p>Model đã lưu và active phục vụ độc lập. Embedding cần khớp vector identity và release; Apply lỗi giữ bản active trước.</p>
+            <p className="text-muted">Schema, cấu hình runtime và giới hạn nâng cao chỉ đọc. Tải lại không nạp lại environment.</p>
+            <nav aria-label="Thao tác liên quan" className="flex flex-wrap gap-x-4 gap-y-3">
+              <Link className="underline" to="/admin/pipeline">Pipeline</Link>
+              <Link className="underline" to="/admin/infrastructure">Hạ tầng & Retrieval</Link>
+              <Link className="underline" to="/admin/benchmark">Benchmark</Link>
+            </nav>
+            <details><summary className="cursor-pointer underline">Snapshot cấu hình đã lọc</summary>
+              {snapshot ? <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{snapshot}</pre> : <p className="mt-3">Chưa có snapshot.</p>}
+              {value && (!schema.value || !builder.value) && <p className="mt-2 text-muted">Snapshot chưa có đủ schema hoặc đích Builder; nguồn chưa đọc được ghi null.</p>}
+            </details>
+            <Button disabled={!value || copying || config.loading || schema.loading || builder.loading || retrieval.loading || models.loading || modelsSaving || modelRunning || changing} onClick={() => void copy()}>{copying ? 'Đang sao chép…' : 'Sao chép snapshot'}</Button>
+            {copied && <p role="status">Đã sao chép snapshot cấu hình.</p>}
+            {copyError && <p role="alert" className="text-red-700">{copyError}</p>}
+          </div>
+        </Card>
       </div>
+      <Modal open={confirmation !== null} title={confirmation?.action === 'restore' ? 'Khôi phục cấu hình trước' : 'Áp dụng cấu hình đã lưu'} onClose={() => setConfirmation(null)}
+        footer={<><Button onClick={() => setConfirmation(null)}>Hủy</Button><Button variant="primary" onClick={() => { if (confirmation) void change(confirmation.action, confirmation.revision) }}>Xác nhận</Button></>}>
+        {confirmation && <p>Đặt top_k {confirmation.values.top_k}, expand {confirmation.values.expand ? 'bật' : 'tắt'} cho các request Chat tiếp theo. {confirmation.action === 'restore' && 'Bản đã lưu cũng được thay bằng bản khôi phục.'} Request đang chạy sẽ không bị thay đổi.</p>}
+      </Modal>
+      <Modal open={modelAction !== null} title={modelAction?.action === 'test' ? 'Kiểm thử provider thực' : 'Áp dụng model phục vụ'} onClose={() => setModelAction(null)}
+        footer={<><Button onClick={() => setModelAction(null)}>Hủy</Button><Button variant="primary" onClick={() => void runModelAction()}>Xác nhận</Button></>}>
+        {modelAction && <p>{modelAction.role === 'chat' ? 'Chat' : 'Embedding'}, revision {modelAction.revision}: {modelAction.action === 'test' ? 'gửi tối đa một request inference ngắn, có thể phát sinh phí. Không tự retry/fallback hoặc thay active.' : 'áp dụng bản đã Test cho serving khi release và policy hợp lệ. Không rebuild hoặc ghi graph.'}</p>}
+      </Modal>
     </Page>
   )
 }

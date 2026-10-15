@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING
 from uuid import UUID
+from urllib.parse import urlsplit
 
 from kag.builder.codec import canonical_json
 
@@ -43,6 +44,10 @@ _ERRORS = {
     'BACKEND_UNAVAILABLE': (503, 'Nguồn phụ thuộc chưa khả dụng.', None),
     'PROVIDER_ERROR': (502, 'Dịch vụ suy luận chưa khả dụng.', None),
     'RESULT_LIMIT_EXCEEDED': (502, 'Kết quả vượt giới hạn truyền tải.', None),
+    'CONFIG_CONFLICT': (409, 'Cấu hình vừa thay đổi hoặc thao tác không còn phù hợp. Hãy tải lại.', None),
+    'CONFIG_BUSY': (409, 'Runtime đang bận hoặc chưa an toàn để áp dụng. Hãy thử lại khi rảnh.', None),
+    'CONFIG_STORAGE_UNAVAILABLE': (503, 'Không đọc hoặc ghi được cấu hình đã lưu.', None),
+    'CONFIG_INVALID': (503, 'Cấu hình đã lưu không hợp lệ. Cần kiểm tra phía triển khai.', None),
 }
 
 
@@ -182,8 +187,65 @@ class RetrieveRequest(_Request):
         if (not _text(self.message) or not self.message.strip() or utf16_units(self.message) > 4000 or
                 type(self.schema_contract) is not SchemaIdentity):
             raise ApiFailure('INVALID_REQUEST')
-        if type(self.top_k) is not int or not 1 <= self.top_k <= 10 or type(self.expand) is not bool:
+        retrieval_options({'top_k': self.top_k, 'expand': self.expand})
+
+
+def retrieval_options(value):
+    _object(value, ('top_k', 'expand'))
+    if type(value['top_k']) is not int or not 1 <= value['top_k'] <= 10 or type(value['expand']) is not bool:
+        raise ApiFailure('INVALID_REQUEST')
+    return dict(value)
+
+
+@dataclass(frozen=True)
+class ChatConfigChange(_Request):
+    revision: int
+    values: dict | None = None
+
+    @classmethod
+    def from_dict(cls, value):
+        _object(value, ('revision',), ('values',))
+        if type(value['revision']) is not int or not 0 <= value['revision'] < 2147483647:
             raise ApiFailure('INVALID_REQUEST')
+        return cls(value['revision'], retrieval_options(value['values']) if 'values' in value else None)
+
+
+def llm_options(value):
+    _object(value, ('base_url', 'model'), ('api_key', 'provider'))
+    if value.get('provider', 'openai-compatible') != 'openai-compatible':
+        raise ApiFailure('INVALID_REQUEST')
+    model, endpoint = value['model'], value['base_url']
+    if type(model) is not str or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,199}', model):
+        raise ApiFailure('INVALID_REQUEST')
+    try:
+        if type(endpoint) is not str or len(endpoint) > 2048 or re.search(r'[\s\x00-\x1f\x7f]', endpoint):
+            raise ValueError()
+        url = urlsplit(endpoint)
+        if (url.scheme not in ('http', 'https') or not url.hostname or url.port == 0
+                or url.username is not None or url.password is not None or url.query or url.fragment
+                or not re.fullmatch(r'[A-Za-z0-9.:-]{1,253}', url.hostname)):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ApiFailure('INVALID_REQUEST') from None
+    if 'api_key' in value and (type(value['api_key']) is not str or not re.fullmatch(r'[!-~]{1,4096}', value['api_key'])):
+        raise ApiFailure('INVALID_REQUEST')
+    return dict(value, base_url=endpoint.rstrip('/'), provider='openai-compatible')
+
+
+@dataclass(frozen=True, repr=False)
+class LLMCredentialsChange(_Request):
+    revision: int
+    chat: dict | None = None
+    embedding: dict | None = None
+
+    @classmethod
+    def from_dict(cls, value):
+        _object(value, ('revision',), ('chat', 'embedding'))
+        if (type(value['revision']) is not int or not 0 <= value['revision'] < 2147483647
+                or not {'chat', 'embedding'} & value.keys()):
+            raise ApiFailure('INVALID_REQUEST')
+        return cls(value['revision'], **{role: llm_options(value[role])
+                   for role in ('chat', 'embedding') if role in value})
 
 
 @dataclass(frozen=True)

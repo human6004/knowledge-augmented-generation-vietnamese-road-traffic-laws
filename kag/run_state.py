@@ -43,11 +43,12 @@ def _hash(value):
     return hashlib.sha256(canonical_json(value).encode('utf-8')).hexdigest()
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, *, mode=0o666):
     path = Path(path)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
-        with temporary.open('x', encoding='utf-8', newline='\n') as stream:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(descriptor, 'w', encoding='utf-8', newline='\n') as stream:
             stream.write(canonical_json(value) + '\n')
             stream.flush()
             os.fsync(stream.fileno())

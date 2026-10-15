@@ -10,9 +10,44 @@ public class KagController {
     private final KagSchema schema; private final LegalUnitService units; private final InfrastructureService infrastructure;
     public KagController(KagSchema schema,LegalUnitService units,InfrastructureService infrastructure) { this.schema=schema; this.units=units; this.infrastructure=infrastructure; }
     @GetMapping("/admin/kag/status") Map<String,Object> status() { return infrastructure.kagStatus(); }
+    @GetMapping("/admin/kag/config") org.springframework.http.ResponseEntity<JsonNode> configuration(
+            @RequestParam Map<String,String> parameters,jakarta.servlet.http.HttpServletRequest request) {
+        if(!parameters.isEmpty()||request.getContentLengthLong()>0||request.getHeader("Transfer-Encoding")!=null)
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Cấu hình chỉ đọc không nhận tham số hoặc nội dung yêu cầu");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(infrastructure.kagConfiguration());
+    }
     @GetMapping("/admin/kag/sample") JsonNode sample(@RequestParam Map<String,String> parameters) {
         if(!parameters.isEmpty())throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Inspection không nhận truy vấn tùy ý");
         return infrastructure.sampleInspection();
+    }
+    @GetMapping("/admin/kag/config/models") org.springframework.http.ResponseEntity<JsonNode> llmCredentials(
+            @RequestParam Map<String,String> parameters,jakarta.servlet.http.HttpServletRequest request) {
+        if(!parameters.isEmpty()||request.getContentLengthLong()>0||request.getHeader("Transfer-Encoding")!=null)
+            throw vn.luatgt.exception.ApiErrors.bad("Cấu hình model không nhận tham số tùy ý");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(infrastructure.llmCredentials(null));
+    }
+    @PostMapping("/admin/kag/config/models") org.springframework.http.ResponseEntity<JsonNode> saveLLMCredentials(
+            @Valid @RequestBody LLMCredentialsChangeRequest change,@RequestParam Map<String,String> parameters) {
+        if(!parameters.isEmpty())throw vn.luatgt.exception.ApiErrors.bad("Cấu hình model không nhận tham số tùy ý");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(infrastructure.llmCredentials(change));
+    }
+    @GetMapping("/admin/kag/config/retrieval") org.springframework.http.ResponseEntity<JsonNode> chatRetrieval(
+            @RequestParam Map<String,String> parameters,jakarta.servlet.http.HttpServletRequest request) {
+        if(!parameters.isEmpty()||request.getContentLengthLong()>0||request.getHeader("Transfer-Encoding")!=null)
+            throw vn.luatgt.exception.ApiErrors.bad("Cấu hình Retrieval không nhận tham số tùy ý");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(infrastructure.chatRetrievalConfiguration());
+    }
+    @PostMapping("/admin/kag/config/models/{role:chat|embedding}/{action:test|apply}")
+    org.springframework.http.ResponseEntity<JsonNode> modelAction(@PathVariable String role,@PathVariable String action,
+            @Valid @RequestBody ModelConfigActionRequest change,@RequestParam Map<String,String> parameters) {
+        if(!parameters.isEmpty())throw vn.luatgt.exception.ApiErrors.bad("Thao tác model không nhận tham số tùy ý");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+            .body(infrastructure.modelAction(role,action,change));
+    }
+    @PostMapping("/admin/kag/config/retrieval/{action:save|apply|restore}") org.springframework.http.ResponseEntity<JsonNode> chatRetrievalChange(
+            @PathVariable String action,@Valid @RequestBody ChatRetrievalChangeRequest request,@RequestParam Map<String,String> parameters) {
+        if(!parameters.isEmpty())throw vn.luatgt.exception.ApiErrors.bad("Cấu hình Retrieval không nhận tham số tùy ý");
+        return org.springframework.http.ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore()).body(infrastructure.changeChatRetrieval(action,request));
     }
     @GetMapping("/admin/kag/pipeline") JsonNode pipeline() { return infrastructure.pipelineStatus(); }
     @GetMapping("/admin/kag/builder/status") JsonNode builderStatus() { return infrastructure.builderStatus(); }

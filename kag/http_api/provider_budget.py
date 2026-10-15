@@ -39,6 +39,98 @@ class BudgetError(RuntimeError):
         super().__init__(code)
 
 
+def provider_route(config, role, policy):
+    """Only registered gateway routes; saved URLs never become outbound destinations."""
+    from ipaddress import ip_address
+    import socket
+    route = policy.get(role) if type(policy) is dict else None
+    if (role not in ('chat', 'embedding') or not policy or policy.get('enabled') is not True
+            or not policy.get('token') or not route or config['base_url'] != route['base_url']):
+        raise BudgetError('BLOCKED')
+    if not route.get('safe'):
+        raise BudgetError('PROXY_POLICY_UNVERIFIED')
+    url = httpx.URL(config['base_url'])
+    if url.path != '/v1' or url.query or url.fragment or url.userinfo:
+        raise BudgetError('BLOCKED')
+    if not route.get('internal'):
+        if url.scheme != 'https':
+            raise BudgetError('BLOCKED')
+        # Isolated API has no public DNS. Its registered gateway validates and pins the resolved IP.
+        if not route.get('dns_at_gateway'):
+            try:
+                addresses = socket.getaddrinfo(url.host, url.port or 443, type=socket.SOCK_STREAM)
+                if not addresses or any(not ip_address(row[4][0]).is_global for row in addresses):
+                    raise BudgetError('BLOCKED')
+            except OSError:
+                raise BudgetError('NETWORK_ERROR') from None
+    return route
+
+
+def test_provider(config, role, policy):
+    """One bounded inference, no SDK retry, redirect, fallback or arbitrary URL proxy."""
+    from kag.vector_contract import valid_vector
+    from .sample_query import GatewayTransport, GATEWAY
+    result = dict(status='FAIL', code=None, dimension=None, observed_model=None,
+                  client_attempts=0, output_chars=0)
+    try:
+        provider_route(config, role, policy)
+        suffix = '/chat/completions' if role == 'chat' else '/embeddings'
+        upstream = config['base_url'] + suffix
+        transport = GatewayTransport(httpx.HTTPTransport(retries=0), GATEWAY, policy['token'], upstream)
+        payload = dict(model=config['model'])
+        if role == 'chat':
+            payload.update(messages=[dict(role='user', content='Reply with OK.')], max_tokens=32, stream=False)
+        else:
+            payload.update(input=['Kiểm tra kết nối.'], encoding_format='float')
+        deadline = time.monotonic() + 20
+        with httpx.Client(transport=transport, timeout=httpx.Timeout(15, connect=3),
+                          trust_env=False, follow_redirects=False) as client:
+            result['client_attempts'] = 1
+            with client.stream('POST', upstream, json=payload,
+                               headers={'Authorization': 'Bearer ' + config['api_key']}) as response:
+                if response.headers.get('X-KAG-Provider-Blocked') == '1':
+                    raise BudgetError('BLOCKED')
+                if response.status_code != 200:
+                    raise BudgetError({401:'AUTH_FAILED',403:'AUTH_FAILED',404:'MODEL_NOT_FOUND',
+                        429:'RATE_LIMITED'}.get(response.status_code,
+                        'BLOCKED' if 300 <= response.status_code < 400 else 'PROVIDER_ERROR'))
+                raw = bytearray()
+                for chunk in response.iter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > 262144:
+                        raise BudgetError('INVALID_RESPONSE')
+                    if time.monotonic() >= deadline:
+                        raise BudgetError('TIMEOUT')
+        body = json.loads(raw, object_pairs_hook=_object)
+        observed = body.get('model')
+        if observed is not None and observed != config['model']:
+            raise BudgetError('MODEL_MISMATCH')
+        result['observed_model'] = config['model'] if observed is not None else None
+        if role == 'chat':
+            content = body['choices'][0]['message']['content']
+            if type(content) is not str or not content.strip():
+                raise BudgetError('INVALID_RESPONSE')
+            result['output_chars'] = len(content)
+        else:
+            rows = body['data']
+            vector = rows[0]['embedding'] if type(rows) is list and len(rows) == 1 else None
+            result['dimension'] = len(vector) if type(vector) is list else None
+            if result['dimension'] != 3072:
+                raise BudgetError('DIMENSION_MISMATCH')
+            if not valid_vector(vector, 3072):
+                raise BudgetError('INVALID_RESPONSE')
+        result['status'] = 'PASS'
+    except BudgetError as error:
+        result.update(status='BLOCKED' if error.code in ('BLOCKED','PROXY_POLICY_UNVERIFIED') else 'FAIL', code=error.code)
+    except httpx.TimeoutException:
+        result['code'] = 'TIMEOUT'
+    except httpx.RequestError:
+        result['code'] = 'NETWORK_ERROR'
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        result['code'] = 'INVALID_RESPONSE'
+    return result
+
+
 def _object(pairs):
     value = {}
     for key,item in pairs:

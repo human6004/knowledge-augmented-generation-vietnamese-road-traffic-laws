@@ -70,7 +70,10 @@ def create_app():
     from .runtime import RuntimeSettings
     try:
         for key in ('KAG_HTTP_QUERY_SECRET_FILE','KAG_HTTP_INSPECT_SECRET_FILE',
-                    'KAG_HTTP_QUERY_PREVIOUS_SECRET_FILE','KAG_HTTP_INSPECT_PREVIOUS_SECRET_FILE'):
+                    'KAG_HTTP_QUERY_PREVIOUS_SECRET_FILE','KAG_HTTP_INSPECT_PREVIOUS_SECRET_FILE',
+                    'KAG_HTTP_CREDENTIALS_WRITE_SECRET_FILE','KAG_HTTP_CREDENTIALS_WRITE_PREVIOUS_SECRET_FILE',
+                    'KAG_HTTP_PROVIDER_TEST_SECRET_FILE','KAG_HTTP_PROVIDER_TEST_PREVIOUS_SECRET_FILE',
+                    'KAG_HTTP_CONFIG_APPLY_SECRET_FILE','KAG_HTTP_CONFIG_APPLY_PREVIOUS_SECRET_FILE'):
             if key in os.environ and not Path(os.environ[key]).is_absolute():
                 raise ConfigurationError()
         settings = ApiSettings.from_env()
@@ -89,6 +92,16 @@ def create_app():
             raise ConfigurationError()
         provider_keys = {name:_secret('KAG_HTTP_'+name.upper()+'_KEY_FILE') for name in ('embedding','chat')}
         app = api_app(settings,enable_sample_routes=True)
+        # The existing gateway owns the two registered destinations. Saved URLs cannot grant egress.
+        test_enabled = os.environ.get('KAG_HTTP_PROVIDER_TEST_ENABLED','0') == '1'
+        proxy_port = os.environ.get('KAG_HTTP_CHAT_PROXY_PORT','8317')
+        if not re.fullmatch('[0-9]{1,5}', proxy_port) or not 1 <= int(proxy_port) <= 65535:
+            raise ConfigurationError()
+        app.state.provider_test_policy = dict(enabled=test_enabled,
+            token=_secret('KAG_HTTP_PROVIDER_TEST_GATEWAY_TOKEN_FILE') if test_enabled else None,
+            chat=dict(base_url='http://127.0.0.1:'+str(int(proxy_port))+'/v1', internal=True,
+                safe=os.environ.get('KAG_HTTP_CHAT_PROXY_TEST_SAFE','0') == '1'),
+            embedding=dict(base_url='https://api.vilao.ai/v1', internal=False, safe=True, dns_at_gateway=True))
         evaluation_root = os.environ.get('KAG_HTTP_EVALUATION_ROOT')
         if evaluation_root:
             if not Path(evaluation_root).is_absolute():
@@ -116,6 +129,11 @@ def create_app():
             raise ConfigurationError()
         if bool(release_id) != bool(root):
             raise ConfigurationError()
+        from .inspection import configuration_view
+        app.state.config_snapshot = configuration_view(os.environ, provider_keys,
+            (*settings.secrets.query_tokens, *settings.secrets.inspect_tokens, *settings.secrets.credentials_write_tokens,
+             *settings.secrets.provider_test_tokens, *settings.secrets.config_apply_tokens,
+             *provider_keys.values(), reader_password, broker_token, gateway_token))
         if release_id:
             if not Path(root).is_absolute():
                 raise ConfigurationError()

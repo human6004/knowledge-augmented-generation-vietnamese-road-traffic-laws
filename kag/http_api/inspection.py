@@ -4,11 +4,100 @@ from collections import Counter
 from pathlib import Path
 import re
 import json
+from urllib.parse import urlsplit
 
 from kag.evaluation.dataset import load_dataset
 from kag.evaluation.models import ValidationError
 
 LIMIT_BYTES = 8 * 1024 * 1024
+
+
+def configuration_view(environment, provider_keys, secrets=()):
+    """Project only public startup metadata; never retain credentials or URL paths."""
+    def text(value, pattern):
+        return value if (isinstance(value, str) and re.fullmatch(pattern, value)
+                         and not any(secret and secret in value for secret in secrets)) else None
+
+    models = {'source': 'startup_environment', 'identity_verified': False}
+    for role in ('chat', 'embedding'):
+        prefix = 'KAG_HTTP_' + role.upper()
+        raw_model, raw_url = environment.get(prefix + '_MODEL'), environment.get(prefix + '_URL')
+        model = text(raw_model, r'[A-Za-z0-9][A-Za-z0-9._/-]{0,199}')
+        endpoint, valid_url = None, False
+        if raw_url:
+            try:
+                url = urlsplit(raw_url)
+                if (len(raw_url) <= 2048 and not re.search(r'\s', raw_url)
+                        and url.scheme in ('http', 'https') and url.hostname):
+                    host = '[' + url.hostname + ']' if ':' in url.hostname else url.hostname
+                    origin = url.scheme + '://' + host + (':' + str(url.port) if url.port is not None else '')
+                    endpoint = text(origin, r'https?://[A-Za-z0-9.\[\]:-]{1,260}')
+                    valid_url = (endpoint is not None and url.port != 0
+                                 and not (url.username or url.password or url.query or url.fragment))
+            except (ValueError, TypeError):
+                pass
+        key_present = bool(provider_keys.get(role))
+        state = ('INVALID' if raw_model and model is None or raw_url and not valid_url else
+                 'CONFIGURED' if model and valid_url and key_present else
+                 'INCOMPLETE' if raw_model or raw_url or key_present else 'NOT_CONFIGURED')
+        models[role] = {'state': state, 'model': model, 'endpoint': endpoint}
+    release_id = text(environment.get('KAG_HTTP_RELEASE_ID'), r'[A-Za-z0-9][A-Za-z0-9_.-]{0,199}')
+    return {'contract_version': 'kag-config-v1',
+            'project': {'source': 'startup_environment', 'release_id': release_id,
+                        'release_state': 'UNAVAILABLE' if environment.get('KAG_HTTP_RELEASE_ID') else 'NOT_CONFIGURED'},
+            'models': models}
+
+
+def solver_defaults():
+    """Inspect the shipped constructors, without creating a solver or model."""
+    from inspect import signature
+    from kag.legal_solver import LegalRetrieverExecutor, KAGIterativePipeline, KAGIterativePlanner
+    from kag.retriever.retriever import Retriever
+    executor = signature(LegalRetrieverExecutor).parameters
+    retriever = signature(Retriever).parameters
+    return {'source': 'source_defaults', 'pipeline': KAGIterativePipeline.__name__,
+            'planner': KAGIterativePlanner.__name__,
+            'top_k': executor['top_k'].default, 'expand': executor['expand'].default,
+            'max_evidence_chars': executor['max_evidence_chars'].default,
+            'max_iteration': signature(KAGIterativePipeline).parameters['max_iteration'].default,
+            'search_k': retriever['search_k'].default, 'expansion_limit': retriever['expansion_limit'].default,
+            # HTTP embeddings and Retriever both enforce this dimension, not a provider measurement.
+            'required_vector_dimensions': 3072}
+
+
+def validate_config(value):
+    from .contract import ApiFailure
+    def shape(item, fields):
+        return type(item) is dict and set(item) == set(fields.split())
+    def optional_text(item, pattern):
+        return item is None or type(item) is str and re.fullmatch(pattern, item) is not None
+    if (not shape(value, 'contract_version project models solver') or value['contract_version'] != 'kag-config-v1'
+            or not shape(value['project'], 'source release_id release_state')
+            or value['project']['source'] != 'startup_environment'
+            or value['project']['release_state'] not in ('NOT_CONFIGURED', 'LOADED', 'UNAVAILABLE')
+            or not optional_text(value['project']['release_id'], r'[A-Za-z0-9][A-Za-z0-9_.-]{0,199}')
+            or value['project']['release_state'] == 'LOADED' and value['project']['release_id'] is None
+            or not shape(value['models'], 'source identity_verified chat embedding')
+            or value['models']['source'] != 'startup_environment' or value['models']['identity_verified'] is not False):
+        raise ApiFailure('INVALID_NATIVE_RESULT')
+    for role in ('chat', 'embedding'):
+        model = value['models'][role]
+        if (not shape(model, 'state model endpoint')
+                or model['state'] not in ('CONFIGURED', 'NOT_CONFIGURED', 'INCOMPLETE', 'INVALID')
+                or not optional_text(model['model'], r'[A-Za-z0-9][A-Za-z0-9._/-]{0,199}')
+                or not optional_text(model['endpoint'], r'https?://[A-Za-z0-9.\[\]:-]{1,260}')
+                or model['state'] == 'CONFIGURED' and None in (model['model'], model['endpoint'])
+                or model['state'] == 'NOT_CONFIGURED' and (model['model'] is not None or model['endpoint'] is not None)):
+            raise ApiFailure('INVALID_NATIVE_RESULT')
+    solver = value['solver']
+    if solver is not None and (not shape(solver, 'source pipeline planner top_k expand max_evidence_chars max_iteration search_k expansion_limit required_vector_dimensions')
+            or solver['source'] != 'source_defaults' or solver['pipeline'] != 'KAGIterativePipeline'
+            or solver['planner'] != 'KAGIterativePlanner' or type(solver['expand']) is not bool
+            or any(type(solver[key]) is not int or not 1 <= solver[key] <= 1000000 for key in
+                   ('top_k', 'max_evidence_chars', 'max_iteration', 'search_k', 'expansion_limit', 'required_vector_dimensions'))
+            or solver['top_k'] > solver['search_k']):
+        raise ApiFailure('INVALID_NATIVE_RESULT')
+    return value
 
 
 def pipeline_view(supervisor):

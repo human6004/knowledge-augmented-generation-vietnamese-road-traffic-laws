@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from copy import deepcopy
 from datetime import datetime
 import inspect
 import logging
 import math
+import os
 import re
+import stat
 from pathlib import Path
 import platform
 import sys
@@ -31,6 +34,8 @@ from .security import admit_request, authorize, request_principal
 
 REQUEST_SECONDS = 25.0
 TRANSPORT_SECONDS = 5.0
+CHAT_CONFIG_PATH = Path('/provider-state/admin-config.json')
+LLM_CONFIG_PATH = Path('/provider-state/llm-credentials.json')
 _CURRENT = ContextVar('kag_admitted_runtime', default=None)
 
 
@@ -283,6 +288,7 @@ class RequestRuntime:
     closed: bool = False
     capability: str = 'query'
     request_id: str | None = None
+    chat_retrieval: dict | None = None
 
     async def close(self):
         if self.closed:
@@ -468,7 +474,7 @@ def make_runtime(settings: ApiSettings, release: ServingRelease, deadline: float
         runtime.budget.remaining()
     runtime.retriever = Retriever(runtime.reader,embed,_json(release.contract_bytes))
     if runtime.capability=='query':
-        runtime.pipeline = build_pipeline(runtime.retriever,llm)
+        runtime.pipeline = build_pipeline(runtime.retriever,llm,retrieval=runtime.chat_retrieval)
         if settings.query_proof_sha256:
             from .provider_budget import disable_instance_retries
             disable_instance_retries(runtime.pipeline,llm)
@@ -543,6 +549,369 @@ class RuntimeSupervisor:
     def __init__(self):
         self._task, self._budget = None, None
         self.closed = self.draining = False
+        self._chat_config = None
+        self._chat_error = None
+        self._chat_persisted = False
+        self._llm_config = None
+        self._llm_error = None
+        self._llm_secrets = ()
+        self._llm_write_allowed = False
+        self._llm_test_allowed = self._llm_apply_allowed = False
+        self._provider_test_task = None
+        self._llm_bound = {}
+        self._llm_runtime_error = None
+        self._llm_base_settings = None
+
+    def _config_storage(self, path, *, private=False):
+        root = path.parent
+        info = root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or root.resolve() != root or info.st_uid != os.geteuid()
+                or info.st_mode & (0o077 if private else 0o022)
+                or not os.access(root, os.R_OK | os.W_OK | os.X_OK)):
+            raise OSError('Configuration directory unavailable')
+        if path.exists() or path.is_symlink():
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_nlink != 1 or info.st_mode & 0o022
+                    or private and stat.S_IMODE(info.st_mode) != 0o600):
+                raise OSError('Configuration file unavailable')
+
+    def load_chat_config(self, defaults):
+        from .contract import retrieval_options
+        self._chat_config = None
+        self._chat_error = None
+        self._chat_persisted = False
+        try:
+            defaults = retrieval_options(defaults)
+            self._config_storage(CHAT_CONFIG_PATH)
+            state = {'revision': 0, 'saved': defaults, 'active': dict(defaults), 'previous': None}
+            if CHAT_CONFIG_PATH.exists():
+                with CHAT_CONFIG_PATH.open('rb') as stream:
+                    raw = stream.read(4097)
+                if len(raw) > 4096:
+                    raise ValueError('Configuration too large')
+                state = _json(raw)
+                if (type(state) is not dict or set(state) != {'revision', 'saved', 'active', 'previous'}
+                        or type(state['revision']) is not int or not 0 <= state['revision'] <= 2147483647):
+                    raise ValueError('Invalid configuration')
+                for key in ('saved', 'active', 'previous'):
+                    if key != 'previous' or state[key] is not None:
+                        state[key] = retrieval_options(state[key])
+                self._chat_persisted = True
+            self._chat_config = state
+        except OSError:
+            self._chat_error = 'CONFIG_STORAGE_UNAVAILABLE'
+        except (ApiFailure, ArtifactFailure, ValueError, TypeError, KeyError):
+            self._chat_error = 'CONFIG_INVALID'
+
+    def chat_config_view(self):
+        state = self._chat_config
+        idle = not (self.busy or self.closed or self.draining)
+        available = state is not None and self._chat_error is None and state['revision'] < 2147483647
+        pending = bool(state and state['saved'] != state['active'])
+        return {'contract_version': 'chat-retrieval-v1', 'revision': state['revision'] if state else 0,
+                'saved': dict(state['saved']) if state else None, 'active': dict(state['active']) if state else None,
+                'previous': dict(state['previous']) if state and state['previous'] is not None else None,
+                'persisted': self._chat_persisted, 'pending': pending, 'runtime_idle': idle,
+                'actions': {'save': available, 'apply': available and idle and pending,
+                            'restore': available and idle and state['previous'] is not None},
+                'error_code': self._chat_error}
+
+    def change_chat_config(self, action, change):
+        from kag.run_state import atomic_json
+        if action not in ('save', 'apply', 'restore') or (action == 'save') != (change.values is not None):
+            raise ApiFailure('INVALID_REQUEST')
+        if self._chat_error or self._chat_config is None:
+            raise ApiFailure(self._chat_error or 'CONFIG_STORAGE_UNAVAILABLE')
+        state = self._chat_config
+        if change.revision != state['revision'] or state['revision'] >= 2147483647:
+            raise ApiFailure('CONFIG_CONFLICT')
+        if action != 'save' and (self.busy or self.closed or self.draining):
+            raise ApiFailure('CONFIG_BUSY')
+        if not self.chat_config_view()['actions'][action]:
+            raise ApiFailure('CONFIG_CONFLICT')
+        updated = dict(state, revision=state['revision'] + 1)
+        if action == 'save':
+            updated['saved'] = dict(change.values)
+        else:
+            target = state['saved'] if action == 'apply' else state['previous']
+            updated.update(active=dict(target), previous=dict(state['active']))
+            if action == 'restore':
+                updated['saved'] = dict(target)
+        try:
+            self._config_storage(CHAT_CONFIG_PATH)
+            atomic_json(CHAT_CONFIG_PATH, updated)
+        except OSError:
+            raise ApiFailure('CONFIG_STORAGE_UNAVAILABLE') from None
+        # One enforced worker/event loop; no await between revision check, disk commit and swap.
+        self._chat_config, self._chat_persisted = updated, True
+        return self.chat_config_view()
+
+    def _validate_llm_state(self, state):
+        from .contract import llm_options
+        legacy = {'revision', 'chat', 'embedding'}
+        if (type(state) is not dict or set(state) not in (legacy, legacy | {'role_revisions', 'tested', 'active', 'blocked'})
+                or type(state['revision']) is not int or not 1 <= state['revision'] <= 2147483647):
+            raise ApiFailure('INVALID_REQUEST')
+        if set(state) == legacy:
+            state = dict(state, role_revisions={role: state['revision'] if state[role] else None for role in ('chat','embedding')},
+                         tested=dict(chat=None, embedding=None), active=dict(chat=None, embedding=None), blocked=dict(chat=None, embedding=None))
+        for role in ('chat', 'embedding'):
+            if state[role] is None:
+                continue
+            state[role] = llm_options(state[role])
+            if 'api_key' not in state[role]:
+                raise ApiFailure('INVALID_REQUEST')
+        configured = [state[role] for role in ('chat', 'embedding') if state[role] is not None]
+        if not configured:
+            raise ApiFailure('INVALID_REQUEST')
+        for name in ('role_revisions', 'tested', 'active', 'blocked'):
+            if type(state[name]) is not dict or set(state[name]) != {'chat','embedding'}:
+                raise ApiFailure('INVALID_REQUEST')
+        for role in ('chat','embedding'):
+            revision = state['role_revisions'][role]
+            if (state[role] is None) != (revision is None) or revision is not None and (
+                    type(revision) is not int or not 1 <= revision <= state['revision']):
+                raise ApiFailure('INVALID_REQUEST')
+            tested, active = state['tested'][role], state['active'][role]
+            if tested is not None:
+                self._validate_provider_test(tested, revision, role)
+            if active is not None:
+                if (type(active) is not dict or set(active) != {'revision','config','test'}
+                        or type(active['revision']) is not int or not 1 <= active['revision'] <= state['revision']):
+                    raise ApiFailure('INVALID_REQUEST')
+                active['config'] = llm_options(active['config'])
+                if 'api_key' not in active['config']:
+                    raise ApiFailure('INVALID_REQUEST')
+                self._validate_provider_test(active['test'], active['revision'], role)
+                if active['test']['status'] != 'PASS':
+                    raise ApiFailure('INVALID_REQUEST')
+                configured.append(active['config'])
+            if state['blocked'][role] is not None and state['blocked'][role] not in (
+                    'TEST_REQUIRED','TEST_IN_PROGRESS','RELEASE_UNAVAILABLE','RELEASE_MISMATCH',
+                    'VECTOR_IDENTITY_MISMATCH','ACTIVE_CONFIG_INVALID','PROXY_POLICY_UNVERIFIED','BLOCKED'):
+                raise ApiFailure('INVALID_REQUEST')
+        secrets = (*self._llm_secrets, *(item['api_key'] for item in configured))
+        if any(secret in item[field] for secret in secrets for item in configured
+               for field in ('model', 'base_url')):
+            raise ApiFailure('INVALID_REQUEST')
+        return state
+
+    @staticmethod
+    def _validate_provider_test(value, revision, role):
+        if (type(value) is not dict or set(value) != {'revision','status','code','dimension','observed_model','client_attempts','output_chars','tested_at'}
+                or type(value['revision']) is not int or value['revision'] != revision
+                or value['status'] not in ('PASS','FAIL','BLOCKED')
+                or value['code'] not in (None,'AUTH_FAILED','MODEL_NOT_FOUND','RATE_LIMITED','PROVIDER_ERROR','BLOCKED',
+                    'PROXY_POLICY_UNVERIFIED','MODEL_MISMATCH','DIMENSION_MISMATCH','INVALID_RESPONSE','TIMEOUT','NETWORK_ERROR')
+                or (value['status'] == 'PASS') != (value['code'] is None)
+                or type(value['client_attempts']) is not int or not 0 <= value['client_attempts'] <= 1
+                or type(value['output_chars']) is not int or not 0 <= value['output_chars'] <= 262144
+                or value['dimension'] is not None and (type(value['dimension']) is not int or not 0 <= value['dimension'] <= 262144)
+                or value['observed_model'] is not None and (type(value['observed_model']) is not str
+                    or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,199}', value['observed_model']))
+                or type(value['tested_at']) is not str or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00', value['tested_at'])
+                or value['status'] == 'PASS' and (value['client_attempts'] != 1 or
+                    (value['dimension'] != 3072 if role == 'embedding' else value['output_chars'] < 1))):
+            raise ApiFailure('INVALID_REQUEST')
+
+    def load_llm_config(self, secrets):
+        self._llm_config, self._llm_error = None, None
+        self._llm_secrets = (*secrets.query_tokens, *secrets.inspect_tokens, *secrets.credentials_write_tokens,
+                            *secrets.provider_test_tokens, *secrets.config_apply_tokens)
+        self._llm_write_allowed = bool(secrets.credentials_write_tokens)
+        self._llm_test_allowed, self._llm_apply_allowed = bool(secrets.provider_test_tokens), bool(secrets.config_apply_tokens)
+        self._llm_bound, self._llm_runtime_error = {}, None
+        try:
+            self._config_storage(LLM_CONFIG_PATH, private=True)
+            if LLM_CONFIG_PATH.exists():
+                with LLM_CONFIG_PATH.open('rb') as stream:
+                    raw = stream.read(65537)
+                if len(raw) > 65536:
+                    raise ValueError('Configuration too large')
+                self._llm_config = self._validate_llm_state(_json(raw))
+        except OSError:
+            self._llm_error = 'CONFIG_STORAGE_UNAVAILABLE'
+        except (ApiFailure, ArtifactFailure, ValueError, TypeError, KeyError):
+            self._llm_error = 'CONFIG_INVALID'
+
+    def llm_config_view(self):
+        state = self._llm_config
+        def metadata(config):
+            return ({key: config[key] for key in ('provider', 'base_url', 'model')}
+                    | {'key_configured': True}) if config is not None else None
+        revision = state['revision'] if state else 0
+        roles = {}
+        for role in ('chat','embedding'):
+            saved_revision = state['role_revisions'][role] if state else None
+            tested, active = (state['tested'][role], state['active'][role]) if state else (None, None)
+            blocker = self._llm_runtime_error or (state['blocked'][role] if state else None)
+            bound = self._llm_bound.get(role)
+            applied = active is not None and active['revision'] == bound == saved_revision
+            status = ('BLOCKED' if blocker else 'APPLIED' if applied else
+                      'BLOCKED' if tested and tested['status'] == 'BLOCKED' else
+                      'PENDING_APPLY' if tested and tested['status'] == 'PASS' else
+                      'SAVED' if saved_revision else 'NOT_CONFIGURED')
+            roles[role] = dict(saved_revision=saved_revision, test=deepcopy(tested), active_revision=bound,
+                active=metadata(active['config']) if active else None, status=status,
+                blocker=blocker or (tested['code'] if tested else None),
+                actions=dict(test=bool(saved_revision and self._llm_test_allowed and not self._llm_error and self._provider_test_task is None),
+                    apply=bool(saved_revision and tested and tested['status']=='PASS' and not applied and self._llm_apply_allowed
+                               and not self._llm_error and not (self.busy or self.closed or self.draining or self._provider_test_task))))
+        return {'contract_version': 'llm-credentials-v3', 'revision': revision, 'saved': state is not None,
+                'chat': metadata(state['chat']) if state else None, 'embedding': metadata(state['embedding']) if state else None,
+                'applied': any(row['status']=='APPLIED' for row in roles.values()),
+                'connection_tested': any(row['test'] and row['test']['status']=='PASS' for row in roles.values()),
+                'save_allowed': self._llm_write_allowed and self._llm_error is None and revision < 2147483647,
+                'error_code': self._llm_error, 'roles': roles,
+                'build_config': dict(state='NOT_SUPPORTED', reason='BUILDER_REPLAY_ONLY')}
+
+    def _persist_llm(self, updated):
+        from kag.run_state import atomic_json
+        updated = self._validate_llm_state(deepcopy(updated))
+        try:
+            self._config_storage(LLM_CONFIG_PATH, private=True)
+            atomic_json(LLM_CONFIG_PATH, updated, mode=0o600)
+        except OSError:
+            raise ApiFailure('CONFIG_STORAGE_UNAVAILABLE') from None
+        self._llm_config = updated
+
+    def save_llm_config(self, change):
+        if self._llm_error:
+            raise ApiFailure(self._llm_error)
+        state = self._llm_config
+        if change.revision != (state['revision'] if state else 0) or change.revision >= 2147483647:
+            raise ApiFailure('CONFIG_CONFLICT')
+        updated = deepcopy(state) if state else {'chat':None, 'embedding':None,
+            'role_revisions':dict(chat=None,embedding=None), 'tested':dict(chat=None,embedding=None),
+            'active':dict(chat=None,embedding=None), 'blocked':dict(chat=None,embedding=None)}
+        updated['revision'] = change.revision + 1
+        for role in ('chat', 'embedding'):
+            incoming = getattr(change, role)
+            if incoming is None:
+                updated[role] = dict(state[role]) if state and state[role] is not None else None
+                continue
+            updated[role] = dict(incoming)
+            updated['role_revisions'][role] = updated['revision']
+            updated['tested'][role], updated['blocked'][role] = None, None
+            if 'api_key' not in updated[role] and state and state[role] is not None:
+                updated[role]['api_key'] = state[role]['api_key']
+        self._persist_llm(updated)
+        return self.llm_config_view()
+
+    def _llm_revision(self, role, revision):
+        if self._llm_error:
+            raise ApiFailure(self._llm_error)
+        if (self._llm_config is None or role not in ('chat','embedding') or self._llm_config[role] is None
+                or revision != self._llm_config['revision']):
+            raise ApiFailure('CONFIG_CONFLICT')
+
+    async def _run_provider_test(self, config, role, policy):
+        from .provider_budget import test_provider
+        return await asyncio.to_thread(test_provider, config, role, policy)
+
+    async def test_llm_config(self, role, revision, policy):
+        from datetime import timezone
+        self._llm_revision(role, revision)
+        if self._provider_test_task is not None:
+            raise ApiFailure('CONFIG_BUSY')
+        config = dict(self._llm_config[role])
+        role_revision = self._llm_config['role_revisions'][role]
+        updated = deepcopy(self._llm_config)
+        updated['tested'][role], updated['blocked'][role] = None, 'TEST_IN_PROGRESS'
+        self._persist_llm(updated)
+        async def run():
+            result = await self._run_provider_test(config, role, policy)
+            if self._llm_config['role_revisions'][role] != role_revision:
+                raise ApiFailure('CONFIG_CONFLICT')
+            result.update(revision=role_revision, tested_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+            updated = deepcopy(self._llm_config)
+            updated['tested'][role], updated['blocked'][role] = result, None
+            self._persist_llm(updated)
+            print('MODEL_CONFIG_ACTION role='+role+' revision='+str(role_revision)+' action=test result='+result['status'], flush=True)
+            return self.llm_config_view()
+        task = self._provider_test_task = asyncio.create_task(run())
+        def done(finished):
+            if not finished.cancelled():
+                finished.exception()
+            self._provider_test_task = None
+        task.add_done_callback(done)
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=22)
+            return self.llm_config_view()
+        except asyncio.TimeoutError:
+            raise ApiFailure('QUERY_TIMEOUT') from None
+
+    def _active_settings(self, settings, active):
+        values = {}
+        for role, item in active.items():
+            if item is not None:
+                config = item['config']
+                values.update({role+'_url':config['base_url'], role+'_model':config['model'], role+'_key':config['api_key']})
+        return replace(settings, **values)
+
+    def restore_llm_runtime(self, settings, release, policy=None):
+        self._llm_base_settings = settings
+        self._llm_bound, self._llm_runtime_error = {}, None
+        if self._llm_error:
+            return None
+        active = self._llm_config['active'] if self._llm_config else {}
+        if not any(active.values()):
+            return settings
+        try:
+            from .provider_budget import BudgetError, provider_route
+            for role, item in active.items():
+                if item is not None:
+                    provider_route(item['config'], role, policy)
+            candidate = self._active_settings(settings, active)
+            capability = 'query' if active.get('chat') else 'retrieve'
+            _require_configuration(candidate, capability=capability)
+            _require_operational_proof(candidate, release, capability=capability)
+        except (ApiFailure, ArtifactFailure, RuntimeFailure, BudgetError, ValueError, TypeError, OSError):
+            self._llm_runtime_error = 'ACTIVE_CONFIG_INVALID'
+            return None
+        self._llm_bound = {role:item['revision'] for role,item in active.items() if item is not None}
+        return candidate
+
+    def apply_llm_config(self, role, revision, settings, release, policy):
+        from .provider_budget import BudgetError, provider_route
+        self._llm_revision(role, revision)
+        if self.busy or self.closed or self.draining or self._provider_test_task:
+            raise ApiFailure('CONFIG_BUSY')
+        updated = deepcopy(self._llm_config)
+        tested = updated['tested'][role]
+        blocker = None
+        base = settings if settings is not None else self._llm_base_settings
+        candidate = base
+        if not tested or tested['status'] != 'PASS':
+            blocker = 'TEST_REQUIRED'
+        elif type(release) is not ServingRelease or type(base) is not RuntimeSettings:
+            blocker = 'RELEASE_UNAVAILABLE'
+        else:
+            try:
+                active = deepcopy(updated['active'])
+                active[role] = dict(revision=updated['role_revisions'][role], config=dict(updated[role]), test=dict(tested))
+                for consumer, item in active.items():
+                    if item is not None:
+                        provider_route(item['config'], consumer, policy)
+                candidate = self._active_settings(base, active)
+                capability = 'query' if active.get('chat') else 'retrieve'
+                _require_configuration(candidate, capability=capability)
+                _require_operational_proof(candidate, release, capability=capability)
+                _unchanged(release)
+            except BudgetError as error:
+                blocker = error.code if error.code in ('PROXY_POLICY_UNVERIFIED','BLOCKED') else 'BLOCKED'
+            except (ApiFailure, ArtifactFailure, RuntimeFailure, ValueError, TypeError, OSError):
+                blocker = 'VECTOR_IDENTITY_MISMATCH' if role=='embedding' else 'RELEASE_MISMATCH'
+        updated['blocked'][role] = blocker
+        if blocker is None:
+            updated['active'] = active
+        self._persist_llm(updated)
+        if blocker is None:
+            self._llm_bound = {consumer:item['revision'] for consumer,item in active.items() if item is not None}
+            self._llm_runtime_error = None
+        print('MODEL_CONFIG_ACTION role='+role+' revision='+str(updated['role_revisions'][role])+' action=apply result='+(blocker or 'APPLIED'), flush=True)
+        return settings if blocker else candidate
 
     @property
     def busy(self):
@@ -663,6 +1032,10 @@ class RuntimeSupervisor:
 
         async def operation():
             runtime = RequestRuntime(None,None,None,deadline,self._budget,parsed.message,None)
+            if self._chat_error:
+                raise ApiFailure('NOT_READY')
+            if self._chat_config is not None:
+                runtime.chat_retrieval = dict(self._chat_config['active'])
             runtime.request_id=getattr(request.state,'request_id',None)
             token = None
             meter_context = None
@@ -822,6 +1195,8 @@ class RuntimeSupervisor:
         self.closed = True
         if self._budget is not None:
             self._budget.stop()
+        if self._provider_test_task is not None:
+            await asyncio.shield(asyncio.gather(self._provider_test_task, return_exceptions=True))
         task = self._task
         if task is not None:
             try:

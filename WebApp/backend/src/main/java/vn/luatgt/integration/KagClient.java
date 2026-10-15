@@ -20,6 +20,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import vn.luatgt.service.KagSchema;
+import vn.luatgt.dto.ChatRetrievalChangeRequest;
+import vn.luatgt.dto.LLMCredentialsChangeRequest;
+import vn.luatgt.dto.ModelConfigActionRequest;
 
 @Component
 public class KagClient {
@@ -30,6 +33,9 @@ public class KagClient {
     private final Clock clock;
     private RestClient builderClient;
     @Value("${app.kag-builder-token-file:}") private String builderTokenFile="";
+    @Value("${app.kag-credentials-write-token-file:}") private String credentialsWriteTokenFile="";
+    @Value("${app.kag-provider-test-token-file:}") private String providerTestTokenFile="";
+    @Value("${app.kag-config-apply-token-file:}") private String configApplyTokenFile="";
     private static final ZoneId LEGAL_ZONE=ZoneId.of("Asia/Saigon");
     private static final Set<String> REQUEST_FIELDS=Set.of("user_id","message","context_id","schema_contract");
     private static final Set<String> CITATION_FIELDS=Set.of("doc_id","unit_id","sign_id","evidence_id","field","start","end","quote");
@@ -150,6 +156,208 @@ public class KagClient {
             "release",probe("/v1/graph/release","either"));
     }
     public JsonNode pipelineStatus() { return inspectView("/v1/pipeline/status",true); }
+    public JsonNode configuration() {
+        try {
+            String token=inspectionToken();
+            return inspectionClient.get().uri("/v1/config").header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                if(res.getStatusCode().value()!=200||!List.of("no-store").equals(res.getHeaders().get(HttpHeaders.CACHE_CONTROL))) throw new IOException("Configuration unavailable");
+                var body=inspectionBody(res,token);
+                if(body.toString().length()>16384) throw new IOException("Configuration too large");
+                validateConfiguration(body);return body;
+            });
+        } catch(Exception e) { throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Chưa đọc được cấu hình KAG. Vui lòng kiểm tra dịch vụ và quyền inspection."); }
+    }
+    public JsonNode llmCredentials(LLMCredentialsChangeRequest change) {
+        if(change!=null&&(change.revision()==null||change.revision()<0||change.revision()>=Integer.MAX_VALUE||
+            change.chat()==null&&change.embedding()==null||
+            change.chat()!=null&&!llmOptions(change.chat(),true)||change.embedding()!=null&&!llmOptions(change.embedding(),true)))
+            throw vn.luatgt.exception.ApiErrors.bad("Model, Base URL hoặc API key không hợp lệ");
+        try {
+            String token=change==null?inspectionToken():readToken(credentialsWriteTokenFile);
+            if(change!=null)for(String file:List.of(tokenFile,inspectTokenFile,builderTokenFile)) {
+                if(!file.isBlank()&&token.equals(readToken(file)))throw new IOException("Distinct credentials scope required");
+            }
+            RestClient.RequestHeadersSpec<?> request=change==null?inspectionClient.get().uri("/v1/config/models"):
+                inspectionClient.post().uri("/v1/config/models").contentType(MediaType.APPLICATION_JSON).body(change);
+            return request.header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                var body=inspectionBody(res,token);int status=res.getStatusCode().value();
+                if(change!=null)for(JsonNode role:new JsonNode[]{change.chat(),change.embedding()}) {
+                    if(role!=null&&role.has("api_key")&&body.toString().contains(role.path("api_key").asText()))throw new IOException("Credentials reflected");
+                }
+                if(status==409&&body.path("error").path("code").asText().equals("CONFIG_CONFLICT"))
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,"Cấu hình vừa thay đổi. Hãy tải lại trước khi lưu.");
+                if(status==422)throw vn.luatgt.exception.ApiErrors.bad("Provider, model, Base URL hoặc API key không hợp lệ; lần lưu đầu mỗi nhóm cần key");
+                if(status!=200||!List.of("no-store").equals(res.getHeaders().get(HttpHeaders.CACHE_CONTROL)))throw new IOException("Credentials metadata unavailable");
+                validateLLMCredentials(body);return body;
+            });
+        } catch(ResponseStatusException e) {throw e;}
+        catch(Exception e) {throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Không đọc hoặc lưu được cấu hình model. Kiểm tra dịch vụ, quyền credentials-write và storage.");}
+    }
+    private static boolean llmOptions(JsonNode value,boolean input) {
+        if(value==null)return false;
+        var keys=new HashSet<>(fields(value));
+        if(value.has("provider")) {
+            if(!value.path("provider").asText().equals("openai-compatible"))return false;
+            keys.remove("provider");
+        } else if(!input)return false;
+        if(input?!(keys.equals(Set.of("base_url","model"))||keys.equals(Set.of("base_url","model","api_key"))):
+            !keys.equals(Set.of("base_url","model","key_configured")))return false;
+        if(!value.path("model").isTextual()||!value.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")||
+            !value.path("base_url").isTextual()||value.path("base_url").asText().length()>2048||
+            value.path("base_url").asText().matches("(?s).*[\\s\\x00-\\x1f\\x7f].*"))return false;
+        try {
+            var uri=new java.net.URI(value.path("base_url").asText());
+            if(!Set.of("http","https").contains(uri.getScheme())||uri.getHost()==null||uri.getPort()==0||uri.getPort()>65535||
+                uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null)return false;
+        } catch(Exception e) {return false;}
+        return input?(!value.has("api_key")||value.path("api_key").isTextual()&&value.path("api_key").asText().matches("[!-~]{1,4096}")):
+            value.path("key_configured").isBoolean()&&value.path("key_configured").asBoolean();
+    }
+    public JsonNode modelAction(String role,String action,ModelConfigActionRequest change) {
+        if(!Set.of("chat","embedding").contains(role)||!Set.of("test","apply").contains(action)||change==null||
+            change.revision()==null||change.revision()<0||change.revision()>=Integer.MAX_VALUE)
+            throw vn.luatgt.exception.ApiErrors.bad("Thao tác model không hợp lệ");
+        try {
+            String selected=action.equals("test")?providerTestTokenFile:configApplyTokenFile;
+            String token=readToken(selected);
+            for(String file:List.of(tokenFile,inspectTokenFile,builderTokenFile,credentialsWriteTokenFile,
+                    action.equals("test")?configApplyTokenFile:providerTestTokenFile))
+                if(!file.isBlank()&&token.equals(readToken(file)))throw new IOException("Distinct model scope required");
+            return client.post().uri("/v1/config/models/"+role+"/"+action).contentType(MediaType.APPLICATION_JSON).body(change)
+                .header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                    var body=inspectionBody(res,token);int status=res.getStatusCode().value();
+                    if(status==409)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        body.path("error").path("code").asText().equals("CONFIG_BUSY")?
+                        "Runtime hoặc kiểm thử đang bận. Hãy thử lại khi rảnh.":"Cấu hình vừa thay đổi. Hãy tải lại trước khi tiếp tục.");
+                    if(status!=200||!List.of("no-store").equals(res.getHeaders().get(HttpHeaders.CACHE_CONTROL)))
+                        throw new IOException("Model action unavailable");
+                    validateLLMCredentials(body);return body;
+                });
+        } catch(ResponseStatusException e) {throw e;}
+        catch(Exception e) {throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+            "Không thực hiện được Test/Apply. Kiểm tra dịch vụ và quyền provider-test/config-apply; tải lại trạng thái trước khi thử tiếp.");}
+    }
+    private void validateLLMCredentials(JsonNode body) throws IOException {
+        if(!fields(body).equals(Set.of("contract_version","revision","saved","chat","embedding","applied","connection_tested","save_allowed","error_code","roles","build_config"))||
+            !body.path("contract_version").asText().equals("llm-credentials-v3")||!bounded(body.path("revision"),0,Integer.MAX_VALUE)||
+            !body.path("saved").isBoolean()||!body.path("save_allowed").isBoolean()||!body.path("applied").isBoolean()||
+            !body.path("connection_tested").isBoolean()||!body.path("error_code").isNull()&&
+            !Set.of("CONFIG_INVALID","CONFIG_STORAGE_UNAVAILABLE").contains(body.path("error_code").asText()))throw new IOException("Invalid model metadata");
+        if(body.path("saved").asBoolean()?body.path("revision").asInt()<1||body.path("chat").isNull()&&body.path("embedding").isNull()||
+            !body.path("chat").isNull()&&!llmOptions(body.path("chat"),false)||!body.path("embedding").isNull()&&!llmOptions(body.path("embedding"),false):
+            body.path("revision").asInt()!=0||!body.path("chat").isNull()||!body.path("embedding").isNull())throw new IOException("Invalid saved metadata");
+        if((!body.path("error_code").isNull()||body.path("revision").asInt()==Integer.MAX_VALUE)&&body.path("save_allowed").asBoolean())throw new IOException("Invalid save authority");
+        if(!fields(body.path("roles")).equals(Set.of("chat","embedding"))||
+            !body.path("build_config").equals(json.valueToTree(Map.of("state","NOT_SUPPORTED","reason","BUILDER_REPLAY_ONLY"))))
+            throw new IOException("Invalid consumer metadata");
+        boolean applied=false,tested=false;
+        for(String role:List.of("chat","embedding")) {
+            var row=body.path("roles").path(role);var test=row.path("test");var active=row.path("active");
+            if(!fields(row).equals(Set.of("saved_revision","test","active_revision","active","status","blocker","actions"))||
+                !row.path("saved_revision").isNull()&&!bounded(row.path("saved_revision"),1,body.path("revision").asInt())||
+                body.path(role).isNull()!=row.path("saved_revision").isNull()||
+                !row.path("active_revision").isNull()&&!bounded(row.path("active_revision"),1,body.path("revision").asInt())||
+                !active.isNull()&&!llmOptions(active,false)||
+                !Set.of("NOT_CONFIGURED","SAVED","PENDING_APPLY","APPLIED","BLOCKED").contains(row.path("status").asText())||
+                !fields(row.path("actions")).equals(Set.of("test","apply"))||!row.path("actions").path("test").isBoolean()||!row.path("actions").path("apply").isBoolean()||
+                !row.path("blocker").isNull()&&!Set.of("TEST_REQUIRED","TEST_IN_PROGRESS","RELEASE_UNAVAILABLE","RELEASE_MISMATCH","VECTOR_IDENTITY_MISMATCH",
+                    "ACTIVE_CONFIG_INVALID","PROXY_POLICY_UNVERIFIED","BLOCKED","AUTH_FAILED","MODEL_NOT_FOUND","RATE_LIMITED","PROVIDER_ERROR",
+                    "MODEL_MISMATCH","DIMENSION_MISMATCH","INVALID_RESPONSE","TIMEOUT","NETWORK_ERROR").contains(row.path("blocker").asText()))
+                throw new IOException("Invalid role metadata");
+            if(!test.isNull()) {
+                if(!fields(test).equals(Set.of("revision","status","code","dimension","observed_model","client_attempts","output_chars","tested_at"))||
+                    !test.path("revision").equals(row.path("saved_revision"))||!Set.of("PASS","FAIL","BLOCKED").contains(test.path("status").asText())||
+                    !test.path("code").equals(row.path("blocker"))&&!row.path("blocker").asText().matches("TEST_REQUIRED|TEST_IN_PROGRESS|RELEASE_UNAVAILABLE|RELEASE_MISMATCH|VECTOR_IDENTITY_MISMATCH|ACTIVE_CONFIG_INVALID|PROXY_POLICY_UNVERIFIED|BLOCKED")||
+                    !bounded(test.path("client_attempts"),0,1)||!bounded(test.path("output_chars"),0,262144)||
+                    !test.path("dimension").isNull()&&!bounded(test.path("dimension"),0,262144)||
+                    !test.path("observed_model").isNull()&&!test.path("observed_model").equals(body.path(role).path("model"))||
+                    !test.path("tested_at").isTextual()||!test.path("tested_at").asText().matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+00:00")||
+                    test.path("status").asText().equals("PASS")&&(!test.path("code").isNull()||test.path("client_attempts").asInt()!=1||
+                        (role.equals("embedding")?test.path("dimension").asInt()!=3072:test.path("output_chars").asInt()<1)))throw new IOException("Invalid provider result");
+                tested|=test.path("status").asText().equals("PASS");
+            }
+            if(row.path("status").asText().equals("APPLIED")) {
+                if(active.isNull()||!active.equals(body.path(role))||!row.path("active_revision").equals(row.path("saved_revision")))throw new IOException("Invalid active revision");
+                applied=true;
+            }
+        }
+        if(body.path("applied").asBoolean()!=applied||body.path("connection_tested").asBoolean()!=tested)throw new IOException("Invalid model state");
+    }
+    public JsonNode chatRetrieval(String action,ChatRetrievalChangeRequest change) {
+        if(action!=null&&(!Set.of("save","apply","restore").contains(action)||change==null||change.revision()==null||change.revision()<0||
+            (action.equals("save")?!retrievalValues(change.values()):change.values()!=null)))
+            throw vn.luatgt.exception.ApiErrors.bad("Cấu hình Retrieval cần top_k nguyên từ 1 đến 10 và expand boolean");
+        try {
+            String token=inspectionToken();
+            RestClient.RequestHeadersSpec<?> request;
+            if(action==null)request=inspectionClient.get().uri("/v1/config/retrieval");
+            else {
+                String query=readToken(tokenFile);
+                var body=new LinkedHashMap<String,Object>();body.put("revision",change.revision());
+                if(action.equals("save"))body.put("values",change.values());
+                request=inspectionClient.post().uri("/v1/config/retrieval/"+action).contentType(MediaType.APPLICATION_JSON)
+                    .header("X-KAG-Config-Query-Authorization","Bearer "+query).body(body);
+            }
+            return request.header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
+                var body=inspectionBody(res,token);int status=res.getStatusCode().value();
+                if(status==409) {
+                    String code=body.path("error").path("code").asText();
+                    if(!Set.of("CONFIG_CONFLICT","CONFIG_BUSY").contains(code))throw new IOException("Invalid configuration conflict");
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,code.equals("CONFIG_BUSY")?"Runtime đang bận hoặc chưa an toàn. Hãy thử lại khi rảnh.":"Cấu hình vừa thay đổi hoặc thao tác không còn phù hợp. Hãy tải lại trước khi tiếp tục.");
+                }
+                if(status!=200||!List.of("no-store").equals(res.getHeaders().get(HttpHeaders.CACHE_CONTROL)))throw new IOException("Configuration unavailable");
+                validateChatRetrieval(body);return body;
+            });
+        } catch(ResponseStatusException e) {throw e;}
+        catch(Exception e) {throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Không đọc hoặc ghi được cấu hình Retrieval. Kiểm tra dịch vụ, quyền truy cập và cấu hình đã lưu.");}
+    }
+    private static boolean retrievalValues(JsonNode value) {
+        return value!=null&&fields(value).equals(Set.of("top_k","expand"))&&bounded(value.path("top_k"),1,10)&&value.path("expand").isBoolean();
+    }
+    private void validateChatRetrieval(JsonNode body) throws IOException {
+        var active=body.path("active");var saved=body.path("saved");var previous=body.path("previous");var actions=body.path("actions");
+        if(!fields(body).equals(Set.of("contract_version","revision","saved","active","previous","persisted","pending","runtime_idle","actions","error_code"))||
+            !body.path("contract_version").asText().equals("chat-retrieval-v1")||!bounded(body.path("revision"),0,Integer.MAX_VALUE)||
+            !fields(actions).equals(Set.of("save","apply","restore"))||!body.path("persisted").isBoolean()||!body.path("pending").isBoolean()||!body.path("runtime_idle").isBoolean()||
+            (active.isNull()?!saved.isNull()||!previous.isNull()||body.path("error_code").isNull():!retrievalValues(active)||!retrievalValues(saved)||!previous.isNull()&&!retrievalValues(previous))||
+            (!body.path("error_code").isNull()&&!Set.of("CONFIG_INVALID","CONFIG_STORAGE_UNAVAILABLE").contains(body.path("error_code").asText()))||
+            body.path("pending").asBoolean()!=!saved.equals(active))throw new IOException("Invalid Chat retrieval configuration");
+        boolean available=!active.isNull()&&body.path("error_code").isNull()&&body.path("revision").asInt()<Integer.MAX_VALUE,idle=body.path("runtime_idle").asBoolean();
+        if(!actions.path("save").equals(json.valueToTree(available))||!actions.path("apply").equals(json.valueToTree(available&&idle&&body.path("pending").asBoolean()))||
+            !actions.path("restore").equals(json.valueToTree(available&&idle&&!previous.isNull())))throw new IOException("Invalid configuration actions");
+    }
+    private void validateConfiguration(JsonNode body) throws IOException {
+        var project=body.path("project");var models=body.path("models");var solver=body.path("solver");
+        if(!fields(body).equals(Set.of("contract_version","project","models","solver"))||!body.path("contract_version").asText().equals("kag-config-v1")||
+            !fields(project).equals(Set.of("source","release_id","release_state"))||!project.path("source").asText().equals("startup_environment")||
+            !Set.of("NOT_CONFIGURED","LOADED","UNAVAILABLE").contains(project.path("release_state").asText())||
+            (!project.path("release_id").isNull()&&(!project.path("release_id").isTextual()||!project.path("release_id").asText().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")))||
+            (project.path("release_state").asText().equals("LOADED")&&project.path("release_id").isNull())||
+            !fields(models).equals(Set.of("source","identity_verified","chat","embedding"))||!models.path("source").asText().equals("startup_environment")||
+            !models.path("identity_verified").equals(json.valueToTree(false)))throw new IOException("Invalid configuration");
+        for(String role:List.of("chat","embedding")) {
+            var model=models.path(role);String state=model.path("state").asText();
+            if(!fields(model).equals(Set.of("state","model","endpoint"))||!Set.of("CONFIGURED","NOT_CONFIGURED","INCOMPLETE","INVALID").contains(state)||
+                (!model.path("model").isNull()&&(!model.path("model").isTextual()||!model.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")))||
+                (!model.path("endpoint").isNull()&&(!text(model.path("endpoint"),270,true)||!configEndpoint(model.path("endpoint").asText()))))throw new IOException("Invalid model metadata");
+            if(state.equals("CONFIGURED")&&(model.path("model").isNull()||model.path("endpoint").isNull())||
+                state.equals("NOT_CONFIGURED")&&(!model.path("model").isNull()||!model.path("endpoint").isNull()))throw new IOException("Inconsistent model metadata");
+        }
+        if(solver.isNull())return;
+        if(!fields(solver).equals(Set.of("source","pipeline","planner","top_k","expand","max_evidence_chars","max_iteration","search_k","expansion_limit","required_vector_dimensions"))||
+            !solver.path("source").asText().equals("source_defaults")||!solver.path("pipeline").asText().equals("KAGIterativePipeline")||
+            !solver.path("planner").asText().equals("KAGIterativePlanner")||!solver.path("expand").isBoolean())throw new IOException("Invalid solver metadata");
+        for(String field:List.of("top_k","max_evidence_chars","max_iteration","search_k","expansion_limit","required_vector_dimensions"))
+            if(!bounded(solver.path(field),1,1000000))throw new IOException("Invalid solver limit");
+        if(solver.path("top_k").asInt()>solver.path("search_k").asInt())throw new IOException("Invalid retrieval limit");
+    }
+    private static boolean configEndpoint(String value) {
+        try {
+            var uri=java.net.URI.create(value);
+            return Set.of("http","https").contains(uri.getScheme())&&uri.getHost()!=null&&uri.getUserInfo()==null&&
+                uri.getRawPath().isEmpty()&&uri.getRawQuery()==null&&uri.getRawFragment()==null&&uri.getPort()<=65535;
+        } catch(IllegalArgumentException e) {return false;}
+    }
     public JsonNode benchmarkDatasets() { return inspectView("/v1/benchmark/datasets",false); }
     public JsonNode sampleInspection() {
         try {
@@ -444,7 +652,7 @@ public class KagClient {
         byte[] bytes=response.getBody().readNBytes(245761); if(bytes.length>245760) throw new IOException("Response too large");
         var body=parse(StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString(),token);
         if(body==null||!body.isObject()) throw new IOException("Invalid response");
-        for(String file:List.of(tokenFile,inspectTokenFile)) {
+        for(String file:List.of(tokenFile,inspectTokenFile,credentialsWriteTokenFile,providerTestTokenFile,configApplyTokenFile)) {
             String other=null; try {other=readToken(file);} catch(IOException ignored) {}
             if(other!=null&&body.toString().contains(other)) throw new IOException("Credentials reflected");
         }
