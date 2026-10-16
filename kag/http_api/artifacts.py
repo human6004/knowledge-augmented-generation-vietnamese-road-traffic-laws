@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 import hashlib
 import json
@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import stat
 import sqlite3
+import tempfile
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -421,6 +422,128 @@ def load_release(root: Path, expected_release_id: str) -> ServingRelease:
         raise ArtifactFailure(VerificationState.INVALID) from None
 
 
+def publish_sample(root, run_directory, reader, *, release_id, source_snapshot_id, approve=False, publication=None):
+    """Preview by default; explicit operator approval publishes a frozen SAMPLE.
+
+    This does not activate serving or attest network isolation/reader privileges.
+    The existing operational proof and operator pin remain required at the API.
+    """
+    from kag.run_state import atomic_json
+    from kag.verify import verify_graph
+
+    root, run_directory = Path(root).absolute(), Path(run_directory).absolute()
+    if root.exists():
+        raise FileExistsError(root)
+    if any(p.is_symlink() for p in (root, *root.parents)):
+        _invalid()
+    _identity(release_id); _identity(source_snapshot_id)
+    receipt = _json(_read(run_directory,'receipt.json'))
+    identity, stages = receipt['identity'], receipt['stages']
+    metadata = reader.database_metadata()
+    contract_root = Path(__file__).resolve().parents[1]/'schema'
+    contract_bytes = _read(contract_root,'schema_contract.json')
+    contract = _json(contract_bytes)
+    if (identity['scope'] != 'FRESH_SAMPLE' or identity['write_mode'] != 'WRITE'
+            or stages['release']['kind'] != 'FRESH_SAMPLE/WRITE'
+            or identity['database'] != reader.database or identity['database_id'] != metadata['databaseID']
+            or identity['namespace'] != contract['namespace']
+            or identity['backend_identity']['runtime_identity'][0] != metadata['serverID']
+            or metadata['name'] != reader.database or metadata['currentStatus'] != 'online'):
+        _invalid()
+    readonly = {'catalog':[{'name':reader.database,'access':'read-only','currentStatus':'online'}],
+                'settings':[{'name':'server.databases.read_only','value':reader.database}]}
+    if reader.readonly_state() != readonly:
+        raise ArtifactFailure(VerificationState.UNVERIFIED)
+    for suffix in ('-wal','-shm','-journal'):
+        if (run_directory/('expected.sqlite3'+suffix)).exists():
+            _invalid()
+    expected = _read(run_directory,'expected.sqlite3')
+    provenance = _read(run_directory,'provenance.jsonl')
+    _verify_sample_provenance(run_directory)
+    verified = verify_graph(reader,db_path=run_directory/'expected.sqlite3',contract=contract,batch_size=32)
+    counts = {'nodes':verified['nodes']['total'],'edges':verified['edges']['total'],
+              'vectors':verified['vectors']['nonempty']}
+    if (verified != stages['verify'] or verified['fingerprint'] != stages['release']['fingerprint']
+            or verified['model_identity'] != identity['model_identity']
+            or not 1 <= counts['nodes'] <= 32 or not 0 <= counts['edges'] <= 22
+            or not 1 <= counts['vectors'] <= 42):
+        _invalid()
+    binding = dict(release_id=release_id,schema_contract=dict(namespace=contract['namespace'],
+        schema_sha256=_sha(_read(contract_root,'VietRoadTraffic.schema')),contract_sha256=_sha(contract_bytes)),
+        source_snapshot_id=source_snapshot_id,graph_fingerprint=verified['fingerprint'],
+        database_id=metadata['databaseID'],server_id=metadata['serverID'],database=reader.database,
+        namespace=contract['namespace'])
+    relations = []
+    for batch in reader.iter_edges(contract['namespace'],32):
+        for edge in batch:
+            ends = [[next(label for label in edge[side]['labels'] if label.startswith(contract['namespace']+'.')),
+                     edge[side]['properties']['id']] for side in ('from','to')]
+            relations.append({'from':ends[0],'predicate':edge['predicate'],'to':ends[1],
+                'properties':decode_properties(edge['properties'],contract['relation_properties'][edge['predicate']])})
+    records = []
+    for batch in reader.iter_nodes(contract['namespace'],32):
+        for node in batch:
+            entity_type = next(label for label in node['labels'] if label.startswith(contract['namespace']+'.'))
+            kind = entity_type.rsplit('.',1)[1]
+            rows = contract['node_properties'][kind]
+            properties = decode_properties(node['properties'],rows)
+            key = [entity_type,properties['id']]
+            for field,_ in TARGETS[kind]:
+                logical = next(row['logical_name'] for row in rows if row['schema_name']==field)
+                text = properties.get(logical)
+                if text:
+                    records.append(dict(entity_type=entity_type,entity_id=properties['id'],
+                        doc_id=properties['id'] if kind=='LegalDocument' else properties['doc_id'],
+                        unit_id=properties['id'] if kind=='LegalUnit' else properties.get('unit_id'),
+                        sign_id=properties['id'] if kind=='TrafficSign' else None,
+                        field=logical,physical_field=field,source_text=text,source_sha256=_sha(text.encode()),
+                        metadata=properties,graph_context=[r for r in relations if key in (r['from'],r['to'])]))
+    catalog = dict(schema='h1-source-catalog-1.0',**binding,records=records)
+    source_records = _catalog(catalog,binding,contract)
+    webapp_id = publication.get('snapshot_id') if type(publication) is dict else None
+    _publication(publication,dict(binding,release_kind='SAMPLE',webapp_snapshot_id=webapp_id),source_records)
+    if len(records) != counts['vectors']:
+        _invalid()
+    proposal = dict(status='AWAITING_OPERATOR_APPROVAL',**binding,project_id=str(identity['project_id']),
+        counts=counts,model_identity=verified['model_identity'],release_root=str(root),
+        operational_proof='REQUIRED_SEPARATELY')
+    if publication is not None:
+        proposal['webapp_snapshot_id'] = webapp_id
+    # A preview cannot turn measured evidence into operator publication authority.
+    if approve is not True:
+        return proposal
+    with tempfile.TemporaryDirectory(prefix='.sample-release-',dir=root.parent) as temporary:
+        staging = Path(temporary)/'release'; staging.mkdir()
+        def write(name, value):
+            atomic_json(staging/name,value)
+            return _sha(_read(staging,name))
+        (staging/'expected.sqlite3').write_bytes(expected)
+        (staging/'provenance.jsonl').write_bytes(provenance)
+        catalog_hash = write('source-catalog.json',catalog)
+        backend_hash = write('backend-receipt.json',dict(schema='h1-backend-receipt-1.0',**binding,
+            reader_endpoint=reader.endpoint,project_id=str(identity['project_id']),identity_attested=True))
+        graph_hash = write('graph-receipt.json',dict(schema='h1-graph-receipt-1.0',**binding,
+            graph_verified=True,source_catalog_sha256=catalog_hash))
+        authority_hash = write('serving-authority.json',dict(schema='h1-serving-authority-1.0',**binding,
+            reader_endpoint=reader.endpoint,project_id=str(identity['project_id']),graph_frozen=True,
+            schema_frozen=True,read_only=True,catalog_complete=True,source_catalog_sha256=catalog_hash,
+            backend_receipt_sha256=backend_hash))
+        publication_hash = write('webapp-publication.json',publication) if publication is not None else None
+        write('release.json',dict(schema='h1-release-1.0',**binding,release_kind='SAMPLE',
+            source_catalog_sha256=catalog_hash,backend_receipt_sha256=backend_hash,graph_receipt_sha256=graph_hash,
+            serving_authority_receipt_sha256=authority_hash,webapp_publication_sha256=publication_hash,
+            webapp_snapshot_id=webapp_id,serving_mode='sealed_read_only',
+            sealed_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')))
+        release = load_release(staging,release_id)
+        _backend(reader,release)
+        _verify_sample_graph(release,dict(counts=counts),reader)
+        _readback(reader,release.records,contract)
+        if reader.readonly_state()!=readonly or reader.database_metadata()!=metadata:
+            _invalid()
+        staging.rename(root)
+    return dict(proposal,status='PUBLISHED')
+
+
 def _unchanged(release):
     if any(_read(release.root,name) != raw for name,raw in release.artifacts):
         _invalid()
@@ -692,20 +815,26 @@ def verify_sample_backend(release, expected_sha256, reader_username, reader):
         raise ArtifactFailure(VerificationState.UNVERIFIED) from None
 
 
-def _verify_sample_graph(release,proof,reader):
-    from kag.verify import verify_graph
-    db_path = release.root/'expected.sqlite3'
+def _verify_sample_provenance(root, *, model_identity=None):
+    db_path = root/'expected.sqlite3'
     with closing(sqlite3.connect(db_path.as_uri()+'?mode=ro',uri=True)) as db:
         jobs = dict(db.execute('SELECT key,provenance_hash FROM expected_jobs'))
     seen = set()
-    for line in _read(release.root,'provenance.jsonl').splitlines():
+    for line in _read(root,'provenance.jsonl').splitlines():
         job = _json(line)
         key = canonical_json([job['node_type'],job['node_id'],job['property']])
-        if key in seen or jobs.get(key) != _sha(canonical_json(job).encode()):
+        if (key in seen or jobs.get(key) != _sha(canonical_json(job).encode())
+                or model_identity is not None and job.get('model_identity') != model_identity):
             _invalid()
         seen.add(key)
     if seen != set(jobs):
         _invalid()
+
+
+def _verify_sample_graph(release,proof,reader):
+    from kag.verify import verify_graph
+    _verify_sample_provenance(release.root)
+    db_path = release.root/'expected.sqlite3'
     result = verify_graph(reader,db_path=db_path,contract=_json(release.contract_bytes),batch_size=32)
     if (result['fingerprint'] != release.descriptor['graph_fingerprint']
             or dict(proof['counts']) != {'nodes':result['nodes']['total'],'edges':result['edges']['total'],
@@ -738,3 +867,34 @@ def sample_source_vector(release, reader, evidence_id):
         return nodes[0]['properties'][field]
     except Exception:
         raise ArtifactFailure(VerificationState.UNVERIFIED) from None
+
+
+def main():
+    """Operator CLI; existing broker credential files never enter release artifacts."""
+    import argparse
+    from .read_broker import BrokerNeo4jClient, _secret_file
+    parser = argparse.ArgumentParser(description='Preview or publish a verified, read-only SAMPLE release')
+    parser.add_argument('--run-directory',required=True,type=Path)
+    parser.add_argument('--root',required=True,type=Path)
+    parser.add_argument('--release-id',required=True)
+    parser.add_argument('--source-snapshot-id',required=True)
+    parser.add_argument('--webapp-publication',type=Path,
+        help='Existing, approved WebApp publication snapshot; source identity must match this graph')
+    parser.add_argument('--approve-sample',action='store_true',
+        help='Operator approves publication of this exact SAMPLE; does not activate serving')
+    args = parser.parse_args()
+    publication = (_json(_read(args.webapp_publication.parent,args.webapp_publication.name))
+                   if args.webapp_publication is not None else None)
+    reader = BrokerNeo4jClient('http://openspg-neo4j:7474','vietroadtraffic',
+        username=os.environ.get('KAG_BROKER_USERNAME','neo4j'),
+        password=_secret_file('KAG_BROKER_PASSWORD_FILE'),timeout=5,namespace='VietRoadTraffic')
+    try:
+        result = publish_sample(args.root,args.run_directory,reader,release_id=args.release_id,
+            source_snapshot_id=args.source_snapshot_id,approve=args.approve_sample,publication=publication)
+        print(canonical_json(result))
+    finally:
+        reader._opener._opener.close()
+
+
+if __name__ == '__main__':
+    main()

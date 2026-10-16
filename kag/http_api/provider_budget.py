@@ -21,6 +21,7 @@ _RECEIPTS = deque(maxlen=50)
 _OUTCOMES = Counter()
 _RECEIPT_LOCK = Lock()
 _STARTED_AT = datetime.now(timezone.utc).isoformat()
+GATEWAY = 'http://kag-ingress:8898/v1'
 
 
 def receipt_view(binding):
@@ -40,43 +41,66 @@ class BudgetError(RuntimeError):
 
 
 def provider_route(config, role, policy):
-    """Only registered gateway routes; saved URLs never become outbound destinations."""
-    from ipaddress import ip_address
-    import socket
-    route = policy.get(role) if type(policy) is dict else None
-    if (role not in ('chat', 'embedding') or not policy or policy.get('enabled') is not True
-            or not policy.get('token') or not route or config['base_url'] != route['base_url']):
+    """Approve a saved endpoint; the isolated gateway resolves and pins its public IP."""
+    if (role not in ('chat', 'embedding') or type(policy) is not dict or policy.get('enabled') is not True
+            or not policy.get('token') or config.get('provider','openai-compatible') != 'openai-compatible'):
         raise BudgetError('BLOCKED')
-    if not route.get('safe'):
-        raise BudgetError('PROXY_POLICY_UNVERIFIED')
     url = httpx.URL(config['base_url'])
-    if url.path != '/v1' or url.query or url.fragment or url.userinfo:
+    if (url.query or url.fragment or url.userinfo or not url.host
+            or url.path != '/' and not re.fullmatch(r'(?:/[A-Za-z0-9_-]+)*', url.path)
+            or b'%' in url.raw_path or '..' in config['base_url']):
         raise BudgetError('BLOCKED')
-    if not route.get('internal'):
-        if url.scheme != 'https':
-            raise BudgetError('BLOCKED')
-        # Isolated API has no public DNS. Its registered gateway validates and pins the resolved IP.
-        if not route.get('dns_at_gateway'):
-            try:
-                addresses = socket.getaddrinfo(url.host, url.port or 443, type=socket.SOCK_STREAM)
-                if not addresses or any(not ip_address(row[4][0]).is_global for row in addresses):
-                    raise BudgetError('BLOCKED')
-            except OSError:
-                raise BudgetError('NETWORK_ERROR') from None
-    return route
+    proxy = policy.get('proxy')
+    if proxy and config['base_url'] == proxy['base_url']:
+        if not proxy.get('safe') and not proxy.get('allow_upstream_retries'):
+            raise BudgetError('PROXY_POLICY_UNVERIFIED')
+        return dict(mode='proxy', base_url=config['base_url'])
+    if (url.scheme != 'https' or url.port not in (None,443) or url.host not in policy.get('allowed_hosts',())
+            or not re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]*',url.host)):
+        raise BudgetError('BLOCKED')
+    return dict(mode='public', base_url=config['base_url'])
+
+
+def _forward(request, gateway, token, upstream, route=None):
+    if gateway != GATEWAY or request.url != httpx.URL(upstream):
+        raise BudgetError('PROVIDER_REQUEST_DENIED')
+    suffix = '/embeddings' if request.url.path.endswith('/embeddings') else '/chat/completions'
+    headers = request.headers.copy()
+    for name in ('host','X-KAG-Provider-Token','X-KAG-Provider-Route','X-KAG-Provider-Host','X-KAG-Provider-Path','X-KAG-Provider-Base'):
+        headers.pop(name,None)
+    headers['X-KAG-Provider-Token'] = token
+    if route is not None:
+        headers.update({'X-KAG-Provider-Route':route['mode'],'X-KAG-Provider-Host':request.url.host,
+                        'X-KAG-Provider-Path':request.url.path,'X-KAG-Provider-Base':route['base_url']})
+    return httpx.Request(request.method,gateway+suffix,headers=headers,content=request.content,extensions=request.extensions)
+
+
+class GatewayTransport(httpx.BaseTransport):
+    def __init__(self, transport, gateway, token, upstream, route=None):
+        self.transport,self.gateway,self.token,self.upstream,self.route = transport,gateway,token,upstream,route
+    def handle_request(self, request):
+        return self.transport.handle_request(_forward(request,self.gateway,self.token,self.upstream,self.route))
+    def close(self):self.transport.close()
+
+
+class AsyncGatewayTransport(httpx.AsyncBaseTransport):
+    def __init__(self, transport, gateway, token, upstream, route=None):
+        self.transport,self.gateway,self.token,self.upstream,self.route = transport,gateway,token,upstream,route
+    async def handle_async_request(self, request):
+        return await self.transport.handle_async_request(_forward(request,self.gateway,self.token,self.upstream,self.route))
+    async def aclose(self):await self.transport.aclose()
 
 
 def test_provider(config, role, policy):
-    """One bounded inference, no SDK retry, redirect, fallback or arbitrary URL proxy."""
+    """One client request; upstream proxy retries require explicit operator acceptance."""
     from kag.vector_contract import valid_vector
-    from .sample_query import GatewayTransport, GATEWAY
     result = dict(status='FAIL', code=None, dimension=None, observed_model=None,
                   client_attempts=0, output_chars=0)
     try:
-        provider_route(config, role, policy)
+        route = provider_route(config, role, policy)
         suffix = '/chat/completions' if role == 'chat' else '/embeddings'
         upstream = config['base_url'] + suffix
-        transport = GatewayTransport(httpx.HTTPTransport(retries=0), GATEWAY, policy['token'], upstream)
+        transport = GatewayTransport(httpx.HTTPTransport(retries=0), GATEWAY, policy['token'], upstream, route)
         payload = dict(model=config['model'])
         if role == 'chat':
             payload.update(messages=[dict(role='user', content='Reply with OK.')], max_tokens=32, stream=False)
@@ -103,9 +127,9 @@ def test_provider(config, role, policy):
                         raise BudgetError('TIMEOUT')
         body = json.loads(raw, object_pairs_hook=_object)
         observed = body.get('model')
-        if observed is not None and observed != config['model']:
-            raise BudgetError('MODEL_MISMATCH')
-        result['observed_model'] = config['model'] if observed is not None else None
+        if (type(observed) is str and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}',observed)
+                and not any(secret and secret in observed for secret in (config['api_key'],policy['token']))):
+            result['observed_model'] = observed
         if role == 'chat':
             content = body['choices'][0]['message']['content']
             if type(content) is not str or not content.strip():
@@ -115,9 +139,9 @@ def test_provider(config, role, policy):
             rows = body['data']
             vector = rows[0]['embedding'] if type(rows) is list and len(rows) == 1 else None
             result['dimension'] = len(vector) if type(vector) is list else None
-            if result['dimension'] != 3072:
+            if not result['dimension'] or result['dimension'] > 65536:
                 raise BudgetError('DIMENSION_MISMATCH')
-            if not valid_vector(vector, 3072):
+            if not valid_vector(vector, result['dimension']):
                 raise BudgetError('INVALID_RESPONSE')
         result['status'] = 'PASS'
     except BudgetError as error:

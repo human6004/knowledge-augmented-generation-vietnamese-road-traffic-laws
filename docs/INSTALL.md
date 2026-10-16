@@ -100,9 +100,23 @@ Ba token riêng `credentials-write.token`, `provider-test.token`, `config-apply.
 
 Save model lưu key trong file riêng quyền `0600` trên volume provider-state, không thay cấu hình Retrieval hoặc runtime. API chỉ trả metadata và trạng thái key. Đây không phải mã hóa; bảo vệ quyền đọc và mọi bản sao volume. Save không cấp quyền Test/Apply hoặc mở provider egress.
 
-Trong Admin → Cấu hình, lưu từng nhóm rồi chọn Kiểm tra và xác nhận chi phí. Test gửi tối đa một request từ KAG, không tự retry. Gateway hiện đăng ký Chat `http://127.0.0.1:8317/v1` (được chuyển tới host Docker) và Embedding `https://api.vilao.ai/v1`; endpoint khác vẫn lưu được nhưng Test bị chặn. `KAG_PROVIDER_ENABLED=1` cho phép gateway; không mở outbound trực tiếp từ KAG API. Chat Test chỉ được bật bằng `KAG_CHAT_PROXY_TEST_SAFE=1` sau khi người vận hành xác minh route proxy không retry, xoay credential hoặc fallback model. Không bật cờ này cho proxy dùng chung còn các cơ chế đó.
+Trong Admin → Cấu hình, lưu độc lập API type OpenAI-compatible, Base URL, model và key cho Chat/Embedding, rồi chọn Kiểm tra và xác nhận chi phí. Test gửi một request từ KAG, không tự retry, đổi key hay model. `KAG_PROVIDER_ENABLED=1` bật gateway; KAG API vẫn không có outbound trực tiếp.
 
-Test PASS gắn với revision của từng nhóm. Apply chỉ chạy khi runtime rảnh và model/embedding khớp serving release đã kiểm chứng; thiếu release thì báo BLOCKED. Restart khôi phục bản active, không tự áp dụng bản mới lưu. Builder hiện replay vector; cấu hình provider/OpenIE cho build chưa được hỗ trợ.
+API và HAProxy dùng chung [provider-hosts.lst](../docker/kag-ingress/provider-hosts.lst): mỗi dòng một hostname HTTPS công khai, viết thường, không wildcard/port/path. Mặc định cho phép ViLao, OpenAI, OpenRouter và Gemini OpenAI-compatible. Có thể đặt `KAG_PROVIDER_HOSTS_FILE` tới file deployment khác. Đổi model/key/Base URL trên host đã được phép chỉ cần UI; host mới cần người vận hành bổ sung policy và recreate `kag-api`, `kag-ingress`. URL ngoài policy vẫn lưu được nhưng Test báo BLOCKED. Gateway kiểm DNS/IP, ghim IP công khai, xác minh TLS theo hostname, không theo redirect; hiện chỉ định tuyến IPv4 và HTTPS cổng 443. Base URL giữ prefix API của provider, ví dụ `/api/v1` hoặc `/v1beta/openai`; không tự đổi URL/model đã lưu.
+
+EvelProxy không bắt buộc. Proxy nội bộ chỉ được đăng ký rõ bằng `KAG_PROVIDER_PROXY_BASE_URL`; URL logic này ánh xạ tới `KAG_CHAT_PROXY_HOST:KAG_CHAT_PROXY_PORT` hiện có. Đặt `KAG_CHAT_PROXY_TEST_SAFE=1` khi đã xác minh proxy không retry, xoay credential hoặc fallback. Nếu operator chấp nhận chi phí và các lượt thử nội bộ của proxy, dùng `KAG_CHAT_PROXY_ALLOW_UPSTREAM_RETRIES=1`; cờ này không xác nhận proxy đã tắt retry. Chưa có một trong hai policy thì Test route proxy bị chặn; provider HTTPS khác vẫn độc lập. Các route/proof SAMPLE cũ giữ ràng buộc riêng.
+
+Test PASS gắn với revision của từng nhóm. Chat PASS khi API trả thành công và có nội dung; Embedding kiểm vector numeric và ghi số chiều thực đo. UI hiển thị tên model thực nhận nếu provider trả về, kể cả khi khác tên gửi. Test xác nhận API hoạt động, không tự xác nhận identity backend hoặc khả năng dùng vector với graph. Số retry nội bộ của proxy/provider ngoài KAG không quan sát được. Apply chỉ chạy khi runtime rảnh và endpoint/model yêu cầu khớp provenance, cache và serving release đã kiểm chứng; cùng số chiều không đủ để Apply, thiếu release thì báo BLOCKED. Chat consumer nhận tên phản hồi từ đúng bản Test đã Apply; phản hồi khác bản đã Test vẫn bị chặn. Restart khôi phục bản active, không tự áp dụng bản mới lưu. Builder hiện replay vector; cấu hình provider/OpenIE cho build chưa được hỗ trợ.
+
+Runner hoàn tất chưa tự phê duyệt phục vụ. Với graph `FRESH_SAMPLE/WRITE` đã xác minh, operator có thể chạy publisher trong môi trường backend có credential broker hiện hữu, mount run chỉ đọc và thư mục release mới ngoài source:
+
+```sh
+python -B -m kag.http_api.artifacts --run-directory /runs/<run-id> --root /releases/<release-id> --release-id <release-id> --source-snapshot-id <source-id>
+```
+
+Mặc định chỉ xem trước, không ghi release. Sau khi duyệt đúng database identity, fingerprint, provenance, model và số lượng, thêm `--approve-sample` để xuất bản; publisher kiểm lại graph/index và database read-only, không ghi đè release cũ. Kích hoạt API vẫn cần mount release chỉ đọc, chọn `KAG_RELEASE_ID` và cấp operational proof/pin phù hợp với isolation thực tế. Publisher không tạo quyền reader, không tự kích hoạt và không xác nhận chất lượng câu trả lời.
+
+Để phục vụ Chat, có thể thêm `--webapp-publication <snapshot.json>` từ dữ liệu WebApp đã xuất bản và được duyệt. Publisher kiểm source ID, schema và hash nội dung từng unit rồi niêm phong snapshot cùng release mới; không sửa release đang phục vụ hoặc tự đánh dấu nội dung đã duyệt.
 
 Đoạn lệnh ở Bước 3 đọc đường dẫn từ `.env` nếu file đã tồn tại. Cài đặt cũ dùng `../luatgt-state` vẫn giữ nguyên đường dẫn đó. **Không xóa hay tạo lại secrets của lần cài trước.** Khi dùng đường state khác, thay đường dẫn trong lệnh kiểm tra cho khớp.
 

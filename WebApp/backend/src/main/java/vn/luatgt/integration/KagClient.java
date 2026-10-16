@@ -202,7 +202,7 @@ public class KagClient {
         } else if(!input)return false;
         if(input?!(keys.equals(Set.of("base_url","model"))||keys.equals(Set.of("base_url","model","api_key"))):
             !keys.equals(Set.of("base_url","model","key_configured")))return false;
-        if(!value.path("model").isTextual()||!value.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")||
+        if(!value.path("model").isTextual()||!value.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}")||
             !value.path("base_url").isTextual()||value.path("base_url").asText().length()>2048||
             value.path("base_url").asText().matches("(?s).*[\\s\\x00-\\x1f\\x7f].*"))return false;
         try {
@@ -270,10 +270,11 @@ public class KagClient {
                     !test.path("code").equals(row.path("blocker"))&&!row.path("blocker").asText().matches("TEST_REQUIRED|TEST_IN_PROGRESS|RELEASE_UNAVAILABLE|RELEASE_MISMATCH|VECTOR_IDENTITY_MISMATCH|ACTIVE_CONFIG_INVALID|PROXY_POLICY_UNVERIFIED|BLOCKED")||
                     !bounded(test.path("client_attempts"),0,1)||!bounded(test.path("output_chars"),0,262144)||
                     !test.path("dimension").isNull()&&!bounded(test.path("dimension"),0,262144)||
-                    !test.path("observed_model").isNull()&&!test.path("observed_model").equals(body.path(role).path("model"))||
+                    !test.path("observed_model").isNull()&&(!test.path("observed_model").isTextual()||
+                        !test.path("observed_model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}"))||
                     !test.path("tested_at").isTextual()||!test.path("tested_at").asText().matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+00:00")||
                     test.path("status").asText().equals("PASS")&&(!test.path("code").isNull()||test.path("client_attempts").asInt()!=1||
-                        (role.equals("embedding")?test.path("dimension").asInt()!=3072:test.path("output_chars").asInt()<1)))throw new IOException("Invalid provider result");
+                        (role.equals("embedding")?!bounded(test.path("dimension"),1,65536):test.path("output_chars").asInt()<1)))throw new IOException("Invalid provider result");
                 tested|=test.path("status").asText().equals("PASS");
             }
             if(row.path("status").asText().equals("APPLIED")) {
@@ -338,7 +339,7 @@ public class KagClient {
         for(String role:List.of("chat","embedding")) {
             var model=models.path(role);String state=model.path("state").asText();
             if(!fields(model).equals(Set.of("state","model","endpoint"))||!Set.of("CONFIGURED","NOT_CONFIGURED","INCOMPLETE","INVALID").contains(state)||
-                (!model.path("model").isNull()&&(!model.path("model").isTextual()||!model.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")))||
+                (!model.path("model").isNull()&&(!model.path("model").isTextual()||!model.path("model").asText().matches("[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}")))||
                 (!model.path("endpoint").isNull()&&(!text(model.path("endpoint"),270,true)||!configEndpoint(model.path("endpoint").asText()))))throw new IOException("Invalid model metadata");
             if(state.equals("CONFIGURED")&&(model.path("model").isNull()||model.path("endpoint").isNull())||
                 state.equals("NOT_CONFIGURED")&&(!model.path("model").isNull()||!model.path("endpoint").isNull()))throw new IOException("Inconsistent model metadata");

@@ -12,11 +12,11 @@ const modelErrors: Record<string, string> = {
   RELEASE_UNAVAILABLE: 'Chưa có serving release hợp lệ. Cần cấu hình release đã kiểm chứng.',
   RELEASE_MISMATCH: 'Model/endpoint không khớp policy hoặc proof của serving release.', VECTOR_IDENTITY_MISMATCH: 'Embedding không khớp identity, index hoặc provenance của release.',
   ACTIVE_CONFIG_INVALID: 'Bản active không còn hợp lệ. Serving tạm unavailable; cần kiểm tra release/policy.',
-  PROXY_POLICY_UNVERIFIED: 'Proxy chưa có route kiểm thử tắt retry, xoay credential và fallback. Cần cấu hình route riêng được phép.',
+  PROXY_POLICY_UNVERIFIED: 'Proxy chưa có policy kiểm thử được duyệt. Cần route tắt retry/fallback hoặc operator chấp nhận các lượt gọi nội bộ.',
   BLOCKED: 'Endpoint chưa được deployment cho phép qua gateway. Cần đăng ký đích hợp lệ.',
   AUTH_FAILED: 'Provider từ chối API key hoặc quyền truy cập.', MODEL_NOT_FOUND: 'Provider không tìm thấy model.',
   RATE_LIMITED: 'Provider giới hạn lượt gọi. Chờ trước khi kiểm thử lại.', PROVIDER_ERROR: 'Provider trả lỗi dịch vụ.',
-  MODEL_MISMATCH: 'Model trong response không khớp model đã lưu.', DIMENSION_MISMATCH: 'Vector đo được không đủ 3072 chiều.',
+  MODEL_MISMATCH: 'Model trong response không khớp model đã lưu.', DIMENSION_MISMATCH: 'Số chiều vector không hợp lệ hoặc vượt giới hạn kiểm thử.',
   INVALID_RESPONSE: 'Provider trả dữ liệu không hợp lệ.', TIMEOUT: 'Request hết thời gian; không tự thử lại.', NETWORK_ERROR: 'Không kết nối được provider qua gateway.',
 }
 
@@ -192,8 +192,9 @@ export default function AdminConfig() {
                     <Button type="button" disabled={modelsDirty[role] || modelsSaving || modelRunning || !models.value?.roles[role].actions.apply} onClick={() => { if (models.value) setModelAction({ role, action: 'apply', revision: models.value.revision }) }}>Áp dụng {role === 'chat' ? 'Chat' : 'Embedding'}</Button>
                   </div>
                   {models.value?.roles[role].test && <p>Test: {models.value.roles[role].test?.status === 'PASS' ? 'TESTED' : models.value.roles[role].test?.status}, revision {models.value.roles[role].test?.revision}; {models.value.roles[role].test?.client_attempts} request từ KAG, không tự retry.</p>}
+                  {models.value?.roles[role].test?.observed_model && <p className="break-words">Model phản hồi: {models.value.roles[role].test?.observed_model}. Proxy/provider có thể thử lại nội bộ theo policy đã duyệt.</p>}
                   {models.value?.roles[role].test?.code && models.value.roles[role].test?.code !== models.value.roles[role].blocker && <p className="break-words">Test {models.value.roles[role].test?.code}: {modelErrors[models.value.roles[role].test!.code!]}</p>}
-                  {role === 'embedding' && <p>Dimensions thực đo: {models.value?.roles[role].test?.dimension ?? 'chưa đo'}. Yêu cầu 3072; cùng số chiều chưa đủ để Apply.</p>}
+                  {role === 'embedding' && <p>Dimensions thực đo: {models.value?.roles[role].test?.dimension ?? 'chưa đo'}. Apply cần khớp identity và số chiều của graph/release.</p>}
                   {models.value?.roles[role].blocker && <p role="status" className="break-words">{models.value.roles[role].blocker}: {modelErrors[models.value.roles[role].blocker!]}</p>}
                   <p>Active serving: revision {models.value?.roles[role].active_revision ?? 'chưa áp dụng'}.</p>
                   {models.value?.roles[role].active && <p className="break-all">{models.value.roles[role].active?.model} · {models.value.roles[role].active?.base_url}</p>}

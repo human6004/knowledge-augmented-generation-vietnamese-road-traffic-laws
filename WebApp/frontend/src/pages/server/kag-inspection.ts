@@ -27,7 +27,7 @@ export type LLMCredentials = {
   build_config: { state: 'NOT_SUPPORTED'; reason: 'BUILDER_REPLAY_ONLY' }
 }
 function llmInput(value: LLMInput) {
-  if (!value || value.provider !== 'openai-compatible' || typeof value.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(value.model) ||
+  if (!value || value.provider !== 'openai-compatible' || typeof value.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}$/.test(value.model) ||
     typeof value.base_url !== 'string' || value.base_url.length > 2048 || /[\s\x00-\x1f\x7f]/.test(value.base_url)) return false
   try {
     const url = new URL(value.base_url)
@@ -58,9 +58,9 @@ function validateLLMCredentials(value: LLMCredentials) {
       test.revision !== row.saved_revision || !['PASS', 'FAIL', 'BLOCKED'].includes(test.status) ||
       test.code !== null && !modelErrorCodes.includes(test.code) || (test.status === 'PASS') !== (test.code === null) ||
       !count(test.client_attempts, 1) || !count(test.output_chars, 262144) || test.dimension !== null && !count(test.dimension, 262144) ||
-      test.observed_model !== null && test.observed_model !== model?.model || typeof test.tested_at !== 'string' ||
+      test.observed_model !== null && (typeof test.observed_model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}$/.test(test.observed_model)) || typeof test.tested_at !== 'string' ||
       !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/.test(test.tested_at) ||
-      test.status === 'PASS' && (test.client_attempts !== 1 || (role === 'embedding' ? test.dimension !== 3072 : test.output_chars < 1)))) invalid()
+      test.status === 'PASS' && (test.client_attempts !== 1 || (role === 'embedding' ? test.dimension === null || test.dimension < 1 || test.dimension > 65536 : test.output_chars < 1)))) invalid()
     if (row.status === 'APPLIED' && (row.active_revision !== row.saved_revision || JSON.stringify(row.active) !== JSON.stringify(model))) invalid()
   }
   if (value.saved ? value.revision < 1 || value.chat === null && value.embedding === null : value.revision !== 0 || value.chat !== null || value.embedding !== null) invalid()
@@ -126,7 +126,7 @@ export async function loadKagConfiguration(signal?: AbortSignal): Promise<KagCon
   for (const role of ['chat', 'embedding'] as const) {
     const model = value.models[role]
     if (!shape(model, ['state', 'model', 'endpoint']) || !['CONFIGURED', 'NOT_CONFIGURED', 'INCOMPLETE', 'INVALID'].includes(model.state) ||
-      !optionalText(model.model, /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/) || !optionalText(model.endpoint, /^https?:\/\/[A-Za-z0-9.\[\]:-]{1,260}$/) ||
+      !optionalText(model.model, /^[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}$/) || !optionalText(model.endpoint, /^https?:\/\/[A-Za-z0-9.\[\]:-]{1,260}$/) ||
       model.state === 'CONFIGURED' && (model.model === null || model.endpoint === null) ||
       model.state === 'NOT_CONFIGURED' && (model.model !== null || model.endpoint !== null)) invalid()
   }

@@ -145,8 +145,11 @@ services:
       KAG_HTTP_CONFIG_APPLY_SECRET_FILE: /run/secrets/config_apply_token
       KAG_HTTP_PROVIDER_TEST_ENABLED: ${KAG_PROVIDER_ENABLED:-0}
       KAG_HTTP_PROVIDER_TEST_GATEWAY_TOKEN_FILE: ${KAG_PROVIDER_ENABLED:+/run/secrets/egress_token}
+      KAG_HTTP_PROVIDER_ALLOWED_HOSTS_FILE: /run/provider-hosts.lst
+      KAG_HTTP_PROVIDER_PROXY_BASE_URL: ${KAG_PROVIDER_PROXY_BASE_URL:-}
       # Enable only for a proxy route with retries, credential rotation and model fallback disabled.
       KAG_HTTP_CHAT_PROXY_TEST_SAFE: ${KAG_CHAT_PROXY_TEST_SAFE:-0}
+      KAG_HTTP_CHAT_PROXY_ALLOW_UPSTREAM_RETRIES: ${KAG_CHAT_PROXY_ALLOW_UPSTREAM_RETRIES:-0}
       KAG_HTTP_CHAT_PROXY_PORT: ${KAG_CHAT_PROXY_PORT:-8317}
       KAG_HTTP_RELEASE_ROOT: ${KAG_RELEASE_ID:+/release}
       KAG_HTTP_RELEASE_ID: ${KAG_RELEASE_ID:-}
@@ -174,6 +177,11 @@ services:
       KAG_DEBUG_DUMP_CONFIG: "0"
     secrets: [query_token, inspect_token, egress_token, credentials_write_token, provider_test_token, config_apply_token]
     volumes:
+      - type: bind
+        source: ${KAG_PROVIDER_HOSTS_FILE:-./docker/kag-ingress/provider-hosts.lst}
+        target: /run/provider-hosts.lst
+        read_only: true
+        bind: {create_host_path: false}
       - type: bind
         source: ${KAG_STATE_DIR:-../luatgt-state}/release
         target: /release
@@ -271,10 +279,18 @@ services:
       net.ipv4.ip_forward: "0"
     environment:
       KAG_PROVIDER_ENABLED: ${KAG_PROVIDER_ENABLED:-0}
+      KAG_PROVIDER_PROXY_BASE_URL: ${KAG_PROVIDER_PROXY_BASE_URL:-}
+      KAG_CHAT_PROXY_TEST_SAFE: ${KAG_CHAT_PROXY_TEST_SAFE:-0}
+      KAG_CHAT_PROXY_ALLOW_UPSTREAM_RETRIES: ${KAG_CHAT_PROXY_ALLOW_UPSTREAM_RETRIES:-0}
       KAG_CHAT_PROXY_HOST: ${KAG_CHAT_PROXY_HOST:-host.docker.internal}
       KAG_CHAT_PROXY_PORT: ${KAG_CHAT_PROXY_PORT:-8317}
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
+      - type: bind
+        source: ${KAG_PROVIDER_HOSTS_FILE:-./docker/kag-ingress/provider-hosts.lst}
+        target: /run/provider-hosts.lst
+        read_only: true
+        bind: {create_host_path: false}
       - type: bind
         source: ./docker/kag-ingress/haproxy.cfg
         target: /usr/local/etc/haproxy/haproxy.cfg

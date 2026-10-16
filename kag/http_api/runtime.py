@@ -71,6 +71,7 @@ class RuntimeSettings(ApiSettings):
     chat_url: str | None = None
     chat_model: str | None = None
     chat_key: str | None = None
+    chat_response_model: str | None = None
     sample_proof_sha256: str | None = None
     broker_url: str | None = None
     broker_token: str | None = None
@@ -211,7 +212,7 @@ def _require_configuration(settings, *, capability='query'):
     query_only = {'webapp_snapshot_id','chat_url','chat_model','chat_key'} if capability=='retrieve' else set()
     for name in RuntimeSettings.__dataclass_fields__:
         if name not in ('secrets','sample_proof_sha256','broker_url','broker_token','query_proof_sha256',
-                        'provider_gateway','provider_gateway_token','attempt_ledger','development_policy') and name not in query_only:
+                         'provider_gateway','provider_gateway_token','attempt_ledger','development_policy','chat_response_model') and name not in query_only:
             value = getattr(settings,name)
             if type(value) is not str or not value.strip() or len(value) > 4096:
                 raise ApiFailure('NOT_READY')
@@ -406,7 +407,7 @@ def _new_llm(settings, runtime):
                 body=response.json();observed_model=body.get('model')
             except (ValueError,AttributeError,IndexError,TypeError):observed_model=None
             accepted=response_model_matches(settings,observed_model)
-            safe_model=observed_model if observed_model in (settings.chat_model,'gemini-3.8-flash-n') else 'UNVERIFIED'
+            safe_model=observed_model if observed_model in (settings.chat_model,settings.chat_response_model,'gemini-3.8-flash-n') else 'UNVERIFIED'
             responses.append({'status':response.status_code,'model_matches_config':observed_model==settings.chat_model,
                 'observed_model':safe_model,'route_version_matches_policy':accepted,
                 'attempts':provider_budget(settings).counts()})
@@ -692,8 +693,10 @@ class RuntimeSupervisor:
                     'VECTOR_IDENTITY_MISMATCH','ACTIVE_CONFIG_INVALID','PROXY_POLICY_UNVERIFIED','BLOCKED'):
                 raise ApiFailure('INVALID_REQUEST')
         secrets = (*self._llm_secrets, *(item['api_key'] for item in configured))
-        if any(secret in item[field] for secret in secrets for item in configured
-               for field in ('model', 'base_url')):
+        if (any(secret in item[field] for secret in secrets for item in configured for field in ('model', 'base_url'))
+                or any(test and test['observed_model'] and secret in test['observed_model']
+                    for secret in secrets for role in ('chat','embedding')
+                    for test in (state['tested'][role],state['active'][role]['test'] if state['active'][role] else None))):
             raise ApiFailure('INVALID_REQUEST')
         return state
 
@@ -709,10 +712,10 @@ class RuntimeSupervisor:
                 or type(value['output_chars']) is not int or not 0 <= value['output_chars'] <= 262144
                 or value['dimension'] is not None and (type(value['dimension']) is not int or not 0 <= value['dimension'] <= 262144)
                 or value['observed_model'] is not None and (type(value['observed_model']) is not str
-                    or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,199}', value['observed_model']))
+                    or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}', value['observed_model']))
                 or type(value['tested_at']) is not str or not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00', value['tested_at'])
                 or value['status'] == 'PASS' and (value['client_attempts'] != 1 or
-                    (value['dimension'] != 3072 if role == 'embedding' else value['output_chars'] < 1))):
+                    (value['dimension'] is None or not 1 <= value['dimension'] <= 65536 if role == 'embedding' else value['output_chars'] < 1))):
             raise ApiFailure('INVALID_REQUEST')
 
     def load_llm_config(self, secrets):
@@ -846,8 +849,13 @@ class RuntimeSupervisor:
         values = {}
         for role, item in active.items():
             if item is not None:
+                # Provider Test measures any model; this serving consumer still requires 3072 dimensions.
+                if role == 'embedding' and item['test']['dimension'] != 3072:
+                    raise RuntimeFailure('RELEASE_MISMATCH')
                 config = item['config']
                 values.update({role+'_url':config['base_url'], role+'_model':config['model'], role+'_key':config['api_key']})
+                if role == 'chat':
+                    values['chat_response_model'] = item['test']['observed_model']
         return replace(settings, **values)
 
     def restore_llm_runtime(self, settings, release, policy=None):
