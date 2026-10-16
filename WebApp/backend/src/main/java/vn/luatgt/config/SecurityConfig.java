@@ -38,6 +38,9 @@ public class SecurityConfig {
     @Bean SecurityFilterChain filter(HttpSecurity http, AccountRepository accounts) throws Exception {
         return http.csrf(c -> c.disable()).sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a.requestMatchers("/api/auth/register", "/api/auth/login", "/actuator/health").permitAll()
+                .requestMatchers("/api/admin/questions/**", "/api/admin/signs/**", "/api/admin/documents/**",
+                    "/api/admin/content/**", "/api/admin/imports/**", "/api/admin/units/**",
+                    "/api/admin/law-relations/**", "/api/admin/penalties/**", "/api/admin/chatlogs/**").hasAnyRole("ADMIN", "POLICE")
                 .requestMatchers("/api/admin/**").hasRole("ADMIN").anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(jwt -> {
                 Account account;
@@ -57,7 +60,7 @@ public class SecurityConfig {
             String normalized = email.trim().toLowerCase(Locale.ROOT);
             var existing = accounts.findByEmail(normalized);
             if (existing.isPresent()) {
-                if (!existing.get().role.equals("ADMIN")) throw new IllegalStateException("Email bootstrap đã thuộc tài khoản USER");
+                if (!existing.get().role.equals("ADMIN")) throw new IllegalStateException("Email bootstrap đã thuộc tài khoản không phải ADMIN");
                 return;
             }
             var admin = new Account(); admin.email=normalized; admin.name="Quản trị viên";

@@ -3,7 +3,6 @@ import UserLayout from './layouts/UserLayout'
 import AdminLayout from './layouts/AdminLayout'
 import ChatPage from './pages/ChatPage'
 import ExamPage from './pages/ExamPage'
-import PenaltySearchPage from './pages/PenaltySearchPage'
 import SignLibraryPage from './pages/SignLibraryPage'
 import ChapterStudyPage from './pages/ChapterStudyPage'
 import AdminDashboard from './pages/AdminDashboard'
@@ -52,7 +51,6 @@ export default function App() {
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route element={<UserLayout />}>
           <Route path="/chat" element={<ChatPage />} />
-          <Route path="/tra-cuu" element={<PenaltySearchPage />} />
           <Route path="/bien-bao" element={<SignLibraryPage />} />
           <Route path="/on-thi" element={<ChapterStudyPage />} />
           <Route path="/tien-do" element={<Navigate to="/on-thi" replace />} />

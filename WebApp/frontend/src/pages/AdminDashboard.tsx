@@ -30,10 +30,10 @@ export default function AdminDashboard() {
       <Notice {...report} retry={report.reload}/><Notice {...data} retry={data.reload}/><Notice error={task.error}/>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-5">
         {stats.map((s) => (
-          <Card key={s.label} className="p-5">
-            <p className="text-xs text-muted mb-2">{s.label}</p>
-            <p className={`text-3xl font-semibold tracking-tight ${s.warn ? 'text-accent-strong' : 'text-navy'}`}>{s.value}</p>
-            <p className="mt-1 text-[11.5px] text-muted">{s.sub}</p>
+          <Card key={s.label} className="grid grid-rows-[auto_1fr_auto] gap-2 p-5">
+            <p className="text-xs leading-5 text-muted">{s.label}</p>
+            <p className={`self-center text-3xl leading-tight font-semibold tracking-tight tabular-nums ${s.warn ? 'text-accent-strong' : 'text-navy'}`}>{s.value}</p>
+            <p className="text-[11.5px] leading-5 text-muted">{s.sub}</p>
           </Card>
         ))}
       </div>
@@ -105,9 +105,9 @@ export default function AdminDashboard() {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-[13px] text-text-secondary">{label}</span>
-      {children}
+    <div className="grid grid-cols-1 gap-1 text-left sm:grid-cols-2 sm:gap-3">
+      <span className="text-[13px] leading-5 text-text-secondary">{label}</span>
+      <div className="min-w-0 break-words leading-5 sm:text-right">{children}</div>
     </div>
   )
 }

@@ -55,7 +55,7 @@ export interface AppUser {
   id: string
   name: string
   email: string
-  role: 'Người học' | 'Biên tập viên' | 'Quản trị viên'
+  role: 'Người học' | 'Biên tập viên' | 'Cảnh sát' | 'Quản trị viên'
   licenseClass: string
   questions: number
   active: boolean

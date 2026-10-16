@@ -16,8 +16,8 @@ public class MediaController {
     @PostMapping("/admin/signs/images-zip") Map<String,Object> zip(@RequestPart MultipartFile file) throws IOException { return service.zip(file); }
     @PostMapping("/admin/questions/images-zip") Map<String,Object> questionsZip(@RequestPart MultipartFile file) throws IOException { return service.zip(file,"questions"); }
     @GetMapping("/content/{id}/media") ResponseEntity<byte[]> download(@PathVariable UUID id,JwtAuthenticationToken auth) {
-        boolean admin=auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
-        var result=service.download(id,admin);
+        boolean canReadDrafts=auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")||a.getAuthority().equals("ROLE_POLICE"));
+        var result=service.download(id,canReadDrafts);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(result.mime())).header("X-Content-Type-Options","nosniff")
             .header("Content-Disposition","attachment; filename=\""+id+(result.mime().equals("application/pdf")?".pdf":".image")+"\"")
             .cacheControl(CacheControl.noStore()).body(result.bytes());

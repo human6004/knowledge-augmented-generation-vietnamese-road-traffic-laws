@@ -65,12 +65,73 @@ class CoreTest {
     }
     JsonNode body(MvcResult result) throws Exception { return json.readTree(result.getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8)); }
     @Test void authCannotEscalateAndLogoutRevokesToken() throws Exception {
-        mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"attacker@test.vn\",\"name\":\"User\",\"password\":\"TEST-only-user-password\",\"role\":\"ADMIN\"}")).andExpect(status().isBadRequest());
+        for(String role:List.of("ADMIN","POLICE")) mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("email","attacker@test.vn","name","User","password","TEST-only-user-password","role",role)))).andExpect(status().isBadRequest());
         String user=register();
         mvc.perform(get("/api/admin/users").header("Authorization","Bearer "+user)).andExpect(status().isForbidden());
         mvc.perform(post("/api/auth/logout").header("Authorization","Bearer "+user)).andExpect(status().isOk());
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/questions")).andExpect(status().isUnauthorized());
+    }
+    @Test void policeManagesContentAndChatWithoutSystemOrAccountAccess() throws Exception {
+        String user=register();
+        var profile=body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn());
+        String id=profile.path("id").asText(), email=profile.path("email").asText();
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"POLICE\"}")).andExpect(status().isOk());
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andExpect(status().isUnauthorized());
+        String police=token(email,"TEST-only-user-password");
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+police)).andExpect(jsonPath("$.role").value("POLICE"));
+        for(String path:List.of("questions","signs","documents","units","law-relations","chatlogs","penalties"))
+            mvc.perform(get("/api/admin/"+path).header("Authorization","Bearer "+police)).andExpect(status().isOk());
+        var question=new Content(); question.kind="questions"; question.externalId="POLICE-"+UUID.randomUUID();
+        question.data=json.writeValueAsString(Map.of("externalId",question.externalId,"text","Câu hỏi kiểm duyệt","chapter",1,"options",List.of("A","B")));
+        question=contents.saveAndFlush(question);
+        mvc.perform(put("/api/admin/content/"+question.id).header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("version",question.version,"data",json.readTree(question.data))))).andExpect(status().isOk());
+        when(storage.get("police-draft-image")).thenReturn(new byte[]{1,2,3});
+        var draft=new Content(); draft.kind="signs"; draft.externalId="DRAFT-"+UUID.randomUUID(); draft.data="{\"imageKey\":\"police-draft-image\",\"imageMime\":\"image/png\"}"; draft=contents.saveAndFlush(draft);
+        mvc.perform(get("/api/content/"+draft.id+"/media").header("Authorization","Bearer "+police)).andExpect(status().isOk()).andExpect(content().bytes(new byte[]{1,2,3}));
+        var message=new ChatMessage(); message.ownerId=UUID.fromString(id); message.question="Kiểm tra nội dung"; message.state="UNAVAILABLE"; message=chats.saveAndFlush(message);
+        mvc.perform(post("/api/admin/chatlogs/"+message.id+"/resolve").header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"Đã kiểm tra\"}")).andExpect(status().isOk());
+        assertTrue(chats.findById(message.id).orElseThrow().resolved);
+        for(String path:List.of("users","infrastructure","kag/status","kag/schema","kag/config","kag/config/models","kag/config/retrieval","kag/builder/status"))
+            mvc.perform(get("/api/admin/"+path).header("Authorization","Bearer "+police)).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"ADMIN\"}")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/admin/kag/builder/build").header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"USER\"}")).andExpect(status().isOk());
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+police)).andExpect(status().isUnauthorized());
+        String demoted=token(email,"TEST-only-user-password");
+        mvc.perform(get("/api/admin/questions").header("Authorization","Bearer "+demoted)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/content/"+draft.id+"/media").header("Authorization","Bearer "+demoted)).andExpect(status().isNotFound());
+    }
+    @Test void roleChangesAreAdminOnlyValidatedAndPreserveAdminProtection() throws Exception {
+        String user=register();
+        String id=body(mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andReturn()).path("id").asText();
+        mvc.perform(patch("/api/admin/users/"+id).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"POLICE\"}")).andExpect(status().isUnauthorized());
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+user).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"POLICE\"}")).andExpect(status().isForbidden());
+        for(String role:List.of("EDITOR","ADMIN","police",""))
+            mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("role",role)))).andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isBadRequest());
+        String adminId=accounts.findByEmail("admin@test.vn").orElseThrow().id.toString();
+        mvc.perform(patch("/api/admin/users/"+adminId).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"POLICE\",\"enabled\":false}")).andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"enabled\":false}")).andExpect(status().isOk());
+        mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+user)).andExpect(status().isUnauthorized());
+    }
+    @Test void roleMigrationPreservesAccountsAndKeepsDatabaseValidation() throws Exception {
+        String url="jdbc:h2:mem:role_upgrade_"+UUID.randomUUID()+";MODE=MySQL";
+        try(var connection=java.sql.DriverManager.getConnection(url,"sa","")) {
+            org.flywaydb.core.Flyway.configure().dataSource(url,"sa","").target("3").load().migrate();
+            try(var insert=connection.prepareStatement("INSERT INTO accounts(id,email,password,name,role,enabled,token_version) VALUES (?,?,'existing-hash','Giữ nguyên',?,FALSE,7)")) {
+                for(int i=0;i<2;i++) { byte[] id=new byte[16]; id[15]=(byte)i; insert.setBytes(1,id); insert.setString(2,i+"@upgrade.test"); insert.setString(3,i==0?"USER":"ADMIN"); insert.executeUpdate(); }
+            }
+            org.flywaydb.core.Flyway.configure().dataSource(url,"sa","").load().migrate();
+            try(var statement=connection.createStatement();var rows=statement.executeQuery("SELECT password,name,role,enabled,token_version FROM accounts ORDER BY email")) {
+                for(String role:List.of("USER","ADMIN")) { assertTrue(rows.next()); assertEquals("existing-hash",rows.getString(1)); assertEquals("Giữ nguyên",rows.getString(2)); assertEquals(role,rows.getString(3)); assertFalse(rows.getBoolean(4)); assertEquals(7,rows.getInt(5)); }
+                assertFalse(rows.next());
+            }
+            try(var statement=connection.createStatement()) {
+                assertEquals(1,statement.executeUpdate("UPDATE accounts SET role='POLICE' WHERE email='0@upgrade.test'"));
+                assertThrows(java.sql.SQLException.class,()->statement.executeUpdate("UPDATE accounts SET role='EDITOR' WHERE email='0@upgrade.test'"));
+            }
+        }
     }
     @Test void kagInspectionIsAdminOnlyAndUsesExistingServiceAdapter() throws Exception {
         String user=register();

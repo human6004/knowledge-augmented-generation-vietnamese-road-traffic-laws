@@ -11,5 +11,5 @@ public class UserController {
     private final UserService service;
     public UserController(UserService service) { this.service=service; }
     @GetMapping List<Map<String,Object>> list() { return service.list(); }
-    @PatchMapping("/{id}") void status(@PathVariable UUID id,@Valid @RequestBody UserStatusRequest input) { service.status(id,input.enabled()); }
+    @PatchMapping("/{id}") void update(@PathVariable UUID id,@Valid @RequestBody UserStatusRequest input) { service.update(id,input.enabled(),input.role()); }
 }

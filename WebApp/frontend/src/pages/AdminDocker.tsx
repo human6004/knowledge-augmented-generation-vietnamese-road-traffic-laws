@@ -72,7 +72,7 @@ export default function AdminDocker() {
       <div className="grid gap-5 xl:grid-cols-[400px_minmax(0,1fr)]">
         <div className="space-y-5">
           <Card title="Định danh image">
-            <div className="grid grid-cols-2 gap-4 px-5 pb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-5 pb-5">
               <Field label="Tiền tố"><input className={inputCls} value={cfg.prefix} onChange={(e) => set('prefix', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} /></Field>
               <Field label="Phiên bản (TAG)"><input className={inputCls} value={cfg.tag} onChange={(e) => set('tag', e.target.value)} /></Field>
               <Field label="Registry riêng" hint="Để trống nếu chỉ chia sẻ bằng tệp"><input className={inputCls} placeholder="ghcr.io/ban/" value={cfg.registry} onChange={(e) => set('registry', e.target.value)} /></Field>
@@ -81,12 +81,12 @@ export default function AdminDocker() {
           </Card>
 
           <Card title="Bảo mật" right={weakPw ? <Badge tone="amber">Mật khẩu yếu</Badge> : <Badge tone="green">OK</Badge>}>
-            <div className="grid grid-cols-2 gap-4 px-5 pb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-5 pb-5">
               <Field label="MySQL root"><input className={inputCls} value={cfg.mysqlPassword} onChange={(e) => set('mysqlPassword', e.target.value)} /></Field>
               <Field label="Neo4j"><input className={inputCls} value={cfg.neo4jPassword} onChange={(e) => set('neo4jPassword', e.target.value)} /></Field>
               <Field label="MinIO user"><input className={inputCls} value={cfg.minioUser} onChange={(e) => set('minioUser', e.target.value)} /></Field>
               <Field label="MinIO password"><input className={inputCls} value={cfg.minioPassword} onChange={(e) => set('minioPassword', e.target.value)} /></Field>
-              <label className="col-span-2 flex items-center gap-2 text-[13px] text-text-secondary">
+              <label className="sm:col-span-2 flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
                 <Toggle checked={cfg.exposeDbPorts} onChange={(v) => set('exposeDbPorts', v)} label="Mở cổng DB" /> Mở cổng DB ra mạng LAN <span className="text-muted">(mặc định chỉ 127.0.0.1)</span>
               </label>
             </div>
@@ -101,7 +101,7 @@ export default function AdminDocker() {
           </Card>
 
           <Card title="Cổng & tài nguyên">
-            <div className="grid grid-cols-3 gap-3 px-5 pb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-3 px-5 pb-5">
               <Field label="OpenSPG"><input type="number" className={inputCls} value={cfg.portServer} onChange={num('portServer')} /></Field>
               <Field label="Neo4j HTTP"><input type="number" className={inputCls} value={cfg.portNeo4jHttp} onChange={num('portNeo4jHttp')} /></Field>
               <Field label="Neo4j Bolt"><input type="number" className={inputCls} value={cfg.portNeo4jBolt} onChange={num('portNeo4jBolt')} /></Field>

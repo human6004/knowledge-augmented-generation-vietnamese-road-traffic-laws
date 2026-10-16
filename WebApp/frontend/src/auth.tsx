@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { Navigate, Outlet } from 'react-router-dom'
-import { homeFor, type Role, type Session } from './auth-policy'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { canAccessAdminPage, homeFor, roleFor, type Role, type ServerRole, type Session } from './auth-policy'
 import { api, send, tokenKey } from './api'
-type User = { email: string; name: string; role: 'ADMIN' | 'USER' }
-const profile = (u: User): Session => ({ email: u.email, name: u.name, role: u.role === 'ADMIN' ? 'admin' : 'user' })
+type User = { email: string; name: string; role: ServerRole }
+const profile = (u: User): Session => ({ email: u.email, name: u.name, role: roleFor(u.role) })
 const Context = createContext<{ session: Session | null; ready: boolean; login: (email: string, password: string) => Promise<void>; register: (name: string, email: string, password: string) => Promise<void>; logout: () => Promise<void> } | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null), [ready, setReady] = useState(false)
@@ -14,14 +14,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const expire = () => { sessionStorage.removeItem('luatgt-active-exam'); setSession(null) }; window.addEventListener('luatgt-session-expired', expire)
     return () => { mounted = false; window.removeEventListener('luatgt-session-expired', expire) }
   }, [])
-  async function authenticate(path: string, body: unknown) { const r = await api<{ accessToken: string; user: User }>(path, send('POST', body)); sessionStorage.removeItem('luatgt-active-exam'); sessionStorage.setItem(tokenKey, r.accessToken); setSession(profile(r.user)) }
+  async function authenticate(path: string, body: unknown) { const r = await api<{ accessToken: string; user: User }>(path, send('POST', body)); const next=profile(r.user); sessionStorage.removeItem('luatgt-active-exam'); sessionStorage.setItem(tokenKey, r.accessToken); setSession(next) }
   const login = (email: string, password: string) => authenticate('/auth/login', { email, password })
   const register = (name: string, email: string, password: string) => authenticate('/auth/register', { name, email, password })
   async function logout() { await api('/auth/logout', send('POST')); sessionStorage.removeItem(tokenKey); sessionStorage.removeItem('luatgt-active-exam'); setSession(null) }
   return <Context.Provider value={{ session, ready, login, register, logout }}>{children}</Context.Provider>
 }
 export function useAuth() { const auth = useContext(Context); if (!auth) throw new Error('AuthProvider required'); return auth }
-export function RequireRole({ role }: { role: Role }) { const { session, ready } = useAuth(); if (!ready) return <p className="p-8" role="status">Đang kiểm tra phiên đăng nhập…</p>; if (!session) return <Navigate to="/login" replace />; return session.role === role ? <Outlet /> : <Navigate to={homeFor(session.role)} replace /> }
+export function RequireRole({ roles }: { roles: Role[] }) {
+  const { session, ready } = useAuth(), { pathname } = useLocation()
+  if (!ready) return <p className="p-8" role="status">Đang kiểm tra phiên đăng nhập…</p>
+  if (!session) return <Navigate to="/login" replace />
+  const allowed = roles.includes(session.role) && (!pathname.startsWith('/admin') || canAccessAdminPage(session.role, pathname))
+  return allowed ? <Outlet /> : <Navigate to={homeFor(session.role)} replace />
+}
 export function SessionHome() { const { session, ready } = useAuth(); return ready ? <Navigate to={session ? homeFor(session.role) : '/login'} replace /> : <p className="p-8">Đang tải…</p> }
 export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
   const { session, logout } = useAuth(); const [error, setError] = useState(''), [busy, setBusy] = useState(false)

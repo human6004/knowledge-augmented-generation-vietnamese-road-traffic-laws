@@ -47,10 +47,10 @@ export default function AdminChatLogs() {
   return (
     <Page title="Nhật ký chat" subtitle="Theo dõi câu hỏi, đánh giá phản hồi và chuyển câu chưa trả lời được sang bổ sung tri thức." actions={<Button onClick={exportCsv}>Xuất CSV</Button>}>
       <Notice {...data} retry={data.reload}/><Notice error={task.error}/>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            <div className="flex rounded-xl border border-line bg-surface p-0.5">
+            <div className="flex max-w-full flex-wrap rounded-xl border border-line bg-surface p-0.5">
               {([['all', 'Tất cả'], ['issue', 'Cần xử lý'], ['down', 'Đánh giá 👎']] as const).map(([k, l]) => (
                 <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${tab === k ? 'bg-selected text-navy' : 'text-muted hover:text-navy'}`}>
                   {l}
@@ -65,11 +65,11 @@ export default function AdminChatLogs() {
               {shown.map((l) => (
                 <li key={l.id}>
                   <button onClick={() => setSel(l.id)} className={`w-full text-left px-5 py-3.5 transition-colors ${l.id === sel ? 'bg-selected/60' : 'hover:bg-bg'}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="text-[13.5px] font-medium text-navy">{l.question}</p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <p className="min-w-0 flex-1 basis-48 break-words text-[13.5px] leading-6 font-medium text-navy">{l.question}</p>
                       <Badge tone={l.resolved && l.status !== 'Đã trả lời' ? 'green' : statusTone[l.status as ChatLog['status']]||'gray'}>{l.resolved && l.status !== 'Đã trả lời' ? 'Đã xử lý' : l.status}</Badge>
                     </div>
-                    <p className="mt-1 text-[12px] text-muted">
+                    <p className="mt-1 break-words text-[12px] leading-5 text-muted">
                       @{l.user} · {l.time} · {l.latency??'Chưa đo'} {l.feedback === 'up' ? '· 👍' : l.feedback === 'down' ? '· 👎' : ''}
                     </p>
                   </button>
@@ -80,7 +80,7 @@ export default function AdminChatLogs() {
           </Card>
         </div>
 
-        <Card title="Chi tiết hội thoại" className="self-start lg:sticky lg:top-6">
+        <Card title="Chi tiết hội thoại" className="self-start xl:sticky xl:top-6">
           {cur ? (
             <div className="px-5 pb-5 space-y-4">
               <div className="flex justify-end">

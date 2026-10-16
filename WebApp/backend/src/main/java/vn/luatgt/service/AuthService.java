@@ -53,5 +53,5 @@ public class AuthService {
     }
     public Map<String,Object> me(JwtAuthenticationToken auth) { return profile(accounts.findById(user(auth)).orElseThrow()); }
     @Transactional
-    public void logout(JwtAuthenticationToken auth) { var a=accounts.findById(user(auth)).orElseThrow(); a.tokenVersion++; accounts.save(a); }
+    public void logout(JwtAuthenticationToken auth) { var a=accounts.findForUpdate(user(auth)).orElseThrow(); a.tokenVersion++; accounts.save(a); }
 }

@@ -17,6 +17,8 @@ Một số phần giao diện còn ghi **Demo**, chỉ mô phỏng. Xem phạm v
 
 Docker chạy **một project `luatgt`, 12 services, một `.env` chung**. Không cần cài Python/Java/Node trên máy người dùng.
 
+Chưa cần KAG: xem [lifecycle WebApp riêng và FE dev với BE Docker](WebApp/README.MD#webapp-khi-chưa-chạy-kag).
+
 **Cài mới không tự nạp nội dung, graph hoặc cấu hình mô hình.** Tra cứu/ôn thi cần dữ liệu đã duyệt; chatbot cần graph/vector, provider và bộ nguồn khớp nhau. Container `healthy` chưa chứng minh chatbot trả lời được. Builder mặc định bị chặn; chưa mở ghi graph production.
 
 ## Công nghệ

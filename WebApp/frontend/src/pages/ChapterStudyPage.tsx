@@ -157,9 +157,9 @@ export default function ChapterStudyPage() {
       </div>
 
       {/* Main 2-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
         {/* Left Column: Chapters List (Col span 7 or 8) */}
-        <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+        <div className="min-w-0 xl:col-span-8 space-y-4">
           {/* Filter Pills */}
           <div className="flex items-center justify-between bg-surface p-3.5 rounded-2xl border border-line">
             <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
@@ -312,7 +312,7 @@ export default function ChapterStudyPage() {
         </div>
 
         {/* Right Column: Tiến độ của tôi (Sticky sidebar layout) */}
-        <div className="lg:col-span-5 xl:col-span-4 sticky top-6 space-y-6">
+        <div className="min-w-0 xl:col-span-4 xl:sticky xl:top-6 space-y-6">
           <div className="bg-surface rounded-2xl border border-line shadow-xs p-6 space-y-6">
             {/* Widget Title */}
             <div className="flex items-center justify-between border-b border-selected pb-4">
@@ -441,8 +441,8 @@ export default function ChapterStudyPage() {
       {activePracticeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/40 backdrop-blur-xs">
           <div className="bg-bg w-full max-w-xl rounded-2xl border border-line shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-surface">
-              <div>
+            <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-line bg-surface">
+              <div className="min-w-0 break-words">
                 <span className="text-[11px] font-mono font-bold text-accent-strong">
                   Chương {activePracticeModal.id} • Hạng B
                 </span>
@@ -452,7 +452,7 @@ export default function ChapterStudyPage() {
               </div>
               <button
                 onClick={() => setActivePracticeModal(null)}
-                className="p-1 rounded-lg text-muted hover:bg-selected hover:text-navy"
+                className="shrink-0 p-1 rounded-lg text-muted hover:bg-selected hover:text-navy"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
               </button>
@@ -471,7 +471,7 @@ export default function ChapterStudyPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between px-6 py-3.5 bg-sidebar border-t border-line">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3.5 bg-sidebar border-t border-line">
               <Link
                 to="/chat"
                 state={{ initialQuery: `Giải thích chi tiết các quy tắc giao thông trong ${activePracticeModal.title}` }}

@@ -15,11 +15,7 @@ Kết quả: dependencies đúng lockfile.
 
 **Bước 2 — Dev server:**
 
-```powershell
-pnpm dev --port 5174
-```
-
-UI ở `http://localhost:5174`, proxy `/api` tới `127.0.0.1:8080`; cần backend đã chạy.
+Lệnh `npm run dev`, backend Docker, cổng/proxy và cách dừng/chạy lại được hướng dẫn tại [lifecycle WebApp riêng](../README.MD#webapp-khi-chưa-chạy-kag).
 
 **Bước 3 — Kiểm thay đổi:** chọn kiểm tra phù hợp, trong cùng thư mục:
 

@@ -138,7 +138,7 @@ export default function AdminConfig() {
   return (
     <Page title="Cấu hình" subtitle="Cấu hình đã nạp và giới hạn của phiên bản KAG đang triển khai."
       actions={<Button disabled={config.loading || schema.loading || builder.loading || retrieval.loading || models.loading || modelsSaving || modelRunning || copying || changing} onClick={reload}>Tải lại</Button>}>
-      <div className="grid gap-5 lg:grid-cols-2 items-start">
+      <div className="grid gap-5 xl:grid-cols-2 items-start">
         <Card title="Dự án & Schema">
           <div className="px-5 pb-5 text-sm space-y-3">
             <Notice {...schema} />

@@ -182,14 +182,14 @@ export default function ExamPage() {
   return (
     <div className="h-full overflow-y-auto bg-bg">
       <div className="px-6"><Notice error={task.error}/><p className="text-xs text-muted py-2">{live?"Bài thi thật · đáp án lưu trên server":"Demo · dữ liệu mẫu; không lưu kết quả server"}</p></div>
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-6">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:gap-6">
         <div className="min-w-0">
           <header className="flex flex-wrap items-end justify-between gap-3 mb-5">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent-strong">Thi thử hạng {cfg.label} · {label}</p>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight text-navy">Câu {current + 1}<span className="text-muted font-normal"> / {questions.length}</span></h1>
             </div>
-            <div className={`lg:hidden rounded-xl border px-3 py-1.5 font-mono text-lg font-semibold tabular-nums ${urgent ? 'border-red-300 bg-red-50 text-red-700 animate-pulse' : 'border-line bg-surface text-navy'}`}>{mm}:{ss}</div>
+            <div className={`xl:hidden rounded-xl border px-3 py-1.5 font-mono text-lg font-semibold tabular-nums ${urgent ? 'border-red-300 bg-red-50 text-red-700 animate-pulse' : 'border-line bg-surface text-navy'}`}>{mm}:{ss}</div>
           </header>
 
           <article className="rounded-2xl border border-line bg-surface p-5 sm:p-7 shadow-[0_1px_0_rgba(53,45,36,0.04)]">
@@ -213,14 +213,14 @@ export default function ExamPage() {
                     className={`group w-full flex items-center gap-4 rounded-xl border px-4 py-3.5 text-left transition-all ${sel ? 'border-navy bg-navy text-bg' : 'border-line bg-bg hover:border-accent hover:bg-selected/50 text-navy'}`}
                   >
                     <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg font-mono text-[13px] font-semibold ${sel ? 'bg-accent text-navy' : 'bg-surface border border-line text-muted group-hover:text-navy'}`}>{i + 1}</span>
-                    <span className="text-[15px]">{o}</span>
+                    <span className="min-w-0 break-words text-[15px] leading-6">{o}</span>
                   </button>
                 )
               })}
             </div>
           </article>
 
-          <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <Button variant="ghost" disabled={current === 0} onClick={() => setCurrent((c) => c - 1)}>← Câu trước</Button>
             <span className="hidden sm:block text-[11.5px] text-muted">Phím <kbd className="font-mono">1–4</kbd> chọn · <kbd className="font-mono">←/→</kbd> chuyển · <kbd className="font-mono">F</kbd> đánh dấu</span>
             {current < questions.length - 1
@@ -229,8 +229,8 @@ export default function ExamPage() {
           </div>
         </div>
 
-        <aside className="mt-6 lg:mt-0 lg:sticky lg:top-6 self-start space-y-4">
-          <div className={`hidden lg:block rounded-2xl border p-5 text-center ${urgent ? 'border-red-300 bg-red-50' : 'border-line bg-surface'}`}>
+        <aside className="mt-6 xl:mt-0 xl:sticky xl:top-6 self-start space-y-4">
+          <div className={`hidden xl:block rounded-2xl border p-5 text-center ${urgent ? 'border-red-300 bg-red-50' : 'border-line bg-surface'}`}>
             <p className="text-[11px] uppercase tracking-[0.14em] text-muted">Thời gian còn lại</p>
             <p className={`mt-1 font-mono text-4xl font-semibold tabular-nums ${urgent ? 'text-red-700 animate-pulse' : 'text-navy'}`}>{mm}:{ss}</p>
             <div className="mt-3 h-1 rounded-full bg-line overflow-hidden"><div className={`h-full ${urgent ? 'bg-red-500' : 'bg-accent'}`} style={{ width: `${(left / (cfg.minutes * 60)) * 100}%` }} /></div>
@@ -240,7 +240,7 @@ export default function ExamPage() {
               <span className="font-semibold text-navy">Bảng câu hỏi</span>
               <span className="text-muted">{answered}/{questions.length} đã làm</span>
             </div>
-            <div className="grid grid-cols-8 sm:grid-cols-10 lg:grid-cols-6 gap-1.5">
+            <div className="grid grid-cols-8 sm:grid-cols-10 xl:grid-cols-6 gap-1.5">
               {questions.map((x, i) => {
                 const done = answers[x.id] !== undefined
                 return (
@@ -407,7 +407,7 @@ function Result({ cls, label, questions, answers, flags, result, retry, reviewWr
           <h2 className="text-[14px] font-semibold text-navy mb-4">Theo chương</h2>
           <div className="space-y-2.5">
             {byChapter.map((x) => (
-              <div key={x.c} className="grid grid-cols-[140px_1fr_48px] sm:grid-cols-[200px_1fr_48px] items-center gap-3 text-[13px]" title={`${x.c}: ${x.right}/${x.total}`}>
+              <div key={x.c} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_48px] sm:grid-cols-[200px_minmax(0,1fr)_48px] items-center gap-3 text-[13px]" title={`${x.c}: ${x.right}/${x.total}`}>
                 <span className="truncate text-text-secondary">{x.c}</span>
                 <div className="h-2 rounded-full bg-line overflow-hidden"><div className="h-full rounded-full bg-accent-strong" style={{ width: `${(x.right / x.total) * 100}%` }} /></div>
                 <span className="text-right tabular-nums text-navy">{x.right}/{x.total}</span>

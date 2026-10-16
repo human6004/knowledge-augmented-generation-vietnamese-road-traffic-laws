@@ -35,7 +35,7 @@ export default function AdminPipeline() {
         </div>
         <p className="mt-2 text-muted">Production WRITE bị chặn. Trạng thái Builder và quyền thao tác hiển thị riêng bên dưới.</p>
       </section>
-      <div className="grid gap-5 lg:grid-cols-2 items-start">
+      <div className="grid gap-5 xl:grid-cols-2 items-start">
       <Card title="Nguồn & chuẩn bị dữ liệu">
         <div className="px-5 pb-5 text-sm space-y-3">
           <p>Nhập danh mục, bổ sung metadata và tệp nguồn; kiểm duyệt trước khi xuất bản trên WebApp.</p>

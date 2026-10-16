@@ -83,9 +83,9 @@ public class MediaService {
         if(count==0) throw ApiErrors.bad("ZIP trống hoặc không hợp lệ");
         assets.forEach(this::attach); contents.flush(); return Map.of("matched",matched,"unmatched",unmatched);
     }
-    public Download download(UUID id,boolean admin) {
+    public Download download(UUID id,boolean canReadDrafts) {
         var c=contents.findById(id).orElseThrow(ApiErrors::missing); var n=data.read(c);
-        if(!admin&&(!c.published||!data.isEffective(c))) throw ApiErrors.missing();
+        if(!canReadDrafts&&(!c.published||!data.isEffective(c))) throw ApiErrors.missing();
         String key=c.kind.equals("documents")?"fileKey":"imageKey", mime=c.kind.equals("documents")?"fileMime":"imageMime";
         if(!n.hasNonNull(key)) throw ApiErrors.missing();
         return new Download(storage.get(n.path(key).asText()),n.path(mime).asText("application/octet-stream"));

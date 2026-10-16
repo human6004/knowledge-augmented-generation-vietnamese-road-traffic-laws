@@ -4,13 +4,14 @@ import { useState } from 'react'
 import { useAdmin, type AppUser } from '../admin/store'
 import { Badge, Button, Card, Field, Modal, Page, Td, Th, Toggle, inputCls } from '../admin/ui'
 
-const roles: AppUser['role'][] = ['Người học', 'Biên tập viên', 'Quản trị viên']
+const roles: AppUser['role'][] = ['Người học', 'Cảnh sát', 'Quản trị viên']
+const serverRoles: Record<string, string> = { 'Người học': 'USER', 'Cảnh sát': 'POLICE' }
 
 export default function AdminUsers() {
   const {notify}=useAdmin(), task=useTask()
   const data=useData<{id:string;name:string;email:string;role:string;enabled:boolean}[]>('/admin/users')
-  const [demoUsers,setUsers]=useState<AppUser[]>([]),[demoRoles,setDemoRoles]=useState<Record<string,AppUser['role']>>({})
-  const users=(data.value||[]).map(r=>({id:r.id,name:r.name,email:r.email,role:r.role==='ADMIN'?'Quản trị viên' as const:'Người học' as const,active:r.enabled,licenseClass:'—',questions:null,joined:'—',demo:false})).concat([])
+  const [demoUsers,setUsers]=useState<AppUser[]>([])
+  const users=(data.value||[]).map(r=>({id:r.id,name:r.name,email:r.email,role:(r.role==='ADMIN'?'Quản trị viên':r.role==='POLICE'?'Cảnh sát':'Người học') as AppUser['role'],active:r.enabled,licenseClass:'—',questions:null,joined:'—',demo:false})).concat([])
   const shownUsers=[...users,...demoUsers.map(u=>({...u,demo:true,questions:u.questions as number|null}))]
 
   const [q, setQ] = useState('')
@@ -20,8 +21,8 @@ export default function AdminUsers() {
   const shown = shownUsers.filter((u) => (role === 'all' || u.role === role) && (u.name + u.email).toLowerCase().includes(q.toLowerCase()))
   const patch=(id:string,p:Partial<AppUser>)=>{
     if(demoUsers.some(u=>u.id===id)){setUsers(us=>us.map(u=>u.id===id?{...u,...p}:u));notify('Demo: đã cập nhật tài khoản mô phỏng');return}
-    if(p.role){setDemoRoles(rs=>({...rs,[id]:p.role!}));notify('Demo: đổi vai trò chưa có API; quyền thật giữ nguyên');return}
-    if(p.active!==undefined)void task.run(async()=>{await api(`/admin/users/${id}`,send('PATCH',{enabled:p.active}));data.reload();notify('Đã lưu trạng thái tài khoản')})
+    if(p.role==='Quản trị viên')return
+    if(p.role||p.active!==undefined)void task.run(async()=>{await api(`/admin/users/${id}`,send('PATCH',{...(p.active!==undefined?{enabled:p.active}:{}),...(p.role?{role:serverRoles[p.role]}:{})}));data.reload();notify(p.role?'Đã cập nhật vai trò tài khoản':'Đã lưu trạng thái tài khoản')})
   }
 
 
@@ -31,7 +32,7 @@ export default function AdminUsers() {
       subtitle={`${users.length} tài khoản · ${users.filter((u) => u.active).length} đang hoạt động`}
       actions={<Button variant="primary" onClick={() => setInviteOpen(true)}>+ Mời người dùng · Demo</Button>}
     >
-      <Notice {...data} retry={data.reload}/><Notice error={task.error}/><p className="mb-5 text-xs text-muted">Danh sách và khóa USER dùng API thật. Mời, đổi vai trò, đặt lại mật khẩu và xóa chưa có API: Demo. Hạng ôn, lượt hỏi, ngày tham gia chưa được API cung cấp.</p>
+      <Notice {...data} retry={data.reload}/><Notice error={task.error}/><p className="mb-5 text-xs text-muted">Danh sách, vai trò và trạng thái tài khoản dùng API thật. Mời, đặt lại mật khẩu và xóa chưa có API. Hạng ôn, lượt hỏi, ngày tham gia chưa được API cung cấp.</p>
       <div className="grid gap-3 sm:grid-cols-3 mb-5">
         {roles.map((r) => (
           <Card key={r} className="px-5 py-4">
@@ -67,9 +68,9 @@ export default function AdminUsers() {
                   </div>
                 </Td>
                 <Td>
-                  <select className="rounded-lg border border-line bg-transparent px-2 py-1 text-[12.5px] text-navy" value={demoRoles[u.id]??u.role} onChange={(e) => patch(u.id, { role: e.target.value as AppUser['role'] })} aria-label="Vai trò">
+                  <select className="rounded-lg border border-line bg-transparent px-2 py-1 text-[12.5px] text-navy" value={u.role} disabled={task.busy||(!u.demo&&u.role==='Quản trị viên')} onChange={(e) => patch(u.id, { role: e.target.value as AppUser['role'] })} aria-label="Vai trò">
                     {roles.map((r) => <option key={r}>{r}</option>)}
-                  </select><p className="mt-1 text-[11px] text-muted">{u.demo?'Demo':`Quyền thật: ${u.role} · chọn vai trò chỉ Demo`}</p>
+                  </select><p className="mt-1 text-[11px] text-muted">{u.demo?'Demo':`Quyền thật: ${u.role}`}</p>
                 </Td>
                 <Td><Badge tone="gold">{u.licenseClass}</Badge></Td>
                 <Td className="text-text-secondary">{u.questions??'—'}</Td>

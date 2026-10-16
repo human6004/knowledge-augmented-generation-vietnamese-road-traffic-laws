@@ -89,10 +89,12 @@ export function Asset({
   id,
   alt,
   path,
+  className = "max-h-96 max-w-full object-contain my-4",
 }: {
   id: string
   alt: string
   path?: string
+  className?: string
 }) {
   const [url, setUrl] = useState(""),
     [error, setError] = useState("")
@@ -121,7 +123,7 @@ export function Asset({
         <img
           src={url}
           alt={alt}
-          className="max-h-96 max-w-full object-contain my-4"
+          className={className}
         />
       )}
       {error && (

@@ -266,7 +266,7 @@ export default function SignLibraryPage() {
       </div>
 
       {/* Grid of Signs */}
-      <div className="mb-4 flex items-center justify-between px-1">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 px-1">
         <span className="text-sm font-medium text-navy">
           Hiển thị <span className="font-mono text-accent-strong font-semibold">{data.value?filteredSigns.length:'—'}</span> biển báo
         </span>
@@ -279,21 +279,21 @@ export default function SignLibraryPage() {
           <p className="text-sm text-muted mt-1">Vui lòng thử tìm kiếm với từ khóa khác.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
           {filteredSigns.map((sign) => (
             <div
               key={sign.id}
               onClick={() => setSelectedSign(sign)}
-              className="bg-surface rounded-2xl border border-line hover:border-accent p-5 cursor-pointer shadow-2xs hover:shadow-md transition-all group flex flex-col justify-between"
+              className="min-w-0 break-words bg-surface rounded-2xl border border-line hover:border-accent p-5 cursor-pointer shadow-2xs hover:shadow-md transition-all group flex flex-col justify-between"
             >
               <div>
                 {/* Visual Graphic Canvas */}
                 <div className="w-24 h-24 mx-auto mb-4 p-2 bg-bg rounded-xl border border-selected flex items-center justify-center group-hover:scale-105 transition-transform">
-                  {sign.imageKey ? <Asset id={sign.id} alt={sign.name} /> : <p className="text-xs text-muted">Chưa có ảnh nguồn</p>}
+                  {sign.imageKey ? <Asset id={sign.id} alt={sign.name} className="h-full w-full object-contain" /> : <p className="text-center text-xs text-muted">Chưa có ảnh nguồn</p>}
                 </div>
 
                 {/* Badge & Code */}
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-navy text-white">
                     {sign.code}
                   </span>
@@ -314,7 +314,7 @@ export default function SignLibraryPage() {
               </div>
 
               {/* Action Hint */}
-              <div className="mt-4 pt-3 border-t border-selected flex items-center justify-between text-[11px] text-muted">
+              <div className="mt-4 pt-3 border-t border-selected flex flex-wrap items-center justify-between gap-2 text-[11px] leading-5 text-muted">
                 <span>Liên kết xử phạt: chưa có API</span>
                 <span className="text-accent-strong font-semibold group-hover:translate-x-0.5 transition-transform inline-flex items-center gap-0.5">
                   Xem chi tiết &rarr;
@@ -330,13 +330,13 @@ export default function SignLibraryPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/40 backdrop-blur-xs">
           <div className="bg-bg w-full max-w-2xl rounded-2xl border border-line shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-line bg-surface">
-              <div className="flex items-center gap-3">
+            <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-line bg-surface">
+              <div className="min-w-0 flex flex-wrap items-center gap-3">
                 <span className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-navy text-white">
                   {selectedSign.code}
                 </span>
-                <div>
-                  <h3 className="font-sans text-lg font-semibold text-navy">
+                <div className="min-w-0">
+                  <h3 className="break-words font-sans text-lg font-semibold text-navy">
                     {selectedSign.name}
                   </h3>
                   <p className="text-[11px] text-muted">{selectedSign.categoryLabel} · dữ liệu backend</p>
@@ -344,7 +344,7 @@ export default function SignLibraryPage() {
               </div>
               <button
                 onClick={() => setSelectedSign(null)}
-                className="p-1 rounded-lg text-muted hover:bg-selected hover:text-navy transition-colors"
+                className="shrink-0 p-1 rounded-lg text-muted hover:bg-selected hover:text-navy transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
               </button>
@@ -355,7 +355,7 @@ export default function SignLibraryPage() {
               {/* Graphic + Ý nghĩa */}
               <div className="flex flex-col sm:flex-row gap-5 items-start bg-surface p-4 rounded-xl border border-line">
                 <div className="w-28 h-28 shrink-0 mx-auto sm:mx-0 p-3 bg-bg rounded-xl border border-selected flex items-center justify-center">
-                  {selectedSign.imageKey ? <Asset id={selectedSign.id} alt={selectedSign.name} /> : <p className="text-xs text-muted">Chưa có ảnh nguồn</p>}
+                  {selectedSign.imageKey ? <Asset id={selectedSign.id} alt={selectedSign.name} className="h-full w-full object-contain" /> : <p className="text-center text-xs text-muted">Chưa có ảnh nguồn</p>}
                 </div>
                 <div className="space-y-2">
                   <h4 className="text-xs uppercase tracking-wider font-semibold text-muted">
@@ -380,7 +380,7 @@ export default function SignLibraryPage() {
 
               {/* Lỗi vi phạm liên quan & Mức phạt */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-xs uppercase tracking-wider font-semibold text-navy flex items-center gap-1.5">
                     <svg className="w-4 h-4 text-accent-strong" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                     Lỗi vi phạm liên quan & Mức phạt (NĐ 168/2024)
@@ -422,7 +422,7 @@ export default function SignLibraryPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="flex items-center justify-between px-6 py-3.5 bg-sidebar border-t border-line">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3.5 bg-sidebar border-t border-line">
               <Link
                 to="/chat"
                 state={{ initialQuery: `Giải thích chi tiết quy chuẩn và tình huống thực tế của biển báo ${selectedSign.code} (${selectedSign.name})` }}
