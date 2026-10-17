@@ -8,13 +8,17 @@ Spring Boot kiểm ADMIN, gửi control token riêng tới `openspg-server:8010`
 
 Phần **Dựng đồ thị & vector · Builder thật** có status/tiến độ/mã lỗi. Build/Stop/Resume chỉ mở khi backend cho phép. Stop đợi batch/readback/checkpoint; Resume cùng run ID sau stop sạch. Delete vô hiệu hóa; chưa có stream log/lịch sử job đầy đủ. Catalog Demo không chạy Runner.
 
-**Mặc định Builder BLOCKED; production WRITE bị chặn.** Worker chỉ xét `FRESH_SAMPLE/WRITE/replay-existing` với grant và backend biệt lập. Serving Compose không đáp ứng admission thử ghi; không thêm grant hoặc đổi identity để né bảo vệ.
+**Mặc định Builder BLOCKED.** Worker nhận `FRESH_SAMPLE/WRITE/replay-existing` với grant biệt lập, hoặc `PRODUCTION/WRITE` với confirmation gắn project/namespace/ID/plan đã pin. Runner vẫn kiểm nguồn, vector, identity và GraphLock trước ghi; trạng thái quyền đã cấu hình không chứng minh ghi thành công.
+
+Trong **Đầu vào & điều kiện Build**, **Kiểm tra nguồn** xác thực C3 manifest, checksum, schema, ID và quan hệ; trả số node/cạnh và hash kế hoạch. Kết quả bị hủy khi nguồn hoặc cấu hình đổi. Kiểm nguồn không gọi provider/graph, không xác minh target và không bật Build. **Tải lại đầu vào** đọc trạng thái kiểm hiện tại; preflight target/vector chỉ do Runner thực hiện. API kiểm nguồn chỉ nhận ADMIN, không nhận file, đường dẫn hoặc quyền từ trình duyệt.
+
+Snapshot đầu vào chỉ kiểm file có mặt, không hash vector lớn trong request HTTP; `NOT_CHECKED` nghĩa là chưa kiểm checksum. Kiểm nguồn chạy nền và chỉ xác thực nguồn C3, còn vector được Runner kiểm trước Build. Cache giao diện theo cấu hình và metadata inode/kích thước/mtime/ctime; sau phục hồi bảo toàn metadata, bấm **Kiểm tra nguồn** lại. Runner luôn kiểm checksum thật trước dispatch, không dùng cache giao diện làm quyền ghi.
 
 ## Config
 
 Copy [runner.example.json](../kag/config/runner.example.json) ra ngoài repo; template mặc định DENY, cần inputs/hashes/target thật. [runner.py](../kag/runner.py) là nguồn chuẩn validator, từ chối unknown fields.
 
-- `scope`: `C4_3A_MANIFEST_SAMPLE` chỉ NO_OP/replay trên manifest đã pin; `FRESH_SAMPLE` chỉ subset 1–128 nodes, 1–256 edges, batch ≤32, replay; `PRODUCTION` không được WRITE. Không dùng SAMPLE cho full graph.
+- `scope`: `C4_3A_MANIFEST_SAMPLE` chỉ NO_OP/replay trên manifest đã pin; `FRESH_SAMPLE` chỉ subset 1–128 nodes, 1–256 edges, batch ≤32, replay. `PRODUCTION` dùng toàn corpus đã pin; WRITE cần confirmation gắn đúng project/namespace/ID/plan, backend identity và GraphLock. Không dùng SAMPLE cho full graph.
 - `runtime_location`, `endpoints`, `database`, project/name/namespace: explicit và khớp discovery; không fallback endpoint hoặc dùng ID/container cũ. Container dùng OpenSPG loopback và DNS Neo4j theo deployment. Điều kiện thử biệt lập: [backend identity](backend-identity.md#xác-minh-đường-đi-và-database).
 - `write_mode`: NO_OP/WRITE; `vector_policy`: replay/provider trong giới hạn scope. `model_identity=endpoint|model`, dimension 3072; replay không fallback provider. Provider config/fallback phải khớp provenance.
 - `paths`: inputs và run/lock roots tuyệt đối; roots ngoài repo, không chồng inputs. `input_sha256` bind đúng bytes từng non-null input, không gồm roots. C3 JSONL/`plan.sha256` nằm cạnh manifest.

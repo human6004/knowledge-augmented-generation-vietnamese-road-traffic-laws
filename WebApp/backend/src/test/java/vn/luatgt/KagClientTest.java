@@ -98,6 +98,35 @@ class KagClientTest {
         }
     }
     KagClient client(Fixture f) { return client(f,Map.of(),null); }
+    @Test void fullBuilderSourceProofDoesNotBecomeTargetPreflight() throws Exception {
+        try(var f=new Fixture()) {
+            var builderSecret=temporary.resolve("builder.key");Files.writeString(builderSecret,"b".repeat(43));
+            var response=json.readTree("""
+                {"contract_version":"builder-inputs-v1","configuration":"CONFIGURED","error_code":null,
+                 "scope":"PRODUCTION","target":{"project_id":37,"database":"traffic-full","namespace":"VietRoadTraffic"},
+                 "inputs":[{"name":"c3_manifest","sha256":"%s","state":"NOT_CHECKED"}],"preflight":"NOT_RUN",
+                 "source_validation":{"state":"VALID","error_code":null,"plan_sha256":"%s","nodes":3,"edges":1}}
+                """.formatted("a".repeat(64),"f".repeat(64)));
+            var method=new AtomicReference<String>();var payload=new AtomicReference<String>();
+            f.server.createContext("/v1/builder/inputs",exchange->{
+                method.set(exchange.getRequestMethod());payload.set(new String(exchange.getRequestBody().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
+                assertEquals("Bearer "+"b".repeat(43),exchange.getRequestHeaders().getFirst("Authorization"));
+                byte[] bytes=response.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type","application/json");
+                exchange.getResponseHeaders().set("Cache-Control","no-store");
+                exchange.sendResponseHeaders(method.get().equals("POST")?202:200,bytes.length);
+                try(var out=exchange.getResponseBody()){out.write(bytes);}
+            });
+            var client=client(f,Map.of("app.kag-builder-url",f.url(),"app.kag-builder-token-file",builderSecret.toString()),null);
+            assertEquals(response,client.builderInputs());
+            assertEquals("GET",method.get());
+            ((com.fasterxml.jackson.databind.node.ObjectNode)response.path("source_validation")).put("state","CHECKING").putNull("plan_sha256").putNull("nodes").putNull("edges");
+            assertEquals(response,client.checkBuilderInputs());
+            assertEquals("POST",method.get());assertEquals("{}",payload.get());
+            ((com.fasterxml.jackson.databind.node.ObjectNode)response.path("source_validation")).put("state","INVALID");
+            assertEquals(503,assertThrows(ResponseStatusException.class,client::builderInputs).getStatusCode().value());
+        }
+    }
     void unavailable(org.junit.jupiter.api.function.Executable call) {
         var error=assertThrows(ResponseStatusException.class,call);
         assertEquals(503,error.getStatusCode().value()); assertEquals("Dịch vụ KAG chưa khả dụng",error.getReason());

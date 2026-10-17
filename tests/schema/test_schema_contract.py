@@ -20,7 +20,7 @@ UPSTREAM = ROOT / 'vendor/KAG'
 SCHEMA = ROOT / 'kag/schema/VietRoadTraffic.schema'
 CONTRACT = ROOT / 'kag/schema/schema_contract.json'
 PIN = 'fdab15b3929d2ee40dfcdd388f90233096a6afc9'
-SCHEMA_SHA256 = 'ec05cc76303b99c43f7d2d8ed662459daeafe69fa750b7ebbdbf975fb794c23c'
+SCHEMA_SHA256 = '5c6c0f13b02203aad4155be3f9c6fadaee262c5379165d8717536c8bd9efaedb'
 NODE_COUNTS = {'LegalDocument': 29, 'LegalUnit': 32, 'TrafficSign': 14}
 DECLARED_COUNTS = {'LegalDocument': 27, 'LegalUnit': 30, 'TrafficSign': 12}
 PREDICATES = {
@@ -29,7 +29,7 @@ PREDICATES = {
     'AMENDS': 'amends', 'REPEALS': 'repeals', 'IMPLEMENTS': 'implements',
     'CONSOLIDATES': 'consolidates',
 }
-UNIT_TYPES = ['Dieu', 'Khoan', 'Diem', 'QCVN', 'QCVN_Muc']
+UNIT_TYPES = ['Dieu', 'Khoan', 'Diem', 'QCVN', 'QCVN_Muc', 'PhuLuc']
 
 
 @contextmanager
@@ -202,7 +202,7 @@ class SchemaContractTest(unittest.TestCase):
             k: approved['edge_application_key_contract'][k] for k in key_fields}
         digest = hashlib.sha256(json.dumps(approved, ensure_ascii=False, sort_keys=True,
                                 separators=(',', ':')).encode('utf-8')).hexdigest()
-        self.assertEqual(digest, '2f7e33b0bd5c2fa129d21ab4c58119e5078bc07363945689882fbb917507a478')
+        self.assertEqual(digest, '0b1e8fe052d18ccdb63dee0eed0e1ff8e8303d7633ffaa5d463c13348cc4ec9c')
 
     def test_exact_predicates_endpoints_and_relation_provenance(self):
         self.assertEqual(self.contract['logical_to_physical_predicates'], PREDICATES)
@@ -234,7 +234,7 @@ class SchemaContractTest(unittest.TestCase):
             self.assertEqual({p['schema_name'] for p in self.contract['relation_properties'][name]},
                              {'evidence', 'note', 'sourceRecord'})
 
-    def test_five_unit_type_values(self):
+    def test_unit_type_values(self):
         self.assertEqual(self.contract['unit_type_values'], UNIT_TYPES)
         prop = self.parsed.types['VietRoadTraffic.LegalUnit'].properties['unitType']
         self.assertEqual(prop.constraint[self.base.ConstraintTypeEnum.Enum], UNIT_TYPES)
@@ -242,11 +242,11 @@ class SchemaContractTest(unittest.TestCase):
     def test_xref_integrity_gate(self):
         xref = self.contract['xref_contract']
         expected = {
-            'xref_sha256': '6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188',
-            'required_safe_edge_ledger_sha256': '1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4',
+            'xref_sha256': '69f4b0412993869f624eed95d11d0011a61436a6c9d3f0176a2523ea4e0653e9',
+            'required_safe_edge_ledger_sha256': '0cb9bf4b792a76b30cfa101d70548f96a64678f36370378b835671688e88ce02',
             'join_contract': 'EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON',
-            'classification_total': 17512, 'safe_edge_total': 8144,
-            'safe_edge_affirmative': 7709, 'safe_edge_exclusion': 435,
+            'classification_total': 17512, 'safe_edge_total': 8143,
+            'safe_edge_affirmative': 7708, 'safe_edge_exclusion': 435,
         }
         self.assertEqual({k:xref[k] for k in expected}, expected)
         self.assertEqual(xref['ledger_artifact_name'], 'xref_a3g2_final_ledger.jsonl')

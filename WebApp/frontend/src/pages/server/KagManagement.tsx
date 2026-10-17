@@ -501,7 +501,7 @@ export function BuilderControls() {
           Tải lại trạng thái
         </Button>
       </div>
-      <p className="text-xs text-muted">Thao tác theo quyền Worker. Production WRITE vẫn bị chặn.</p>
+      <p className="text-xs text-muted">{status?.production_write === 'CONFIGURED' ? 'Đã cấu hình quyền ghi full; Runner vẫn phải kiểm preflight và khóa trước khi ghi.' : 'Chưa cấu hình quyền ghi full.'} Thao tác theo quyền Worker.</p>
       </div>
     </Card>
   )

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test, beforeEach } from 'node:test'
-import { loadKagStatus, runRetrieval, inspectionError, loadPipelineStatus, loadBenchmarkDatasets, loadSampleInspection } from '../src/pages/server/kag-inspection.ts'
+import { loadKagStatus, runRetrieval, inspectionError, loadPipelineStatus, loadBenchmarkDatasets, loadSampleInspection, loadBuilderInputs, loadBuilderStatus } from '../src/pages/server/kag-inspection.ts'
 import { ApiError, tokenKey } from '../src/api.ts'
 
 let calls, tokens
@@ -18,6 +18,29 @@ function wire(body, code = 200) {
     return new Response(JSON.stringify(body), { status: code })
   }
 }
+const sourceValidation = { state: 'VALID', error_code: null, plan_sha256: 'f'.repeat(64), nodes: 3, edges: 1 }
+const fullInputs = { contract_version: 'builder-inputs-v1', configuration: 'CONFIGURED', error_code: null, scope: 'PRODUCTION', target: { project_id: 37, database: 'traffic-full', namespace: 'VietRoadTraffic' }, inputs: [{ name: 'c3_manifest', sha256: 'a'.repeat(64), state: 'MATCHED' }], preflight: 'NOT_RUN', source_validation: sourceValidation }
+test('full source validity stays separate from target preflight and write authority', async () => {
+  wire(fullInputs); assert.deepEqual(await loadBuilderInputs(), fullInputs)
+  wire({ ...fullInputs, inputs: [{ ...fullInputs.inputs[0], state: 'NOT_CHECKED' }] }); assert.equal((await loadBuilderInputs()).inputs[0].state, 'NOT_CHECKED')
+  assert.equal(calls[0].url, '/api/admin/kag/builder/inputs')
+  const blocked = { contract_version: 'builder-control-v1', state: 'BLOCKED', run_id: null, target: fullInputs.target, progress: null, error_code: 'LOCK_MOUNT', actions: { build: false, stop: false, resume: false, delete: false }, delete_reason: 'DELETE_NOT_AUTHORIZED', production_write: 'CONFIGURED' }
+  wire(blocked); assert.deepEqual(await loadBuilderStatus(), blocked)
+  assert.equal((await loadBuilderStatus()).actions.build, false)
+})
+test('explicit source check sends no path, key, run id or write grant', async () => {
+  const source = { state: 'CHECKING', error_code: null, plan_sha256: null, nodes: null, edges: null }
+  wire({ ...fullInputs, source_validation: source }, 202)
+  assert.equal((await loadBuilderInputs(undefined, true)).source_validation.state, 'CHECKING')
+  assert.equal(calls[0].method, 'POST'); assert.equal(calls[0].body, undefined)
+})
+test('source inspection rejects stale counts, forged readiness and unknown fields', async () => {
+  for (const source of [{ ...sourceValidation, state: 'INVALID' }, { ...sourceValidation, nodes: -1 }, { ...sourceValidation, plan_sha256: null }, { ...sourceValidation, token: 'unexpected' }]) {
+    wire({ ...fullInputs, source_validation: source }); await assert.rejects(loadBuilderInputs())
+  }
+  wire({ ...fullInputs, preflight: 'PASS' }); await assert.rejects(loadBuilderInputs())
+  wire({ ...fullInputs, inputs: [] }); await assert.rejects(loadBuilderInputs())
+})
 test('status uses backend only and keeps ALIVE separate from NOT_READY', async () => {
   wire(status); assert.deepEqual(await loadKagStatus(), status); assert.equal(calls[0].url, '/api/admin/kag/status')
 })

@@ -78,6 +78,7 @@ public class KagClient {
     }
     public JsonNode builderStatus() {return builderRequest(null,null);}
     public JsonNode builderInputs() {return builderRequest("inputs",null);}
+    public JsonNode checkBuilderInputs() {return builderRequest("check-inputs",null);}
     public JsonNode builderAction(String action,String runId) {
         if(!Set.of("build","stop","resume").contains(action)||runId==null||!runId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Thao tác Builder không hợp lệ");
@@ -92,16 +93,17 @@ public class KagClient {
                 if(token.equals(other))throw new IOException();
             }
             boolean read=action==null||action.equals("inputs");
+            boolean inputs="inputs".equals(action)||"check-inputs".equals(action);
             RestClient.RequestHeadersSpec<?> request=read?builderClient.get().uri("/v1/builder/"+(action==null?"status":"inputs")):
-                builderClient.post().uri("/v1/builder/"+action).contentType(MediaType.APPLICATION_JSON).body(Map.of("run_id",runId));
+                builderClient.post().uri("/v1/builder/"+(inputs?"inputs":action)).contentType(MediaType.APPLICATION_JSON).body(inputs?Map.of():Map.of("run_id",runId));
             return request.header(HttpHeaders.AUTHORIZATION,"Bearer "+token).accept(MediaType.APPLICATION_JSON).exchange((req,res)->{
                 int code=res.getStatusCode().value();
                 if(code==409)throw new ResponseStatusException(HttpStatus.CONFLICT,"Builder đang bận hoặc thao tác chưa an toàn; hãy tải lại trạng thái");
                 if(code==422)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Yêu cầu Builder không hợp lệ");
                 if(code!=(read?200:202))throw new IOException();
                 var body=inspectionBody(res,token);
-                if("inputs".equals(action))validateBuilderInputs(body);else validateBuilder(body);
-                if(!read&&!body.path("run_id").asText().equals(runId))throw new IOException();
+                if(inputs)validateBuilderInputs(body);else validateBuilder(body);
+                if(!read&&!inputs&&!body.path("run_id").asText().equals(runId))throw new IOException();
                 return body;
             });
         } catch(ResponseStatusException e) {throw e;}
@@ -109,31 +111,40 @@ public class KagClient {
     }
     private void validateBuilderInputs(JsonNode body) throws IOException {
         String configuration=body.path("configuration").asText();
-        if(!fields(body).equals(Set.of("contract_version","configuration","error_code","scope","target","inputs","preflight"))||
+        if(!fields(body).equals(Set.of("contract_version","configuration","error_code","scope","target","inputs","preflight","source_validation"))||
             !body.path("contract_version").asText().equals("builder-inputs-v1")||!Set.of("NOT_CONFIGURED","INVALID","CONFIGURED").contains(configuration)||
             !body.path("preflight").asText().equals("NOT_RUN"))throw new IOException();
         boolean configured=configuration.equals("CONFIGURED");
         if(configuration.equals("INVALID")?!body.path("error_code").asText().equals("CONFIG"):!body.path("error_code").isNull())throw new IOException();
         var target=body.path("target");
         if(configured) {
-            if(!body.path("scope").asText().equals("FRESH_SAMPLE")||!fields(target).equals(Set.of("project_id","database","namespace"))||
-                !bounded(target.path("project_id"),1,Integer.MAX_VALUE)||!target.path("database").asText().matches("(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})")||
+            if(!Set.of("FRESH_SAMPLE","PRODUCTION").contains(body.path("scope").asText())||!fields(target).equals(Set.of("project_id","database","namespace"))||
+                !bounded(target.path("project_id"),1,Integer.MAX_VALUE)||!target.path("database").asText().matches(body.path("scope").asText().equals("PRODUCTION")?"[a-z][a-z0-9.-]{0,62}":"(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})")||
                 !target.path("namespace").asText().equals("VietRoadTraffic"))throw new IOException();
         } else if(!target.isNull()||!body.path("scope").isNull())throw new IOException();
         var inputs=body.path("inputs");var names=new HashSet<String>();
         var expected=Set.of("c3_manifest","sample_manifest","vector_artifact","provenance","chunk_manifest","source_checkpoint");
-        if(!inputs.isArray()||inputs.size()!=(configured?expected.size():0))throw new IOException();
+        if(!inputs.isArray()||(configured?inputs.isEmpty()||inputs.size()>expected.size()||body.path("scope").asText().equals("FRESH_SAMPLE")&&inputs.size()!=6:!inputs.isEmpty()))throw new IOException();
         for(var input:inputs) {
             String name=input.path("name").asText();
             if(!fields(input).equals(Set.of("name","sha256","state"))||!expected.contains(name)||!names.add(name)||
-                !input.path("sha256").asText().matches("[0-9a-f]{64}")||!Set.of("MATCHED","MISSING","INVALID","UNAVAILABLE").contains(input.path("state").asText()))throw new IOException();
+                !input.path("sha256").asText().matches("[0-9a-f]{64}")||!Set.of("NOT_CHECKED","MATCHED","MISSING","INVALID","UNAVAILABLE").contains(input.path("state").asText()))throw new IOException();
         }
+        if(configured&&!names.contains("c3_manifest"))throw new IOException();
+        var source=body.path("source_validation");String state=source.path("state").asText();
+        if(!fields(source).equals(Set.of("state","error_code","plan_sha256","nodes","edges"))||
+            !Set.of("NOT_RUN","CHECKING","VALID","INVALID","UNAVAILABLE").contains(state))throw new IOException();
+        String error=switch(state){case "INVALID"->"INTEGRITY";case "UNAVAILABLE"->"RUNTIME";default->null;};
+        if(error==null?!source.path("error_code").isNull():!source.path("error_code").asText().equals(error))throw new IOException();
+        if(state.equals("VALID")?!configured||!source.path("plan_sha256").isTextual()||!source.path("plan_sha256").asText().matches("[0-9a-f]{64}")||
+            !bounded(source.path("nodes"),0,Integer.MAX_VALUE)||!bounded(source.path("edges"),0,Integer.MAX_VALUE):
+            !source.path("plan_sha256").isNull()||!source.path("nodes").isNull()||!source.path("edges").isNull())throw new IOException();
     }
     private void validateBuilder(JsonNode body) throws IOException {
         String state=body.path("state").asText();var actions=body.path("actions");
         if(!fields(body).equals(Set.of("contract_version","state","run_id","target","progress","error_code","actions","delete_reason","production_write"))||
             !body.path("contract_version").asText().equals("builder-control-v1")||!Set.of("IDLE","RUNNING","STOPPING","STOPPED","COMPLETE","BLOCKED").contains(state)||
-            !fields(actions).equals(Set.of("build","stop","resume","delete"))||!body.path("delete_reason").asText().equals("DELETE_NOT_AUTHORIZED")||!body.path("production_write").asText().equals("BLOCKED"))throw new IOException();
+            !fields(actions).equals(Set.of("build","stop","resume","delete"))||!body.path("delete_reason").asText().equals("DELETE_NOT_AUTHORIZED")||!Set.of("BLOCKED","CONFIGURED").contains(body.path("production_write").asText()))throw new IOException();
         for(String name:List.of("build","stop","resume","delete")) {
             boolean allowed=switch(name){case "build"->Set.of("IDLE","COMPLETE").contains(state);case "stop"->state.equals("RUNNING");case "resume"->state.equals("STOPPED");default->false;};
             if(!actions.path(name).isBoolean()||actions.path(name).asBoolean()!=allowed)throw new IOException();
@@ -142,7 +153,7 @@ public class KagClient {
         if(runId.isNull()? !Set.of("IDLE","BLOCKED").contains(state): !runId.isTextual()||!runId.asText().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))throw new IOException();
         var target=body.path("target");
         if(target.isNull()? !state.equals("BLOCKED"): !fields(target).equals(Set.of("project_id","database","namespace"))||!bounded(target.path("project_id"),1,Integer.MAX_VALUE)||
-            !target.path("database").asText().matches("(?:vietroadtraffic|freshsample[a-z0-9]{8,40})")||!target.path("namespace").asText().equals("VietRoadTraffic"))throw new IOException();
+            !target.path("database").asText().matches(body.path("production_write").asText().equals("CONFIGURED")?"[a-z][a-z0-9.-]{0,62}":"(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})")||!target.path("namespace").asText().equals("VietRoadTraffic"))throw new IOException();
         var progress=body.path("progress");
         if(!progress.isNull()&&(!fields(progress).equals(Set.of("stage","done","total"))||!Set.of("preflight","plan","vectorize","export-artifact","write-nodes","verify-nodes","write-edges","verify","release").contains(progress.path("stage").asText())||
             !bounded(progress.path("total"),0,Integer.MAX_VALUE)||!bounded(progress.path("done"),0,progress.path("total").asInt())))throw new IOException();

@@ -137,18 +137,18 @@ export async function loadKagConfiguration(signal?: AbortSignal): Promise<KagCon
   return value
 }
 export type BuilderState = 'IDLE' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'COMPLETE' | 'BLOCKED'
-export type BuilderStatus = { contract_version: 'builder-control-v1'; state: BuilderState; run_id: string | null; target: { project_id: number; database: string; namespace: 'VietRoadTraffic' } | null; progress: { stage: string; done: number; total: number } | null; error_code: string | null; actions: { build: boolean; stop: boolean; resume: boolean; delete: false }; delete_reason: 'DELETE_NOT_AUTHORIZED'; production_write: 'BLOCKED' }
+export type BuilderStatus = { contract_version: 'builder-control-v1'; state: BuilderState; run_id: string | null; target: { project_id: number; database: string; namespace: 'VietRoadTraffic' } | null; progress: { stage: string; done: number; total: number } | null; error_code: string | null; actions: { build: boolean; stop: boolean; resume: boolean; delete: false }; delete_reason: 'DELETE_NOT_AUTHORIZED'; production_write: 'BLOCKED' | 'CONFIGURED' }
 export function builderStateLabel(state: BuilderState) {
   return { IDLE: 'Chưa build', RUNNING: 'Đang build', STOPPING: 'Đang dừng...', STOPPED: 'Đã dừng an toàn', COMPLETE: 'Hoàn tất', BLOCKED: 'Bị chặn' }[state]
 }
 function validateBuilder(value: BuilderStatus): BuilderStatus {
   if (!value || Object.keys(value).sort().join() !== ['contract_version', 'state', 'run_id', 'target', 'progress', 'error_code', 'actions', 'delete_reason', 'production_write'].sort().join() ||
-    value.contract_version !== 'builder-control-v1' || !['IDLE', 'RUNNING', 'STOPPING', 'STOPPED', 'COMPLETE', 'BLOCKED'].includes(value.state) || value.production_write !== 'BLOCKED' || value.delete_reason !== 'DELETE_NOT_AUTHORIZED' ||
+    value.contract_version !== 'builder-control-v1' || !['IDLE', 'RUNNING', 'STOPPING', 'STOPPED', 'COMPLETE', 'BLOCKED'].includes(value.state) || !['BLOCKED', 'CONFIGURED'].includes(value.production_write) || value.delete_reason !== 'DELETE_NOT_AUTHORIZED' ||
     !value.actions || Object.keys(value.actions).sort().join() !== ['build', 'stop', 'resume', 'delete'].sort().join() ||
     value.actions.build !== ['IDLE', 'COMPLETE'].includes(value.state) || value.actions.stop !== (value.state === 'RUNNING') || value.actions.resume !== (value.state === 'STOPPED') || value.actions.delete !== false ||
     (value.run_id === null ? !['IDLE', 'BLOCKED'].includes(value.state) : typeof value.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.run_id))) throw new ApiError('Trạng thái Builder không hợp lệ', 502)
   const target = value.target, progress = value.progress
-  if (target === null ? value.state !== 'BLOCKED' : !target || Object.keys(target).sort().join() !== ['project_id', 'database', 'namespace'].sort().join() || !Number.isInteger(target.project_id) || target.project_id < 1 || !/^(?:vietroadtraffic|freshsample[a-z0-9]{8,40})$/.test(target.database) || target.namespace !== 'VietRoadTraffic') throw new ApiError('Cấu hình đích Builder không hợp lệ', 502)
+  if (target === null ? value.state !== 'BLOCKED' : !target || Object.keys(target).sort().join() !== ['project_id', 'database', 'namespace'].sort().join() || !Number.isInteger(target.project_id) || target.project_id < 1 || !(value.production_write === 'CONFIGURED' ? /^[a-z][a-z0-9.-]{0,62}$/ : /^(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})$/).test(target.database) || target.namespace !== 'VietRoadTraffic') throw new ApiError('Cấu hình đích Builder không hợp lệ', 502)
   if (progress !== null && (!progress || Object.keys(progress).sort().join() !== ['stage', 'done', 'total'].sort().join() || !['preflight', 'plan', 'vectorize', 'export-artifact', 'write-nodes', 'verify-nodes', 'write-edges', 'verify', 'release'].includes(progress.stage) || !Number.isSafeInteger(progress.done) || !Number.isSafeInteger(progress.total) || progress.done < 0 || progress.total < progress.done)) throw new ApiError('Tiến độ Builder không hợp lệ', 502)
   if (value.error_code !== null && (typeof value.error_code !== 'string' || !/^[A-Z_]{1,32}$/.test(value.error_code))) throw new ApiError('Lỗi Builder không hợp lệ', 502)
   return value
@@ -168,28 +168,35 @@ export type BuilderInputs = {
   contract_version: 'builder-inputs-v1'
   configuration: 'NOT_CONFIGURED' | 'INVALID' | 'CONFIGURED'
   error_code: 'CONFIG' | null
-  scope: 'FRESH_SAMPLE' | null
+  scope: 'FRESH_SAMPLE' | 'PRODUCTION' | null
   target: BuilderStatus['target']
-  inputs: { name: keyof typeof builderInputLabels; sha256: string; state: 'MATCHED' | 'MISSING' | 'INVALID' | 'UNAVAILABLE' }[]
+  inputs: { name: keyof typeof builderInputLabels; sha256: string; state: 'NOT_CHECKED' | 'MATCHED' | 'MISSING' | 'INVALID' | 'UNAVAILABLE' }[]
   preflight: 'NOT_RUN'
+  source_validation: { state: 'NOT_RUN' | 'CHECKING' | 'VALID' | 'INVALID' | 'UNAVAILABLE'; error_code: 'INTEGRITY' | 'RUNTIME' | null; plan_sha256: string | null; nodes: number | null; edges: number | null }
 }
-export async function loadBuilderInputs(signal?: AbortSignal): Promise<BuilderInputs> {
-  const value = await api<BuilderInputs>('/admin/kag/builder/inputs', { signal })
+export async function loadBuilderInputs(signal?: AbortSignal, check = false): Promise<BuilderInputs> {
+  const value = await api<BuilderInputs>('/admin/kag/builder/inputs', { signal, method: check ? 'POST' : 'GET', cache: 'no-store' })
   const invalid = () => { throw new ApiError('Thông tin đầu vào Builder không hợp lệ', 502) }
-  if (!shape(value, ['contract_version', 'configuration', 'error_code', 'scope', 'target', 'inputs', 'preflight']) || value.contract_version !== 'builder-inputs-v1' ||
+  if (!shape(value, ['contract_version', 'configuration', 'error_code', 'scope', 'target', 'inputs', 'preflight', 'source_validation']) || value.contract_version !== 'builder-inputs-v1' ||
     !['NOT_CONFIGURED', 'INVALID', 'CONFIGURED'].includes(value.configuration) || value.preflight !== 'NOT_RUN' ||
     (value.configuration === 'INVALID' ? value.error_code !== 'CONFIG' : value.error_code !== null)) invalid()
   const configured = value.configuration === 'CONFIGURED', target = value.target
   if (configured ? !shape(target, ['project_id', 'database', 'namespace']) || !Number.isInteger(target!.project_id) || target!.project_id < 1 ||
-    !/^(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})$/.test(target!.database) || target!.namespace !== 'VietRoadTraffic' || value.scope !== 'FRESH_SAMPLE'
+    !(value.scope === 'PRODUCTION' ? /^[a-z][a-z0-9.-]{0,62}$/ : /^(?:neo4j|vietroadtraffic|freshsample[a-z0-9]{8,40})$/).test(target!.database) || target!.namespace !== 'VietRoadTraffic' || !['FRESH_SAMPLE', 'PRODUCTION'].includes(value.scope!)
     : target !== null || value.scope !== null) invalid()
-  if (!Array.isArray(value.inputs) || value.inputs.length !== (configured ? Object.keys(builderInputLabels).length : 0)) invalid()
+  if (!Array.isArray(value.inputs) || (configured ? value.inputs.length < 1 || value.inputs.length > Object.keys(builderInputLabels).length || value.scope === 'FRESH_SAMPLE' && value.inputs.length !== 6 : value.inputs.length !== 0)) invalid()
   const names = new Set<string>()
   for (const input of value.inputs) {
     if (!shape(input, ['name', 'sha256', 'state']) || !Object.prototype.hasOwnProperty.call(builderInputLabels, input.name) || names.has(input.name) ||
-      !hash(input.sha256) || !['MATCHED', 'MISSING', 'INVALID', 'UNAVAILABLE'].includes(input.state)) invalid()
+      !hash(input.sha256) || !['NOT_CHECKED', 'MATCHED', 'MISSING', 'INVALID', 'UNAVAILABLE'].includes(input.state)) invalid()
     names.add(input.name)
   }
+  if (configured && !names.has('c3_manifest')) invalid()
+  const source = value.source_validation
+  const sourceErrors: Record<string, string> = { INVALID: 'INTEGRITY', UNAVAILABLE: 'RUNTIME' }
+  if (!shape(source, ['state', 'error_code', 'plan_sha256', 'nodes', 'edges']) || !['NOT_RUN', 'CHECKING', 'VALID', 'INVALID', 'UNAVAILABLE'].includes(source.state) ||
+    source.error_code !== (sourceErrors[source.state] ?? null) ||
+    (source.state === 'VALID' ? !configured || !hash(source.plan_sha256) || !count(source.nodes) || !count(source.edges) : source.plan_sha256 !== null || source.nodes !== null || source.edges !== null)) invalid()
   return value
 }
 export async function runBuilderAction(action: 'build' | 'stop' | 'resume', run_id: string): Promise<BuilderStatus> {

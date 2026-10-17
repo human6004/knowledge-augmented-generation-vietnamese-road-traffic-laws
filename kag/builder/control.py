@@ -14,22 +14,28 @@ import threading
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from kag.builder.production_scope import _spec_hash
+from kag.builder.production_scope import ProductionSettings, _spec_hash, validate_c3_manifest
 from kag.http_api.contract import ApiFailure
 from kag.http_api.security import ServiceSecrets, authenticate, bounded_body
 from kag.run_state import MESSAGES, RunBlocked, _shared_lock_root, validate_run_directory
 from kag.runner import _config, _files, run
 
 
+def _input_version(path):
+    value=Path(path).stat()
+    return value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns
+
+
 def inspect_inputs(value):
     """Read configured inputs only; full Runner preflight remains authoritative."""
     result = dict(contract_version='builder-inputs-v1', configuration='NOT_CONFIGURED',
-                  error_code=None, scope=None, target=None, inputs=[], preflight='NOT_RUN')
+                  error_code=None, scope=None, target=None, inputs=[], preflight='NOT_RUN',
+                  source_validation=dict(state='NOT_RUN',error_code=None,plan_sha256=None,nodes=None,edges=None))
     if value is None:
         return result
     try:
         config = _config(value)
-        if config['scope'] != 'FRESH_SAMPLE':
+        if config['scope'] not in ('FRESH_SAMPLE', 'PRODUCTION'):
             raise RunBlocked('SCOPE')
     except (ValueError, KeyError, TypeError):
         result.update(configuration='INVALID', error_code='CONFIG')
@@ -41,26 +47,47 @@ def inspect_inputs(value):
             if not Path(config['paths'][name]).is_file():
                 state = 'MISSING'
             else:
-                _files(dict(config, input_sha256={name: digest}))
-                state = 'MATCHED'
-        except RunBlocked:
-            state = 'INVALID'
+                state = 'NOT_CHECKED'
         except (OSError, ValueError):
             state = 'UNAVAILABLE'
         result['inputs'].append(dict(name=name, sha256=digest, state=state))
     return result
 
 
+def check_source_inputs(value):
+    config = _config(value)
+    contract = json.loads((Path(__file__).resolve().parents[1]/'schema/schema_contract.json').read_bytes())
+    data = validate_c3_manifest(contract, config['paths']['c3_manifest'])
+    try:
+        _files(dict(config,input_sha256={'c3_manifest':config['input_sha256']['c3_manifest']}))
+        result = dict(state='VALID',error_code=None,plan_sha256=data['manifest']['plan_sha256'],
+                      nodes=len(data['nodes']),edges=len(data['edges']))
+        # shortcut: UI cache assumes file metadata changes; recheck after metadata-preserving restores.
+        checks = tuple((path,_input_version(path)) for path,_ in data['file_checksums'] if path!=data['index'].path)
+        return result,checks
+    finally:
+        data['index'].close()
+
+
 class BuilderControl:
     def __init__(self, config, *, runner=run):
         self.config = _config(config)
-        # Bounded replay only; container writes require an independent isolated deployment grant.
-        if (self.config['scope'] != 'FRESH_SAMPLE' or self.config['write_mode'] != 'WRITE'
-                or self.config['vector_policy'] != 'replay-existing'
+        if self.config['write_mode'] != 'WRITE':
+            raise RunBlocked('SCOPE')
+        if self.config['scope'] == 'PRODUCTION':
+            config=self.config
+            try:
+                ProductionSettings(scope=config['scope'],runtime_location=config['runtime_location'],
+                    host_addr=config['endpoints']['openspg'],neo4j_uri=config['endpoints']['neo4j_uri'],
+                    project_name=config['project_name'],namespace=config['namespace'],expected_project_id=config['project_id'],
+                    vector_dimensions=config['vector_dimensions'],confirmation=config['confirmation']).validate()
+            except ValueError:
+                raise RunBlocked('SCOPE') from None
+        elif (self.config['scope'] != 'FRESH_SAMPLE' or self.config['vector_policy'] != 'replay-existing'
                 or not (re.fullmatch(r'freshsample[a-z0-9]{8,40}', self.config['database'])
                         or self.config['runtime_location'] == 'container' and self.config['database'] == 'vietroadtraffic')):
             raise RunBlocked('SCOPE')
-        if self.config['runtime_location'] == 'container':
+        if self.config['scope'] == 'FRESH_SAMPLE' and self.config['runtime_location'] == 'container':
             from kag.backend_identity import BackendIdentityError, _isolated_builder_password
             try: _isolated_builder_password()
             except (BackendIdentityError, OSError): raise RunBlocked('SCOPE') from None
@@ -153,7 +180,8 @@ class BuilderControl:
                 progress=progress, error_code=code,
                 actions=dict(build=state in ('IDLE', 'COMPLETE'), stop=state == 'RUNNING',
                              resume=state == 'STOPPED', delete=False),
-                delete_reason='DELETE_NOT_AUTHORIZED', production_write='BLOCKED')
+                delete_reason='DELETE_NOT_AUTHORIZED',
+                production_write='CONFIGURED' if self.config['scope']=='PRODUCTION' else 'BLOCKED')
 
     def start(self, run_id, *, resume=False):
         with self._monitor:
@@ -213,9 +241,16 @@ def create_app(*, control=None, token=None):
             except (OSError, KeyError, ValueError):
                 failure = 'CONFIG'
 
+    source_result=inspect_inputs(None)['source_validation']
+    checked_files=()
+    checked_config=None
+    source_task=None
+
     @asynccontextmanager
     async def lifespan(app):
         yield
+        if source_task is not None:
+            await source_task
         if control is not None:
             await asyncio.to_thread(control.close)
 
@@ -235,8 +270,53 @@ def create_app(*, control=None, token=None):
 
     @app.get('/v1/builder/inputs')
     async def inputs(request: Request):
+        nonlocal source_result,checked_files
         authenticate_request(request)
-        return await asyncio.to_thread(inspect_inputs, configuration)
+        result=await asyncio.to_thread(inspect_inputs, configuration)
+        if source_result['state']!='CHECKING':
+            if checked_config is not None and checked_config!=_spec_hash(configuration):
+                source_result=inspect_inputs(None)['source_validation']
+                checked_files=()
+            elif checked_files:
+                try:
+                    if await asyncio.to_thread(lambda:any(_input_version(path)!=version for path,version in checked_files)):
+                        raise ValueError
+                except (OSError,ValueError):
+                    source_result=dict(state='INVALID',error_code='INTEGRITY',plan_sha256=None,nodes=None,edges=None)
+                    checked_files=()
+        result['source_validation']=source_result
+        if source_result['state']=='VALID':
+            for row in result['inputs']:
+                if row['name']=='c3_manifest':row['state']='MATCHED'
+        return result
+
+    @app.post('/v1/builder/inputs',status_code=202)
+    async def check_inputs(request: Request):
+        nonlocal source_task,source_result,checked_files,checked_config
+        authenticate_request(request)
+        try:
+            if json.loads(await bounded_body(request))!={}:
+                raise ValueError
+        except (ValueError,TypeError):
+            raise ApiFailure('INVALID_REQUEST') from None
+        result=await asyncio.to_thread(inspect_inputs,configuration)
+        if (source_task is not None and not source_task.done() or result['configuration']!='CONFIGURED'
+                or not any(row['name']=='c3_manifest' and row['state']=='NOT_CHECKED' for row in result['inputs'])):
+            raise HTTPException(409,'SOURCE_CHECK_BLOCKED')
+        checked_files=()
+        checked_config=_spec_hash(configuration)
+        source_result=dict(state='CHECKING',error_code=None,plan_sha256=None,nodes=None,edges=None)
+        async def check():
+            nonlocal source_result,checked_files
+            try:
+                source_result,checked_files=await asyncio.to_thread(check_source_inputs,configuration)
+            except ValueError:
+                source_result=dict(state='INVALID',error_code='INTEGRITY',plan_sha256=None,nodes=None,edges=None)
+            except Exception:
+                source_result=dict(state='UNAVAILABLE',error_code='RUNTIME',plan_sha256=None,nodes=None,edges=None)
+        source_task=asyncio.create_task(check())
+        result['source_validation']=source_result
+        return result
 
     @app.get('/v1/builder/status')
     async def status(request: Request):

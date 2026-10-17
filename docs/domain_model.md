@@ -3,7 +3,7 @@
 Ba loại node:
 
 - **LegalDocument:** văn bản thuộc whitelist, exact `doc_id`.
-- **LegalUnit:** Điều/Khoản/Điểm/QCVN/QCVN_Muc, exact `unit_id`.
+- **LegalUnit:** Điều/Khoản/Điểm/QCVN/QCVN_Muc/PhuLuc, exact `unit_id`.
 - **TrafficSign:** occurrence theo phiên bản QCVN, exact `sign_id`; không gộp theo mã biển hoặc giữa phiên bản.
 
 `name=id` là nhãn kỹ thuật; hiển thị title/tên/mã từ nguồn. Không trim/normalize Unicode, bỏ suffix, lấy title/order/text hash hoặc UUID thay ID. Provenance (path tương đối/file SHA-256/dòng từ 1) không phải node identity.

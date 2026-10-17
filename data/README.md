@@ -12,7 +12,7 @@ Corpus có 92 bản ghi metadata, 91 văn bản Markdown thuộc production corp
 
 - `raw/`: 215 file nguồn — 171 PDF, 38 HTML, 6 DOC/DOCX; dùng đối chiếu.
 - `processed/documents/`: toàn văn Markdown theo `doc_id`.
-- `processed/units/units.jsonl`: Điều/Khoản/Điểm và QCVN; giữ `unit_id`, `parent_id`, `unit_type`, `text`.
+- `processed/units/units.jsonl`: Điều/Khoản/Điểm, phụ lục và QCVN; giữ `unit_id`, `parent_id`, `unit_type`, `text`.
 - `processed/meta/`: `documents.jsonl`, `xrefs.jsonl`, `relations.jsonl`.
 - `processed/penalties/`: mức phạt trích xuất; dữ liệu ngoài phạm vi ở `excluded_out_of_scope.jsonl`.
 - `processed/signs/signs.jsonl`: biển báo và metadata nguồn QCVN/unit.
@@ -26,10 +26,10 @@ Corpus có 92 bản ghi metadata, 91 văn bản Markdown thuộc production corp
 
 ## Thống kê corpus
 
-[corpus.json](metadata/corpus.json) ghi snapshot `2026-10-02`; [checksums.json](metadata/checksums.json) giữ hash dữ liệu. Số lượng records:
+[corpus.json](metadata/corpus.json) ghi nguồn snapshot `2026-10-02` và cập nhật phân đoạn; [checksums.json](metadata/checksums.json) giữ hash dữ liệu. Số lượng records:
 
 - Documents metadata: 92; production Markdown: 91.
-- Units: 55.597.
+- Units: 55.573.
 - Xrefs: 17.512.
 - Relations: 821.
 - Penalties: 1.966.

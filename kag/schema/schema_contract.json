@@ -1056,7 +1056,8 @@
     "Khoan",
     "Diem",
     "QCVN",
-    "QCVN_Muc"
+    "QCVN_Muc",
+    "PhuLuc"
   ],
   "relations": {
     "hasUnit": {
@@ -1308,8 +1309,8 @@
     "normalization": "No Unicode normalization, trimming, UUID, or replacement by title/order/text hash."
   },
   "xref_contract": {
-    "xref_sha256": "6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188",
-    "required_safe_edge_ledger_sha256": "1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4",
+    "xref_sha256": "69f4b0412993869f624eed95d11d0011a61436a6c9d3f0176a2523ea4e0653e9",
+    "required_safe_edge_ledger_sha256": "0cb9bf4b792a76b30cfa101d70548f96a64678f36370378b835671688e88ce02",
     "ledger_artifact_name": "xref_a3g2_final_ledger.jsonl",
     "runtime_path_source": "Runtime configuration; no absolute path dependency.",
     "join_contract": "EXISTING_RECORD_FINGERPRINT_SHA256_CANONICAL_JSON",
@@ -1317,8 +1318,8 @@
     "fingerprint_canonical_json": "json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')",
     "fingerprint_algorithm": "SHA256",
     "classification_total": 17512,
-    "safe_edge_total": 8144,
-    "safe_edge_affirmative": 7709,
+    "safe_edge_total": 8143,
+    "safe_edge_affirmative": 7708,
     "safe_edge_exclusion": 435,
     "classification_field": "downstream_use",
     "allowed_classification": "SAFE_EDGE",
@@ -1338,7 +1339,7 @@
     },
     "units": {
       "rule": "Source unit_id and doc_id belong to production whitelist; preserve source parent_id hierarchy",
-      "expected_count": 55597
+      "expected_count": 55573
     },
     "penalties": {
       "rule": "Merge by unit_id only, LegalUnit 1:0..1 source penalty; duplicate/join/document mismatch fails closed",
@@ -1395,7 +1396,7 @@
     "controls_server_uniqueness": false
   },
   "runtime_contract": {
-    "schema_sha256": "ec05cc76303b99c43f7d2d8ed662459daeafe69fa750b7ebbdbf975fb794c23c",
+    "schema_sha256": "5c6c0f13b02203aad4155be3f9c6fadaee262c5379165d8717536c8bd9efaedb",
     "constraint_enforcement": "DECLARATIVE_ONLY",
     "builder_schema_validation_required": true,
     "builder_unit_type_validation_required": true,

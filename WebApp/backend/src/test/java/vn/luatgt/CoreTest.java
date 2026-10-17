@@ -56,6 +56,17 @@ class CoreTest {
         mvc.perform(asyncDispatch(result)).andExpect(status().isOk())
             .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM));
     }
+    @Test void builderSourceCheckRequiresAdminAndRejectsClientInputs() throws Exception {
+        mvc.perform(post("/api/admin/kag/builder/inputs")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/admin/kag/builder/inputs").header("Authorization","Bearer "+register())).andExpect(status().isForbidden());
+        when(kag.checkBuilderInputs()).thenReturn(json.createObjectNode().put("fixture","CHECKING"));
+        mvc.perform(post("/api/admin/kag/builder/inputs").header("Authorization","Bearer "+admin)).andExpect(status().isAccepted()).andExpect(header().string("Cache-Control","no-store"));
+        verify(kag).checkBuilderInputs();clearInvocations(kag);
+        mvc.perform(post("/api/admin/kag/builder/inputs?path=/tmp/other").header("Authorization","Bearer "+admin)).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/admin/kag/builder/inputs").header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/admin/kag/builder/inputs").header("Authorization","Bearer "+admin).header("Transfer-Encoding","chunked")).andExpect(status().isBadRequest());
+        verifyNoInteractions(kag);
+    }
     @BeforeEach void admin() throws Exception { admin=token("admin@test.vn","TEST-only-admin-password"); }
     String token(String email,String password) throws Exception {
         return body(mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of("email",email,"password",password)))).andExpect(status().isOk()).andReturn()).path("accessToken").asText();
@@ -96,6 +107,7 @@ class CoreTest {
             mvc.perform(get("/api/admin/"+path).header("Authorization","Bearer "+police)).andExpect(status().isForbidden());
         mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"ADMIN\"}")).andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/kag/builder/build").header("Authorization","Bearer "+police).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
+        mvc.perform(post("/api/admin/kag/builder/inputs").header("Authorization","Bearer "+police)).andExpect(status().isForbidden());
         mvc.perform(patch("/api/admin/users/"+id).header("Authorization","Bearer "+admin).contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"USER\"}")).andExpect(status().isOk());
         mvc.perform(get("/api/auth/me").header("Authorization","Bearer "+police)).andExpect(status().isUnauthorized());
         String demoted=token(email,"TEST-only-user-password");

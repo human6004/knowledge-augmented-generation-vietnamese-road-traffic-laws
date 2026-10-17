@@ -4940,7 +4940,7 @@
     "FILES_CHANGED": 0,
     "A3_STATUS": "LOCKED"
   },
-  "scope": "Delta acceptance only. No new repair discovery, no production repair, no A4, no relations/metadata/parser/classifier changes.",
+  "scope": "Historical A3-G2 scope: Delta acceptance only. No new repair discovery, no production repair, no A4, no relations/metadata/parser/classifier changes. Current source correction is recorded separately in corpus_correction.",
   "official_a3_xref_lock_baseline": {
     "A3_STATUS": "LOCKED",
     "XREF_ROWS": 17512,
@@ -4948,5 +4948,27 @@
     "UNIT_ROWS": 55597,
     "UNIT_SHA256": "e22c1f5a37a38fc41df50953ce66840dbf77ef76caab65c3df970ec060651e40",
     "lock_kind": "report/checkpoint decision; production not modified"
+  },
+  "corpus_correction": {
+    "source_url": "https://congbao.chinhphu.vn/van-ban/nghi-dinh-so-161-2024-nd-cp-43641/53833.htm",
+    "document": "161_2024_ND_CP",
+    "removed_units": 34,
+    "appendix_units": 10,
+    "xref_order_index": 3474,
+    "previous_fingerprint": "e242e7d1d19e22be82a07609257a86a5e3bbebbeea431c9fb572e505b1e9801f",
+    "record_fingerprint": "c10d8d71432a5c994afa39b42526473d20db79dd6d9545ceecedb5756a17f06e",
+    "reason": "Official Cong Bao 27+28, PDF page 16, table row 1464: MANEB or MANEB preparation, hazard class 4.2; not a legal citation to Article 4.",
+    "unit_count": 55573,
+    "units_sha256": "e9d5cbb2aa1219809c6e6681a3b5d3b95e20abe344065863d8da0804ba2d265e",
+    "xrefs_sha256": "69f4b0412993869f624eed95d11d0011a61436a6c9d3f0176a2523ea4e0653e9",
+    "ledger_sha256": "0cb9bf4b792a76b30cfa101d70548f96a64678f36370378b835671688e88ce02",
+    "downstream_use_counts": {
+      "KEEP_UNRESOLVED_NO_EDGE": 7374,
+      "SAFE_EDGE": 8143,
+      "EXCLUDE_FROM_GRAPH_EDGE": 146,
+      "EXTERNAL_REFERENCE_ONLY": 1849
+    },
+    "scope": "Approved D33 boundary correction only; original A3 audit retained as historical evidence.",
+    "updated_at": "2026-10-17"
   }
 }

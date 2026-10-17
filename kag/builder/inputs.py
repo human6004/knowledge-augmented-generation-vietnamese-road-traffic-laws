@@ -15,9 +15,9 @@ from .codec import BuilderContractError, canonical_json, validate_properties
 
 
 ARTIFACT_HASHES = (
-    ('xref_a3g2_final_ledger.jsonl', '1dea69f2c2b3ac344478ef24b1844f06514c4150a069e1c6d5cc5f9ffe8fecb4'),
-    ('xref_a3g2_final_audit.json', '2a130da7f4c6ad0bb673366e9bb6e390f3e481cb5381003933f3195eb23e1fb3'),
-    ('xref_a3g2_downstream_policy.json', 'dcd12c131a9033efaf8f93703cf5423d59e3827f242249a5727759cb49d42b0e'),
+    ('xref_a3g2_final_ledger.jsonl', '0cb9bf4b792a76b30cfa101d70548f96a64678f36370378b835671688e88ce02'),
+    ('xref_a3g2_final_audit.json', 'e1400db9310cca36a9b4f5e73014fb33eee2e8712be86560aa9d70fb39e51d46'),
+    ('xref_a3g2_downstream_policy.json', 'aade9f2d13f4c6f3c2155c241d53018664372d26182b5a9321c2a7aa2cc19ee2'),
 )
 SOURCE_FILES = (
     ('documents', 'data/processed/meta/documents.jsonl'),

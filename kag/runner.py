@@ -250,8 +250,8 @@ def preflight(config, *, project_client, reader, backend_transport=None):
             node_hashes = {(n['type'], n['id']): data['node_hashes'][(n['type'], n['id'])] for n in nodes}
             edge_hashes = {tuple(e['tuple']): data['edge_hashes'][tuple(e['tuple'])] for e in edges}
             checksums.extend(data['file_checksums'])
-        # Identity is necessary, but never opens the production execution gate.
-        if config['write_mode'] == 'WRITE' and config['scope'] != 'FRESH_SAMPLE': raise RunBlocked('SCOPE')
+        if config['write_mode'] == 'WRITE' and config['scope'] not in ('FRESH_SAMPLE', 'PRODUCTION'):
+            raise RunBlocked('SCOPE')
         backend_proof = writer_config.backend_proof
         if backend_proof.canonical_database_name != config['database']:
             raise RunBlocked('SCOPE')

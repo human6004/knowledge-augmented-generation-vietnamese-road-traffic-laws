@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { BuilderControls, useInspection } from './server/KagManagement'
-import { builderInputLabels, loadBuilderInputs, loadKagStatus, loadSampleInspection, loadBenchmarkDatasets } from './server/kag-inspection'
+import { builderInputLabels, inspectionError, loadBuilderInputs, loadKagStatus, loadSampleInspection, loadBenchmarkDatasets } from './server/kag-inspection'
 import { Notice } from './server/shared'
 import type { JobStatus } from '../admin/store'
 import { Button, Card, Page, type Tone } from '../admin/ui'
@@ -18,8 +19,22 @@ export default function AdminPipeline() {
   const connection = useInspection(loadKagStatus)
   const graph = useInspection(loadSampleInspection), sample = graph.value
   const evaluation = useInspection(loadBenchmarkDatasets)
-  const inputStates = { MATCHED: 'Khớp checksum cấu hình', MISSING: 'Thiếu file', INVALID: 'Sai checksum', UNAVAILABLE: 'Không đọc được' }
-  const configuration = inputs ? inputs.configuration === 'NOT_CONFIGURED' ? 'Chưa cấu hình' : inputs.configuration === 'INVALID' ? 'Cấu hình không hợp lệ' : 'Đã đọc cấu hình SAMPLE' : data.loading ? 'Đang kiểm tra' : 'Chưa đọc được'
+  const [checking, setChecking] = useState(false), [checkError, setCheckError] = useState('')
+  const source = inputs?.source_validation
+  useEffect(() => {
+    if (source?.state !== 'CHECKING' || data.loading) return
+    const timer = setTimeout(data.reload, 1500)
+    return () => clearTimeout(timer)
+  }, [source, data.loading, data.reload])
+  async function checkSource() {
+    setChecking(true); setCheckError('')
+    try { data.setValue(await loadBuilderInputs(undefined, true)) }
+    catch (failure) { data.setValue(undefined); setCheckError(inspectionError(failure)) }
+    finally { setChecking(false) }
+  }
+  const inputStates = { NOT_CHECKED: 'Chưa kiểm checksum', MATCHED: 'Khớp checksum cấu hình', MISSING: 'Thiếu file', INVALID: 'Sai checksum', UNAVAILABLE: 'Không đọc được' }
+  const configuration = inputs ? inputs.configuration === 'NOT_CONFIGURED' ? 'Chưa cấu hình' : inputs.configuration === 'INVALID' ? 'Cấu hình không hợp lệ' : `Đã đọc cấu hình ${inputs.scope === 'PRODUCTION' ? 'full corpus' : 'SAMPLE'}` : data.loading ? 'Đang kiểm tra' : 'Chưa đọc được'
+  const sourceStates = { NOT_RUN: 'Chưa kiểm nguồn', CHECKING: 'Đang kiểm nguồn', VALID: 'Nguồn hợp lệ', INVALID: 'Nguồn không hợp lệ', UNAVAILABLE: 'Không kiểm được nguồn' }
   const checks = { liveness: 'Kết nối API', queryReadiness: 'Truy vấn', retrievalReadiness: 'Retrieval', vectorRetrievalReadiness: 'Vector retrieval', release: 'Release' } as const
   return (
     <Page
@@ -33,7 +48,7 @@ export default function AdminPipeline() {
           <p>KAG API: {connection.value?.liveness.state ?? (connection.loading ? 'Đang kiểm tra' : 'Chưa đọc được')}</p>
           <p>Graph SAMPLE: {sample ? 'Có dữ liệu xác minh' : graph.loading ? 'Đang kiểm tra' : 'Chưa xác minh'}</p>
         </div>
-        <p className="mt-2 text-muted">Production WRITE bị chặn. Trạng thái Builder và quyền thao tác hiển thị riêng bên dưới.</p>
+        <p className="mt-2 text-muted">Kiểm nguồn độc lập với đích Build và quyền ghi. Trạng thái Worker hiển thị bên dưới.</p>
       </section>
       <div className="grid gap-5 xl:grid-cols-2 items-start">
       <Card title="Nguồn & chuẩn bị dữ liệu">
@@ -49,16 +64,19 @@ export default function AdminPipeline() {
       <Card title="Đầu vào & điều kiện Build">
         <div className="px-5 pb-5 text-sm space-y-3 min-w-0">
           <Notice {...data} />
+          {checkError && <p role="alert">{checkError}</p>}
           {inputs && <>
             <p>Cấu hình: {configuration}</p>
             {inputs.error_code && <p>Mã lỗi cấu hình: {inputs.error_code}</p>}
             {inputs.target ? <p className="break-words">Đích cấu hình: project {inputs.target.project_id} · database {inputs.target.database} · {inputs.target.namespace} · {inputs.scope}</p> : <p>Đích Build: Chưa cấu hình</p>}
-            {!inputs.inputs.length && <p>Nguồn / manifest SAMPLE: Chưa cấu hình</p>}
+            {!inputs.inputs.length && <p>Nguồn / manifest: Chưa cấu hình</p>}
+            <p aria-live="polite">Kiểm nguồn: {sourceStates[inputs.source_validation.state]}{source?.error_code ? ` · ${source.error_code}` : ''}</p>
+            {source?.state === 'VALID' && <><p>{source.nodes} node · {source.edges} cạnh trong kế hoạch nguồn</p><details><summary className="cursor-pointer underline">SHA-256 kế hoạch đã kiểm</summary><p className="break-all mt-1">{source.plan_sha256}</p></details></>}
             {!!inputs.inputs.length && <>
               <dl className="grid grid-cols-2 gap-3">
                 {Object.entries(inputStates).map(([state, label]) => <div key={state}><dt className="text-muted">{label}</dt><dd className="font-semibold">{inputs.inputs.filter(input => input.state === state).length}{state === 'MATCHED' ? ` / ${inputs.inputs.length} file` : ' file'}</dd></div>)}
               </dl>
-              {inputs.inputs.some(input => input.state !== 'MATCHED') && <p>Cần xử lý file thiếu, sai checksum hoặc không đọc được.</p>}
+              {inputs.inputs.some(input => ['MISSING', 'INVALID', 'UNAVAILABLE'].includes(input.state)) && <p>Cần xử lý file thiếu, sai checksum hoặc không đọc được.</p>}
               <details><summary className="cursor-pointer underline">Chi tiết đầu vào</summary>
             {inputs.inputs.map(input => <div key={input.name} className="border-b border-line py-2">
               <p>{builderInputLabels[input.name]}: {inputStates[input.state]}</p>
@@ -67,9 +85,9 @@ export default function AdminPipeline() {
               </details>
             </>}
           </>}
-          <p>Kiểm tra file không xác nhận đủ điều kiện Build. Preflight đầy đủ chưa chạy trong bước này.</p>
-          <details className="text-muted"><summary className="cursor-pointer underline">Phạm vi kiểm tra</summary><p className="mt-2">Chỉ đối chiếu checksum; chưa kiểm tra số lượng hoặc nội dung nguồn. Nội dung, vector, identity đích và GraphLock do preflight của Runner kiểm tra khi Build. Worker cho phép thao tác không chứng minh preflight đã đạt.</p></details>
-          <Button disabled={data.loading} onClick={data.reload}>Kiểm tra lại đầu vào</Button>
+          <p>Preflight đích: chưa chạy. Vector và quyền ghi chưa được xác minh bởi kiểm nguồn.</p>
+          <details className="text-muted"><summary className="cursor-pointer underline">Phạm vi kiểm tra</summary><p className="mt-2">Kiểm nguồn xác thực manifest, checksum, schema, ID và quan hệ trong kế hoạch. Kết quả mất hiệu lực khi đầu vào đổi. Identity đích, vector và GraphLock được Runner kiểm riêng; nguồn hợp lệ không tự bật Build.</p></details>
+          <div className="flex flex-wrap gap-3"><Button disabled={checking || source?.state === 'CHECKING' || inputs?.configuration !== 'CONFIGURED'} onClick={checkSource}>Kiểm tra nguồn</Button><Button disabled={data.loading || checking} onClick={data.reload}>Tải lại đầu vào</Button></div>
         </div>
       </Card>
       <div className="lg:col-span-2 min-w-0"><BuilderControls /></div>

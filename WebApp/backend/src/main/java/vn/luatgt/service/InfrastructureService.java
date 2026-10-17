@@ -37,6 +37,7 @@ public class InfrastructureService {
     public JsonNode pipelineStatus() { return kag.pipelineStatus(); }
     public JsonNode builderStatus() { return kag.builderStatus(); }
     public JsonNode builderInputs() { return kag.builderInputs(); }
+    public JsonNode checkBuilderInputs() { return kag.checkBuilderInputs(); }
     public JsonNode builderAction(String action,String runId) { return kag.builderAction(action,runId); }
     public JsonNode benchmarkDatasets() { return kag.benchmarkDatasets(); }
     public JsonNode sampleInspection() { return kag.sampleInspection(); }

@@ -328,6 +328,14 @@ class RunnerPreflightTests(unittest.TestCase):
         self.assertEqual(verified['writer_config'].scope, 'PRODUCTION')
         self.assertGreaterEqual(self.projects.reads, 2)
 
+    def test_confirmed_production_write_uses_existing_scope_authority(self):
+        try:
+            verified = self.preflight(self.production())
+        except RunBlocked as error:
+            self.fail('Confirmed production scope refused: ' + error.code)
+        self.assertEqual(verified['identity']['write_mode'], 'WRITE')
+        self.assertEqual(verified['writer_config'].scope, 'PRODUCTION')
+
     def test_production_ambiguous_missing_reserved_id_and_confirmation_block(self):
         for kind in ('missing', 'duplicate', 'reserved', 'confirmation'):
             with self.subTest(kind=kind):
@@ -407,18 +415,6 @@ class RunnerExecutionTests(unittest.TestCase):
 
     def record(self, filename='receipt.json', run_id='fixture-run'):
         return json.loads((self.root / 'runs' / run_id / filename).read_bytes())
-
-    def synthetic_dispatch_scope(self):
-        # Exercise internal writer orchestration; public unproven WRITE remains BLOCKED.
-        api = self.api()
-        readonly = copy.deepcopy(self.config); readonly['write_mode'] = 'NO_OP'
-        original = api.preflight
-        def fresh_proof(*args, **kwargs):
-            verified = original(readonly, project_client=self.projects, reader=self.reader)
-            verified['identity'].update(write_mode='WRITE', config_hash=scope._spec_hash(self.config))
-            return verified
-        boundary = patch.object(api, 'preflight', side_effect=fresh_proof)
-        boundary.start(); self.addCleanup(boundary.stop)
 
     def test_nine_stages_stream_existing_vectors_without_side_effect_factories(self):
         self.assertEqual(self.execute(), 0)
@@ -509,7 +505,6 @@ class RunnerExecutionTests(unittest.TestCase):
 
     def test_production_real_writer_barrier_and_ambiguous_ack_resume(self):
         self.config = self.production()
-        self.synthetic_dispatch_scope()
         api = self.api()
         self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
         writes, writers = [], []
@@ -544,7 +539,6 @@ class RunnerExecutionTests(unittest.TestCase):
 
     def test_graph_ack_before_confirmation_recovers_without_resend(self):
         self.config = self.production()
-        self.synthetic_dispatch_scope()
         api = self.api()
         self.assertTrue(callable(getattr(api, 'run', None)), 'shared stage runner missing')
         from kag.run_state import RunState
@@ -584,7 +578,8 @@ class RunnerExecutionTests(unittest.TestCase):
                     config.update(vector_policy='provider', embedding_model={'type': 'openai',
                         'base_url': 'https://embedding.invalid/v1', 'model': 'example-model', 'timeout': 60})
                 calls = []
-                with patch('kag.runner.GraphLock.acquire', side_effect=lambda *args: calls.append('lock')):
+                with patch.object(self.reader, 'database_metadata', return_value={}), \
+                        patch('kag.runner.GraphLock.acquire', side_effect=lambda *args: calls.append('lock')):
                     code = self.api().run(config, run_id='unproven-backend-' + str(provider),
                         project_client=self.projects, reader=self.reader,
                         vectorizer_factory=lambda *args: calls.append('provider'),

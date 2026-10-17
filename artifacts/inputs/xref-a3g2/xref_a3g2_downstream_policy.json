@@ -1,12 +1,12 @@
 {
   "phase": "A3-G2",
-  "generated": "2026-10-02T13:30:09+07:00",
+  "generated": "2026-10-17",
   "report_only": true,
-  "applies_to": "xrefs.jsonl sha256 6ade2790faf6ee843b3a5ade34c5bbc09dd64ebd4cacb9b751a93b2329462188",
+  "applies_to": "xrefs.jsonl sha256 69f4b0412993869f624eed95d11d0011a61436a6c9d3f0176a2523ea4e0653e9",
   "rule": "Only SAFE_EDGE rows may become graph edges to in-corpus units; EXTERNAL_REFERENCE_ONLY rows may be exposed as attributes/external references; the other two classes must not become edges. Raw classifier CLEAN rate is not a gate.",
   "dispositions": {
     "VALIDATED_CLEAN": {
-      "count": 8129,
+      "count": 8128,
       "downstream_use": "SAFE_EDGE",
       "rationale": "Raw CLEAN + integrity re-check; target exists and semantics consistent."
     },
@@ -74,12 +74,17 @@
       "count": 0,
       "downstream_use": "EXCLUDE_FROM_GRAPH_EDGE",
       "rationale": "Must be 0 for lock."
+    },
+    "TABLE_VALUE_NOT_LEGAL_CITATION": {
+      "count": 1,
+      "downstream_use": "EXCLUDE_FROM_GRAPH_EDGE",
+      "rationale": "Official Cong Bao 27+28, PDF page 16, table row 1464: MANEB or MANEB preparation, hazard class 4.2; not a legal citation to Article 4."
     }
   },
   "downstream_use_counts": {
     "KEEP_UNRESOLVED_NO_EDGE": 7374,
-    "SAFE_EDGE": 8144,
-    "EXCLUDE_FROM_GRAPH_EDGE": 145,
+    "SAFE_EDGE": 8143,
+    "EXCLUDE_FROM_GRAPH_EDGE": 146,
     "EXTERNAL_REFERENCE_ONLY": 1849
   },
   "row_level_policy_field": "xref_a3g2_final_ledger.jsonl:downstream_use",
@@ -563,7 +568,7 @@
       17410,
       17411
     ],
-    "safe_edge_affirmative_total": 7709,
+    "safe_edge_affirmative_total": 7708,
     "description": "Rows 14959/14960 are validated xrefs but represent exclusion semantics. Do not collapse them into ordinary positive citation semantics. Preserve polarity for all safe edges; 433 pre-existing exclusion edges plus the 2 A3-H delta edges."
   }
 }

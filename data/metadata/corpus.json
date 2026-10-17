@@ -7,7 +7,7 @@
     "documents": 92,
     "production_markdown": 91,
     "out_of_scope_markdown": 1,
-    "units": 55597,
+    "units": 55573,
     "out_of_scope_units": 840,
     "relations": 821,
     "out_of_scope_relations": 15,
@@ -16,5 +16,6 @@
     "penalties": 1966,
     "excluded_penalties": 127,
     "signs": 887
-  }
+  },
+  "updated_at": "2026-10-17"
 }
